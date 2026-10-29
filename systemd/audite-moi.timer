@@ -1,0 +1,11 @@
+[Unit]
+Description=Audite-moi : audit complet hebdomadaire
+
+[Timer]
+OnCalendar=Mon *-*-* 07:20
+RandomizedDelaySec=20min
+Persistent=true
+Unit=audite-moi.service
+
+[Install]
+WantedBy=timers.target

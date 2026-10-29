@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Faux df : système de fichiers racine sur le SSD NVMe
+case "$*" in
+  -PT*) printf 'Filesystem Type 1024-blocks Used Available Capacity Mounted on\n/dev/nvme0n1p2 ext4 102626232 41250000 56133472 43%% /\n/dev/nvme0n1p1 vfat 1098632 6276 1092356 1%% /boot/efi\n' ;;
+  -Pi*) printf 'Filesystem Inodes IUsed IFree IUse%% Mounted on\n/dev/nvme0n1p2 6553600 412000 6141600 7%% /\n' ;;
+  *) exec /usr/bin/df "$@" ;;
+esac

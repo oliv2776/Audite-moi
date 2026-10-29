@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Faux zpool : deux pools, « rapide » (miroir SSD) et « stockage » (RAIDZ1 de disques durs)
+args="$*"
+case "$args" in
+  "list -H -o name") printf 'rapide\nstockage\n' ;;
+  "list -H -p -o size,alloc,free,frag,cap,health,dedupratio rapide") printf '996432412672\t826538905600\t169893507072\t31\t83\tONLINE\t1.00\n' ;;
+  "list -H -p -o size,alloc,free,frag,cap,health,dedupratio stockage") printf '23991808753664\t13434601062400\t10557207691264\t9\t56\tONLINE\t1.00\n' ;;
+  "status -x") echo "all pools are healthy" ;;
+  "get -H -o value autotrim rapide") echo off ;;
+  status*rapide)
+    if [[ $args == *-LP* ]]; then d1=/dev/sda1 d2=/dev/sdb1; else d1=ata-Samsung_SSD_870_EVO_1TB_S6PTNM0R100001-part1 d2=ata-Samsung_SSD_870_EVO_1TB_S6PTNM0R100002-part1; fi
+    cat <<EOT
+  pool: rapide
+ state: ONLINE
+  scan: scrub repaired 0B in 00:21:13 with 0 errors on Sun Oct 11 00:45:14 2026
+config:
+
+	NAME                                              STATE     READ WRITE CKSUM
+	rapide                                            ONLINE       0     0     0
+	  mirror-0                                        ONLINE       0     0     0
+	    $d1   ONLINE       0     0     0
+	    $d2   ONLINE       0     0     0
+
+errors: No known data errors
+EOT
+    ;;
+  status*stockage)
+    if [[ $args == *-LP* ]]; then d1=/dev/sdc1 d2=/dev/sdd1 d3=/dev/sde1 c=/dev/nvme0n1p4; else d1=ata-WDC_WD80EFZZ-68BTXN0_WD-CA1AAAA1-part1 d2=ata-WDC_WD80EFZZ-68BTXN0_WD-CA1AAAA2-part1 d3=ata-WDC_WD80EFZZ-68BTXN0_WD-CA1AAAA3-part1 c=nvme-Samsung_SSD_980_500GB-part4; fi
+    cat <<EOT
+  pool: stockage
+ state: ONLINE
+status: Some supported and requested features are not enabled on the pool.
+	The pool can still be used, but some features are unavailable.
+action: Enable all features using 'zpool upgrade'. Once this is done,
+	the pool may no longer be accessible by software that does not support
+	the features. See zpool-features(7) for details.
+  scan: scrub repaired 128K in 09:12:40 with 0 errors on Sun Aug 09 09:36:40 2026
+config:
+
+	NAME                                            STATE     READ WRITE CKSUM
+	stockage                                        ONLINE       0     0     0
+	  raidz1-0                                      ONLINE       0     0     0
+	    $d1   ONLINE       0     0     0
+	    $d2   ONLINE       2     0     5
+	    $d3   ONLINE       0     0     0
+	cache
+	  $c      ONLINE       0     0     0
+
+errors: No known data errors
+EOT
+    ;;
+  *) echo "zpool (factice) : arguments non gérés : $args" >&2; exit 1 ;;
+esac

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+cat <<'EOT'
+tcp   LISTEN 0      4096         0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=1201,fd=3))
+tcp   LISTEN 0      4096            [::]:22            [::]:*    users:(("sshd",pid=1201,fd=4))
+tcp   LISTEN 0      50           0.0.0.0:445        0.0.0.0:*    users:(("smbd",pid=901,fd=30))
+tcp   LISTEN 0      4096         0.0.0.0:8096       0.0.0.0:*    users:(("docker-proxy",pid=2201,fd=4))
+tcp   LISTEN 0      4096         0.0.0.0:5432       0.0.0.0:*    users:(("docker-proxy",pid=2202,fd=4))
+tcp   LISTEN 0      4096         0.0.0.0:9443       0.0.0.0:*    users:(("docker-proxy",pid=2203,fd=4))
+tcp   LISTEN 0      4096       127.0.0.53%lo:53     0.0.0.0:*    users:(("systemd-resolve",pid=600,fd=14))
+udp   UNCONN 0      0            0.0.0.0:5353       0.0.0.0:*    users:(("avahi-daemon",pid=700,fd=12))
+EOT

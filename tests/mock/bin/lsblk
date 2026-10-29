@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Faux lsblk
+dev=${*: -1}
+case "$*" in
+  "-nlspo NAME,TYPE "*) p=${dev%[0-9]}; [[ $dev == *nvme*p* ]] && p=${dev%p*}; printf '%s part\n%s disk\n' "$dev" "$p" ;;
+  "-dnpo NAME,TYPE") printf '/dev/sda disk\n/dev/sdb disk\n' ;;
+  *) exec /usr/bin/lsblk "$@" ;;
+esac

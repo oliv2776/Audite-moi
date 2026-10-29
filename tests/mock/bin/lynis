@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Faux lynis : écrit un rapport minimal
+rf=""; while (($#)); do [[ $1 == --report-file ]] && rf=$2; shift; done
+[[ -n $rf ]] || exit 1
+cat > "$rf" <<EOT
+hardening_index=64
+warning[]=AUTH-9308|No password set for single mode|-|-|
+suggestion[]=SSH-7408|Consider hardening SSH configuration|AllowTcpForwarding (set YES to NO)|-|
+suggestion[]=KRNL-6000|One or more sysctl values differ from the scan profile|-|-|
+suggestion[]=PKGS-7370|Install debsums utility for the verification of packages|-|-|
+EOT

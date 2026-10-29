@@ -1,0 +1,14 @@
+[Unit]
+Description=Audite-moi : bilan de santé et audit de sécurité du NAS
+Documentation=https://github.com/oliv2776/Audite-moi
+After=network-online.target docker.service zfs.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/audite-moi/audite-moi-run
+# 1 = avertissements, 2 = problèmes critiques : ce ne sont pas des échecs du service
+SuccessExitStatus=1 2
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=60min

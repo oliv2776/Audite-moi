@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+case "$1" in -I) echo "192.168.1.10 172.17.0.1 172.18.0.1 2a01:e0a:1:2::10" ;; -s|"") echo nas-demo ;; *) echo nas-demo ;; esac

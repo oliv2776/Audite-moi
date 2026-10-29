@@ -1,0 +1,3 @@
+2026-10-29T08:14:52Z ERR  error="Unable to reach the origin service. The service may be down or it may not be responding to traffic from cloudflared: dial tcp 172.18.0.4:80: connect: connection refused" cfRay=8d5e1a2b3c4d5e6f-CDG event=1 ingressRule=1 originService=http://nextcloud:80
+2026-10-29T08:14:52Z ERR Request failed error="Unable to reach the origin service." connIndex=2 dest=https://cloud.exemple.fr/ event=0 ip=198.41.192.57 type=http
+2026-10-29T08:15:10Z ERR  error="Unable to reach the origin service. The service may be down or it may not be responding to traffic from cloudflared: dial tcp 172.18.0.4:80: connect: connection refused" cfRay=8d5e1a2b3c4d5e70-CDG event=1 ingressRule=1 originService=http://nextcloud:80

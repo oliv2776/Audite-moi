@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+img=${*: -1}
+case $img in
+  nextcloud*) echo '{"Results":[{"Vulnerabilities":[{"Severity":"CRITICAL"},{"Severity":"HIGH"},{"Severity":"HIGH"}]}]}' ;;
+  *) echo '{"Results":[{"Vulnerabilities":[]}]}' ;;
+esac

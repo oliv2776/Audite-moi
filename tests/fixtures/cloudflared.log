@@ -1,0 +1,13 @@
+2026-09-01T07:00:01Z INF Starting tunnel tunnelID=6ff42ae2-765d-4adf-8112-31c55c1551ef
+2026-09-01T07:00:01Z INF Version 2025.2.0 (Checksum 3e0ca8d1)
+2026-09-01T07:00:01Z INF GOOS: linux, GOVersion: go1.22.10, GoArch: amd64
+2026-09-01T07:00:01Z INF Settings: map[no-autoupdate:true token:*****]
+2026-09-01T07:00:01Z INF Generated Connector ID: 4b1e2b6c-6f63-4b4c-9a1e-2f0e1a2b3c4d
+2026-09-01T07:00:01Z INF Initial protocol quic
+2026-09-01T07:00:01Z INF Starting metrics server on [::]:20241/metrics
+2026-09-01T07:00:02Z INF Registered tunnel connection connIndex=0 connection=0a1b event=0 ip=198.41.192.27 location=cdg08 protocol=quic
+2026-09-01T07:00:02Z INF Updated to new configuration config="{\"ingress\":[{\"hostname\":\"films.exemple.fr\",\"originRequest\":{},\"service\":\"http://jellyfin:8096\"},{\"hostname\":\"cloud.exemple.fr\",\"originRequest\":{\"access\":{\"audTag\":[\"4f2b\"],\"required\":true,\"teamName\":\"maison\"}},\"service\":\"http://nextcloud:80\"},{\"service\":\"http_status:404\"}],\"warp-routing\":{\"enabled\":false}}" version=4
+2026-09-01T07:00:02Z INF Registered tunnel connection connIndex=1 connection=1b2c event=0 ip=198.41.200.13 location=mrs01 protocol=quic
+2026-09-01T07:00:03Z INF Registered tunnel connection connIndex=2 connection=2c3d event=0 ip=198.41.192.57 location=cdg11 protocol=quic
+2026-09-01T07:00:03Z INF Registered tunnel connection connIndex=3 connection=3d4e event=0 ip=198.41.200.53 location=mrs01 protocol=quic
+2026-10-20T03:00:00Z WRN Your version 2025.2.0 is outdated. We recommend upgrading it to 2026.10.1

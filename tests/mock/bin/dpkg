@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Faux dpkg : simule quelques paquets, sinon délègue au vrai dpkg
+if [[ $1 == -s ]]; then
+  case $2 in unattended-upgrades|intel-microcode|amd64-microcode) exit 0 ;; esac
+fi
+exec /usr/bin/dpkg "$@"

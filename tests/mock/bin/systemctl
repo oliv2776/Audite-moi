@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Faux systemctl
+ACTIVE=" docker ssh zfs-zed smartmontools ufw apparmor avahi-daemon "
+args="$*"
+case "$args" in
+  "is-active --quiet "*) u=${args#is-active --quiet }; [[ $ACTIVE == *" ${u%.service} "* ]] ;;
+  "is-active "*) u=${args#is-active }; [[ $ACTIVE == *" ${u%.service} "* ]] && echo active || { echo inactive; exit 3; } ;;
+  "--failed --no-legend --plain") echo "sauvegarde-nuit.service loaded failed failed Sauvegarde nocturne" ;;
+  "list-timers --all --no-legend") echo "Mon 2026-11-02 00:00:00 CET 3 days left Mon 2026-10-26 00:00:00 CET 3 days ago fstrim.timer fstrim.service" ;;
+  "list-unit-files --type=service --no-legend cloudflared*") ;;
+  "cat docker") printf '[Service]\nExecStart=/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock\n' ;;
+  *) exit 0 ;;
+esac

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Faux zfs
+args="$*"; now=$(date +%s)
+case "$args" in
+  version) printf 'zfs-2.2.2-0ubuntu9.4\nzfs-kmod-2.2.2-0ubuntu9.4\n' ;;
+  "get -H -o value org.debian:periodic-trim rapide") echo "-" ;;
+  "list -H -p -t snapshot -o name,creation")
+    for i in $(seq 1 40); do printf 'stockage/photos@autosnap_%03d\t%s\n' "$i" $((now - i * 3600 * 6)); done
+    for i in $(seq 1 12); do printf 'stockage/medias@autosnap_%03d\t%s\n' "$i" $((now - i * 86400)); done ;;
+  "get -H -o name,value -t filesystem,volume encryption")
+    printf 'rapide\toff\nrapide/docker\toff\nrapide/nextcloud\toff\nstockage\toff\nstockage/photos\taes-256-gcm\nstockage/medias\toff\n' ;;
+  "list -H -p -t filesystem,volume -o name,used,avail,refer,compressratio,encryption,mountpoint")
+    printf 'rapide\t826538905600\t139893507072\t98304\t1.31x\toff\t/rapide\n'
+    printf 'rapide/docker\t120332697600\t139893507072\t120332697600\t1.62x\toff\t/rapide/docker\n'
+    printf 'rapide/docker/%064x\t1048576\t139893507072\t1048576\t1.00x\toff\tlegacy\n' 77
+    printf 'rapide/nextcloud\t706206208000\t139893507072\t706206208000\t1.12x\toff\t/rapide/nextcloud\n'
+    printf 'stockage\t13434601062400\t10557207691264\t131072\t1.02x\toff\t/stockage\n'
+    printf 'stockage/photos\t1834601062400\t10557207691264\t1734601062400\t1.01x\taes-256-gcm\t/stockage/photos\n'
+    printf 'stockage/medias\t11600000000000\t10557207691264\t11500000000000\t1.00x\toff\t/stockage/medias\n' ;;
+  "list -H -o mountpoint,mounted -t filesystem")
+    printf '/rapide\tyes\n/rapide/docker\tyes\n/rapide/nextcloud\tyes\n/stockage\tyes\n/stockage/photos\tyes\n/stockage/medias\tyes\n' ;;
+  "list -H -p -t filesystem,volume -o name,usedbysnapshots")
+    printf 'rapide\t0\nrapide/nextcloud\t0\nstockage\t0\nstockage/photos\t100000000000\nstockage/medias\t100000000000\n' ;;
+  "get -H -o name,value,source sharenfs")
+    printf 'rapide\toff\tdefault\nstockage\toff\tdefault\nstockage/medias\ton\tlocal\n' ;;
+  *) echo "zfs (factice) : arguments non gérés : $args" >&2; exit 1 ;;
+esac

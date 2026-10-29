@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Faux nsenter : simule le serveur de métriques de cloudflared
+url=${*: -1}
+case $url in
+  */ready) printf '{"status":200,"readyConnections":4,"connectorId":"4b1e2b6c"}\n200' ;;
+  */metrics) printf '# HELP build_info Build and version information\nbuild_info{goversion="go1.22.10",revision="2025-02-04T12:05:00Z",type="",version="2025.2.0"} 1\n200' ;;
+  *) exit 7 ;;
+esac

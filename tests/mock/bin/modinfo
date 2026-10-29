@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# zfs présent pour tous les noyaux
+[[ ${*: -1} == zfs ]] && { echo 2.2.2-0ubuntu9.4; exit 0; }
+exit 1

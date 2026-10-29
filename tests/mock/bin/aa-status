@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+[[ $1 == --enabled ]] && exit 0
+printf 'apparmor module is loaded.\n58 profiles are loaded.\n56 profiles are in enforce mode.\n'

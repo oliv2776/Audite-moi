@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+cat <<EOT
+port 22
+addressfamily any
+listenaddress [::]:22
+listenaddress 0.0.0.0:22
+usepam yes
+permitrootlogin prohibit-password
+passwordauthentication yes
+kbdinteractiveauthentication no
+permitemptypasswords no
+pubkeyauthentication yes
+x11forwarding yes
+maxauthtries 6
+ciphers chacha20-poly1305@openssh.com,aes128-ctr,aes192-ctr,aes256-ctr,aes128-gcm@openssh.com,aes256-gcm@openssh.com
+macs umac-64-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha1-etm@openssh.com,umac-64@openssh.com,hmac-sha2-256,hmac-sha2-512,hmac-sha1
+kexalgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,diffie-hellman-group16-sha512,diffie-hellman-group14-sha256
+EOT

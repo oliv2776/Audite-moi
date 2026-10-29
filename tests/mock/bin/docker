@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Faux docker : conteneurs décrits dans tests/fixtures/inspect.json
+F=$AUDITE_MOI_FIX; I=$F/inspect.json
+cmd=$1; shift
+case $cmd in
+  info)
+    case "$*" in
+      "") echo "Server Version: 27.3.1" ;;
+      *SecurityOptions*) echo '["name=apparmor","name=seccomp,profile=builtin","name=cgroupns"]' ;;
+      *ServerVersion*) echo '27.3.1|zfs|/var/lib/docker|json-file|2' ;;
+    esac ;;
+  ps) jq -r '.[].Id' "$I" ;;
+  inspect) cat "$I" ;;
+  image) cat "$F/images.txt" ;;
+  stats)
+    cat <<EOT
+cloudflared|0.12%|24.1MiB / 31.2GiB|0.08%|1.2GB / 1.3GB|0B / 0B|12
+jellyfin|3.40%|1.21GiB / 31.2GiB|3.88%|8.1GB / 120GB|2.1GB / 50MB|48
+nextcloud|0.50%|310MiB / 31.2GiB|0.97%|2GB / 3GB|1GB / 2GB|15
+nextcloud-db|0.10%|95MiB / 31.2GiB|0.30%|100MB / 90MB|500MB / 1GB|9
+tdarr|180.21%|3.91GiB / 4GiB|97.75%|50MB / 40MB|300GB / 280GB|31
+portainer|0.00%|30MiB / 31.2GiB|0.09%|10MB / 20MB|0B / 0B|8
+EOT
+    ;;
+  system) echo 'Images|11|6|14.2GB|8.3GB (58%)'; echo 'Containers|7|6|1.1GB|0B (0%)'; echo 'Local Volumes|5|4|2GB|100MB (5%)'; echo 'Build Cache|0|0|0B|0B' ;;
+  logs)
+    id=${*: -1}
+    if [[ $id == "$(jq -r '.[0].Id' "$I")" ]]; then
+      if [[ $* == *--since* ]]; then cat "$F/cloudflared-24h.log" >&2; else cat "$F/cloudflared.log" "$F/cloudflared-24h.log" >&2; fi
+    fi ;;
+  exec)
+    case "$*" in
+      *"ls /dev/dri"*) [[ $1 == tdarr ]] && printf 'renderD128\n' || printf 'card0\ncard1\nrenderD128\nrenderD129\n' ;;
+      *"cloudflared --version"*) echo "cloudflared version 2025.2.0 (built 2025-02-04-1205 UTC)" ;;
+      *) exit 1 ;;
+    esac ;;
+  *) exit 1 ;;
+esac

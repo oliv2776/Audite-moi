@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+printf '[global]\n\tserver string = NAS\n\tmap to guest = Bad User\n\n[medias]\n\tpath = /stockage/medias\n\tread only = Yes\n\tguest ok = Yes\n\n[photos]\n\tpath = /stockage/photos\n\tvalid users = olivier\n'

@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+printf 'Module Size Used by\nzfs 6545408 12\namdgpu 19763200 4\ni915 4419584 3\n'

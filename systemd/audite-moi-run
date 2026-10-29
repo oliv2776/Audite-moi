@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Exécuté par audite-moi.service (en root) : à la demande de l'interface web
+# (fichier /var/lib/audite-moi/demande/lancer) ou par le minuteur hebdomadaire.
+set -u
+BASE=/var/lib/audite-moi
+DEMANDE=$BASE/demande/lancer
+ETAT=$BASE/etat
+umask 027
+mode=complet
+if [[ -f $DEMANDE ]]; then
+  [[ $(head -c 16 "$DEMANDE") == rapide* ]] && mode=rapide
+  rm -f "$DEMANDE"
+fi
+args=(-o "$BASE/rapports" --group audite-moi --no-color --keep "${AUDITE_MOI_GARDER:-60}")
+[[ $mode == rapide ]] && args+=(--quick)
+printf '{"debut": %s, "mode": "%s"}\n' "$(date +%s)" "$mode" > "$ETAT/en-cours"
+trap 'rm -f "$ETAT/en-cours"' EXIT
+/usr/local/sbin/audite-moi "${args[@]}" 2>&1 | tee "$ETAT/journal.log"
+exit "${PIPESTATUS[0]}"

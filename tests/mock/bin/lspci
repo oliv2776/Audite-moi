@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Faux lspci : iGPU Intel + carte AMD Radeon
+i='00:02.0 VGA compatible controller [0300]: Intel Corporation Raptor Lake-S GT1 [UHD Graphics 770] [8086:a780] (rev 04)'
+a='03:00.0 VGA compatible controller [0300]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 23 [Radeon RX 6600/6600 XT/6600M] [1002:73ff] (rev c7)'
+case "$*" in
+  "-s 0000:00:02.0") echo "${i/ \[0300\]/}" ;;
+  "-s 0000:03:00.0") echo "${a/ \[0300\]/}" ;;
+  *) printf '%s\n%s\n' "$i" "$a" ;;
+esac

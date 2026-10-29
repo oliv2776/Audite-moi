@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+echo "amdgpu/6.10.5-2109964.24.04, 6.8.0-87-generic, x86_64: installed"

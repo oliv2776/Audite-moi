@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+case "$*" in
+  "-S DOCKER-USER") printf -- '-N DOCKER-USER\n-A DOCKER-USER -j RETURN\n' ;;
+  "-S INPUT") printf -- '-P INPUT DROP\n' ;;
+esac

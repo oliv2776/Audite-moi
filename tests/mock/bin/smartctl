@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Faux smartctl : renvoie les JSON de tests/fixtures/smart
+F=$AUDITE_MOI_FIX/smart
+if [[ " $* " == *" --scan-open "* ]]; then cat "$F/scan.json"; exit 0; fi
+dev=${*: -1}; f="$F/${dev##*/}.json"
+[[ -f $f ]] || { echo '{}'; exit 2; }
+cat "$f"; exit "$(jq -r '.smartctl.exit_status' "$f")"

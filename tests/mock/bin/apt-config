@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n'
