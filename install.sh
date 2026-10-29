@@ -24,7 +24,7 @@ Installation d'Audite-moi
   --sans-minuteur        pas d'audit automatique hebdomadaire
   --nouveau-mot-de-passe redéfinit le mot de passe de l'interface web
   --minimal              n'installe que les dépendances indispensables
-  --ouvrir-pare-feu      autorise l'interface dans UFW pour le réseau local, sans poser la question
+  --ouvrir-pare-feu      autorise l'interface dans UFW depuis tous les réseaux privés, sans poser la question
   -h, --help             cette aide
 EOF
 }
@@ -196,27 +196,31 @@ PY
     fi
   fi
   # 2) Un pare-feu bloque-t-il l'accès depuis le réseau local ?
-  lan=""
-  cidr=$(ip -o -f inet addr show 2>/dev/null | awk -v ip="$ipv4" '{split($4, a, "/"); if (a[1] == ip) {print $4; exit}}' || true)
-  [[ -n $cidr ]] && lan=$(python3 -c 'import ipaddress,sys; print(ipaddress.ip_interface(sys.argv[1]).network)' "$cidr" 2>/dev/null || true)
+  #    On autorise les plages d'adresses privées (10/8, 172.16/12, 192.168/16) : tous les
+  #    sous-réseaux de la maison, jamais Internet.
+  PRIVES=(10.0.0.0/8 172.16.0.0/12 192.168.0.0/16)
   if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
-    if ufw status 2>/dev/null | grep -qE "^$PORT(/tcp)?[[:space:]]+ALLOW"; then
-      echo "  ✔ UFW autorise déjà le port $PORT."
+    manquants=()
+    for r in "${PRIVES[@]}"; do
+      ufw status 2>/dev/null | grep -qE "^$PORT(/tcp)?[[:space:]]+ALLOW( IN)?[[:space:]]+${r//./\\.}([[:space:]]|$)" || manquants+=("$r")
+    done
+    if ((${#manquants[@]} == 0)); then
+      echo "  ✔ UFW autorise le port $PORT depuis les réseaux privés."
     else
-      regle=(ufw allow from "${lan:-<votre-réseau>/24}" to any port "$PORT" proto tcp comment "Audite-moi")
       rep=n
-      if [[ -n $lan ]] && ((OUVRIR)); then rep=o
-      elif [[ -n $lan && -t 0 ]]; then read -r -p "  UFW bloque le port $PORT : l'autoriser depuis votre réseau local ($lan) ? [O/n] " rep; [[ -z $rep ]] && rep=o
+      if ((OUVRIR)); then rep=o
+      elif [[ -t 0 ]]; then read -r -p "  UFW : autoriser le port $PORT depuis tous vos réseaux locaux (${manquants[*]}) ? [O/n] " rep; [[ -z $rep ]] && rep=o
       fi
       if [[ $rep =~ ^[oOyY] ]]; then
-        "${regle[@]}" >/dev/null && echo "  ✔ Règle UFW ajoutée : port $PORT autorisé depuis $lan uniquement."
+        for r in "${manquants[@]}"; do ufw allow from "$r" to any port "$PORT" proto tcp comment "Audite-moi" >/dev/null; done
+        echo "  ✔ Règles UFW ajoutées : port $PORT autorisé depuis les réseaux privés (${manquants[*]}), pas depuis Internet."
       else
-        echo "  ⚠ UFW bloque le port $PORT : sans règle, le navigateur affichera « délai d'attente dépassé »."
-        echo "    Pour autoriser votre réseau local : sudo ${regle[*]}"
+        echo "  ⚠ UFW peut bloquer le port $PORT (le navigateur affichera « délai d'attente dépassé »). Pour l'ouvrir à vos réseaux locaux :"
+        for r in "${manquants[@]}"; do echo "    sudo ufw allow from $r to any port $PORT proto tcp comment Audite-moi"; done
       fi
     fi
   elif [[ $(iptables -S INPUT 2>/dev/null | head -n 1) == "-P INPUT DROP" ]] || nft list ruleset 2>/dev/null | grep -qE 'hook input.*policy drop'; then
-    echo "  ⚠ Un pare-feu (iptables/nftables) filtre les connexions entrantes : autorisez le port TCP $PORT depuis votre réseau local${lan:+ ($lan)}."
+    echo "  ⚠ Un pare-feu (iptables/nftables) filtre les connexions entrantes : autorisez le port TCP $PORT depuis vos réseaux locaux."
   fi
   echo "  N'exposez pas cette interface sur Internet (ou seulement derrière Cloudflare Access) : elle décrit les faiblesses du serveur."
 fi

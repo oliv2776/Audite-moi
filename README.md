@@ -81,7 +81,7 @@ Le rapport décrit précisément les faiblesses de votre serveur : l'interface e
 
 - Le serveur web (Python, bibliothèque standard uniquement) tourne sous l'utilisateur `audite-moi`, sans droits root et dans un service systemd durci. Il ne peut **pas** exécuter de commande : il dépose seulement une demande que `audite-moi.path` transmet à `audite-moi.service`.
 - Mot de passe haché (PBKDF2-SHA256, 600 000 itérations), session en cookie `HttpOnly` / `SameSite=Strict`, protection CSRF, blocage après 5 échecs en 15 minutes, HTTPS par défaut, en-têtes de sécurité stricts (CSP…).
-- **Ne l'exposez pas sur Internet.** Si UFW est actif, l'installateur propose de l'ouvrir uniquement à votre réseau local. Pour un accès à distance, passez par un VPN, ou par votre tunnel Cloudflare **derrière Cloudflare Access** (avec `noTLSVerify: true` vers l'origine, le certificat étant auto-signé).
+- **Ne l'exposez pas sur Internet.** Si UFW est actif, l'installateur propose de l'ouvrir uniquement aux réseaux privés (tous vos sous-réseaux, pas Internet). Pour un accès à distance, passez par un VPN, ou par votre tunnel Cloudflare **derrière Cloudflare Access** (avec `noTLSVerify: true` vers l'origine, le certificat étant auto-signé).
 
 ## GPU : Intel + AMD dans un même conteneur
 
@@ -115,10 +115,10 @@ services:
 sudo systemctl status audite-moi-web --no-pager       # le service doit être « active (running) »
 curl -kI https://127.0.0.1:8765/connexion              # depuis le NAS : doit répondre « HTTP/1.1 200 »
 sudo ufw status                                        # UFW actif sans règle pour 8765 ?
-sudo ufw allow from 10.10.1.0/24 to any port 8765 proto tcp comment Audite-moi   # adaptez à votre réseau local
+sudo ufw allow from 192.168.0.0/16 to any port 8765 proto tcp comment Audite-moi  # idem pour 10.0.0.0/8 et 172.16.0.0/12
 ```
 
-`sudo ./install.sh --ouvrir-pare-feu` ajoute cette règle automatiquement pour le réseau local du NAS. Pensez aussi à bien taper **https://** (et non http://).
+`sudo ./install.sh --ouvrir-pare-feu` ouvre automatiquement le port à tous les réseaux privés (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) : tous les PC de la maison, quel que soit leur sous-réseau, mais pas Internet. Pensez aussi à bien taper **https://** (et non http://).
 
 **« La connexion a échoué »** (refus immédiat) : le service ne tourne pas, voir `sudo journalctl -u audite-moi-web -n 30`.
 
