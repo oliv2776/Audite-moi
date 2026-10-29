@@ -150,22 +150,26 @@ class Donnees:
 
 # ------------------------------------------------------------------ gabarits --
 CSS = """
-:root{--bg:#f4f5f7;--card:#fff;--ink:#1b1f27;--muted:#5d6675;--line:#e3e6eb;--soft:#f0f2f5;--accent:#2f5fd0;--accent-ink:#fff;
+:root{--bg:#f4f5f7;--card:#fff;--ink:#1b1f27;--muted:#5d6675;--line:#e3e6eb;--soft:#f0f2f5;--accent:#2f5fd0;--accent-ink:#fff;--sel:#e7eefc;
 --crit:#c4352f;--crit-bg:#fdecea;--warn:#a35f00;--warn-bg:#fff3dd;--ok:#1d7a4c;--ok-bg:#e4f4ea;--info:#3461c1;--info-bg:#e9effc;
 --s1:#2a78d6;--s2:#eb6834;--grid:#e8eaee;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--ink:#e7eaee;--muted:#9aa3af;--line:#29303a;--soft:#1e232b;--accent:#5b86f0;
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--ink:#e7eaee;--muted:#9aa3af;--line:#29303a;--soft:#1e232b;--accent:#5b86f0;--sel:#1c2a48;
 --crit:#ff7b72;--crit-bg:#3a1d1d;--warn:#f2b24c;--warn-bg:#382a12;--ok:#4cc38a;--ok-bg:#13301f;--info:#86a8ff;--info-bg:#1a2540;
 --s1:#3987e5;--s2:#d95926;--grid:#262c35}}
-*{box-sizing:border-box}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:70px}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif}
 a{color:var(--accent)}
-.wrap{max-width:1180px;margin:0 auto;padding:22px 20px 60px}
-.bar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
-.brand{display:flex;align-items:center;gap:10px;font-weight:750;font-size:18px}
-.logo{width:30px;height:30px;border-radius:8px;background:var(--accent);display:grid;place-items:center;color:#fff;font-size:15px}
+.topbar{position:sticky;top:0;z-index:20;background:var(--card);border-bottom:1px solid var(--line)}
+.topbar .in{max-width:1180px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;font-weight:750;font-size:17px;color:var(--ink);text-decoration:none}
+.logo{width:28px;height:28px;border-radius:8px;background:var(--accent);display:grid;place-items:center;color:#fff;font-size:14px}
 .host{color:var(--muted);font-weight:500;font-size:14px}
-.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-button,.btn{font:inherit;font-size:14px;font-weight:600;border-radius:9px;padding:8px 14px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer;text-decoration:none;display:inline-block}
+.nav{display:flex;gap:4px;flex-wrap:wrap}
+.nav a{color:var(--muted);text-decoration:none;font-size:14px;font-weight:600;padding:6px 10px;border-radius:8px}
+.nav a:hover{background:var(--soft);color:var(--ink)}.nav a.on{background:var(--sel);color:var(--accent)}
+.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-left:auto}
+.wrap{max-width:1180px;margin:0 auto;padding:20px 20px 60px}
+button,.btn{font:inherit;font-size:14px;font-weight:600;border-radius:9px;padding:7px 13px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer;text-decoration:none;display:inline-block}
 button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 button:disabled{opacity:.5;cursor:not-allowed}
 button:hover:not(:disabled),.btn:hover{filter:brightness(1.06)}
@@ -178,34 +182,49 @@ h2 .mini{margin-left:auto;font-size:12.5px;color:var(--muted);font-weight:500}
 .banner pre{margin:10px 0 0;max-height:240px;overflow:auto;background:var(--soft);border-radius:8px;padding:10px;font:12px/1.45 var(--mono);white-space:pre-wrap}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--info);border-right-color:transparent;border-radius:50%;animation:r 1s linear infinite;margin-right:8px;vertical-align:-1px}
 @keyframes r{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){.spin{animation:none}}
-.hero{display:grid;grid-template-columns:repeat(2,minmax(0,1fr)) repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
-.tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}html{scroll-behavior:auto}}
+.meta{color:var(--muted);font-size:13.5px;margin:0 0 12px;display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.hero{display:grid;grid-template-columns:repeat(2,minmax(0,1.15fr)) repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;text-align:left;width:100%;font:inherit;color:inherit;cursor:pointer;transition:border-color .15s}
+.tile:hover{border-color:var(--muted)}
+.tile[aria-pressed=true]{outline:2px solid var(--accent);outline-offset:1px;background:var(--sel)}
 .tile .l{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em;font-weight:650}
 .tile .v{font-size:28px;font-weight:750;line-height:1.25}
 .tile .v small{font-size:13px;color:var(--muted);font-weight:500}
+.tile .h{display:block;font-size:11.5px;color:var(--muted);margin-top:2px}
 .score{display:flex;align-items:center;gap:12px}
 .grade{font-size:24px;font-weight:800;width:44px;height:44px;border-radius:10px;display:grid;place-items:center;color:#fff;flex:none}
 .g-A{background:#1d7a4c}.g-B{background:#4c8a2a}.g-C{background:#a35f00}.g-D{background:#c4561c}.g-E{background:#c4352f}
 .kpi{border-left:4px solid var(--c)}.k-CRIT{--c:var(--crit)}.k-WARN{--c:var(--warn)}.k-OK{--c:var(--ok)}.k-INFO{--c:var(--info)}
-.meta{color:var(--muted);font-size:13.5px;margin:-4px 0 16px}
-.links{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 6px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--soft)}
+.seg button{border:0;border-radius:0;background:transparent;padding:6px 11px;font-size:13px;color:var(--muted)}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed=true]{background:var(--card);color:var(--ink);box-shadow:inset 0 -2px 0 var(--accent)}
+select,input[type=search]{font:inherit;font-size:13.5px;padding:6px 10px;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+input[type=search]{min-width:200px;flex:1}
+.count{font-size:13px;color:var(--muted);margin:4px 0 2px}
+.count button{font-size:12.5px;padding:2px 8px;margin-left:6px}
 .badge{display:inline-block;min-width:78px;text-align:center;font-size:11px;font-weight:750;padding:3px 8px;border-radius:999px;text-transform:uppercase;letter-spacing:.04em}
-.b-CRIT{background:var(--crit-bg);color:var(--crit)}.b-WARN{background:var(--warn-bg);color:var(--warn)}
-ol.plan{list-style:none;margin:0;padding:0}
-ol.plan li{display:grid;grid-template-columns:92px 1fr;gap:8px;padding:10px 0;border-top:1px solid var(--line)}
-ol.plan li:first-child{border-top:0}
-.sec{font-size:12px;color:var(--muted);margin-right:6px}
+.b-CRIT{background:var(--crit-bg);color:var(--crit)}.b-WARN{background:var(--warn-bg);color:var(--warn)}.b-OK{background:var(--ok-bg);color:var(--ok)}.b-INFO{background:var(--info-bg);color:var(--info)}
+ol.items{list-style:none;margin:0;padding:0}
+ol.items li{display:grid;grid-template-columns:92px 1fr;gap:8px;padding:10px 0;border-top:1px solid var(--line)}
+ol.items li:first-child{border-top:0}
+.sec{font-size:12px;color:var(--muted);margin-right:6px;background:var(--soft);padding:1px 7px;border-radius:999px;cursor:pointer;border:0;font-weight:600}
+.sec:hover{color:var(--accent)}
 .ttl{font-weight:600}
 .fix{margin-top:5px;font-size:13.5px;padding:6px 10px;border-left:3px solid var(--info);background:var(--soft);border-radius:0 6px 6px 0;overflow-wrap:anywhere}
 .fix::before{content:"À faire : ";font-weight:650}
 details.d{margin-top:4px}details.d summary{cursor:pointer;color:var(--muted);font-size:13px}
 .det{color:var(--muted);font-size:13.5px;white-space:pre-wrap;overflow-wrap:anywhere}
+.msgd{color:var(--muted);font-size:13.5px;overflow-wrap:anywhere;margin-top:2px}
+.vide{color:var(--muted);padding:18px 0;text-align:center}
 code{font-family:var(--mono);font-size:12.5px;background:var(--soft);padding:1px 5px;border-radius:4px}
 .fix code{background:var(--card)}
 table{border-collapse:collapse;width:100%;font-size:14px}
 th{text-align:left;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
 td{padding:8px;border-bottom:1px solid var(--line);white-space:nowrap}
+tr.cur td{background:var(--sel)}
 td.num{text-align:right;font-variant-numeric:tabular-nums}
 .pill{display:inline-flex;align-items:center;gap:6px}
 .pill i{width:22px;height:22px;border-radius:6px;display:inline-grid;place-items:center;color:#fff;font-style:normal;font-weight:800;font-size:12px}
@@ -222,17 +241,20 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 .tip{position:absolute;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12.5px;box-shadow:0 4px 14px rgba(0,0,0,.12);display:none;white-space:nowrap}
 .tip b{display:block;margin-bottom:2px}
 .empty{color:var(--muted)}
+.cache{display:none!important}
 .login{max-width:380px;margin:12vh auto 0}
 .login .brand{margin-bottom:14px}.login button{width:100%}
 .login input{width:100%;font:inherit;padding:10px 12px;border-radius:9px;border:1px solid var(--line);background:var(--soft);color:var(--ink);margin:6px 0 14px}
 .err{color:var(--crit);font-weight:600;margin:0 0 10px}
+pre.texte{margin:0;font:12.5px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
 footer{color:var(--muted);font-size:12.5px;text-align:center;margin-top:24px}
-@media (max-width:900px){.hero{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:620px){ol.plan li{grid-template-columns:1fr}}
+@media (max-width:980px){.hero{grid-template-columns:repeat(2,minmax(0,1fr))}.actions{margin-left:0}}
+@media (max-width:620px){ol.items li{grid-template-columns:1fr}}
 """
 
 GRADE = lambda s: "A" if s >= 90 else "B" if s >= 75 else "C" if s >= 60 else "D" if s >= 40 else "E"
-NIV_FR = {"CRIT": "Critique", "WARN": "Attention"}
+NIV_FR = {"CRIT": "Critique", "WARN": "Attention", "OK": "OK", "INFO": "Info"}
+ORDRE = {"CRIT": 0, "WARN": 1, "INFO": 2, "OK": 3}
 
 
 def esc(s):
@@ -246,12 +268,12 @@ def fmt(s):
     return s.replace("\n", "<br>")
 
 
-def page(titre, corps, nonce):
+def page(titre, corps, nonce, nu=False):
     return """<!DOCTYPE html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex"><title>{t}</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232f5fd0'/%3E%3Cpath d='M4 8.5l2.5 2.5L12 5' stroke='white' stroke-width='2' fill='none'/%3E%3C/svg%3E">
-<style nonce="{n}">{css}</style></head><body><div class="wrap">{c}</div></body></html>""".format(t=esc(titre), n=nonce, css=CSS, c=corps)
+<style nonce="{n}">{css}</style></head><body>{c}</body></html>""".format(t=esc(titre), n=nonce, css=CSS, c=corps if nu else '<div class="wrap">' + corps + "</div>")
 
 
 def graphique(hist, nonce):
@@ -302,20 +324,59 @@ h.addEventListener('mousemove',mv);h.addEventListener('mouseleave',function(){{x
 """.format(W=W, H=H, g="".join(g), s="".join(series), mt=mt, yb=H - mb, ml=ml, hw=W - ml - mr, data=data.replace("</", "<\\/"), n=nonce)
 
 
-def tableau_bord(donnees, csrf, nonce, message):
+def barre(csrf, occupe, actif, der=None):
+    """Barre de navigation commune à toutes les pages (collée en haut)."""
+    dis = " disabled" if occupe else ""
+    hote = der.get("hote", "") if der else socket.gethostname()
+    liens = [("/", "Tableau de bord", "tdb"), ("/#constats", "Constats", "constats"), ("/#historique", "Historique", "historique")]
+    if der:
+        liens.append(("/rapports/" + der["fichiers"]["html"], "Rapport complet", "rapport"))
+    nav = "".join('<a href="{}"{}>{}</a>'.format(esc(h), ' class="on"' if k == actif else "", t) for h, t, k in liens)
+    return """<header class="topbar"><div class="in"><a class="brand" href="/"><span class="logo">✓</span>Audite-moi <span class="host">{h}</span></a>
+<nav class="nav">{nav}</nav><div class="actions">
+<form class="inline" method="post" action="/lancer"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="mode" value="complet"><button class="primary"{d} title="Audit complet (quelques minutes)">▶ Lancer un audit</button></form>
+<form class="inline" method="post" action="/lancer"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="mode" value="rapide"><button{d} title="Sans Lynis, Trivy ni recherche des fichiers SUID">Audit rapide</button></form>
+<form class="inline" method="post" action="/deconnexion"><input type="hidden" name="csrf" value="{c}"><button title="Se déconnecter">Déconnexion</button></form>
+</div></div></header>""".format(h=esc(hote), nav=nav, c=esc(csrf), d=dis)
+
+
+JS_FILTRES = """(function(){
+var st={cat:'',niv:'PB',sec:'',q:''},L=document.getElementById('items');if(!L)return;
+var Q=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));};
+var items=Q('li[data-niv]',L),fs=document.getElementById('fsec'),fq=document.getElementById('fq'),cnt=document.getElementById('fcount'),vide=document.getElementById('fvide');
+function okNiv(n){return !st.niv||(st.niv==='PB'?(n==='CRIT'||n==='WARN'):n===st.niv);}
+function apply(){
+  var k=0;items.forEach(function(li){var v=(!st.cat||li.dataset.cat===st.cat)&&okNiv(li.dataset.niv)&&(!st.sec||li.dataset.sec===st.sec)&&(!st.q||li.textContent.toLowerCase().indexOf(st.q)>=0);li.classList.toggle('cache',!v);if(v)k++;});
+  cnt.firstChild.textContent=k+' constat(s) affiché(s) sur '+items.length;
+  vide.classList.toggle('cache',k>0);
+  Q('.seg').forEach(function(g){Q('button',g).forEach(function(b){b.setAttribute('aria-pressed',st[g.dataset.g]===b.dataset.v?'true':'false');});});
+  Q('button.tile').forEach(function(b){var p=b.dataset.f.split(':');b.setAttribute('aria-pressed',st[p[0]]===p[1]?'true':'false');});
+  fs.value=st.sec;
+  var defaut=!st.cat&&st.niv==='PB'&&!st.sec&&!st.q;document.getElementById('freset').classList.toggle('cache',defaut);
+  try{history.replaceState(null,'',location.pathname+location.search+(defaut?'':'#f='+encodeURIComponent(JSON.stringify(st))));}catch(e){}
+}
+Q('.seg').forEach(function(g){Q('button',g).forEach(function(b){b.addEventListener('click',function(){st[g.dataset.g]=b.dataset.v;apply();});});});
+Q('button.tile').forEach(function(b){b.addEventListener('click',function(){var p=b.dataset.f.split(':');
+  st[p[0]]=(st[p[0]]===p[1])?(p[0]==='niv'?'PB':''):p[1];
+  apply();document.getElementById('constats').scrollIntoView();});});
+Q('button.sec',L).forEach(function(b){b.addEventListener('click',function(){st.sec=b.dataset.sec;apply();});});
+fs.addEventListener('change',function(){st.sec=fs.value;apply();});
+fq.addEventListener('input',function(){st.q=fq.value.trim().toLowerCase();apply();});
+document.getElementById('freset').addEventListener('click',function(){st={cat:'',niv:'PB',sec:'',q:''};fq.value='';apply();});
+var m=/#f=(.*)$/.exec(location.hash);if(m){try{var o=JSON.parse(decodeURIComponent(m[1]));['cat','niv','sec','q'].forEach(function(k){if(typeof o[k]==='string')st[k]=o[k];});fq.value=st.q;}catch(e){}}
+apply();
+})();"""
+
+
+def tableau_bord(donnees, csrf, nonce, message, choix=""):
     hist = donnees.rapports()
     etat = donnees.etat()
     occupe = etat["en_cours"] or etat["demande"]
     der = hist[-1] if hist else None
-    hote = der.get("hote", "") if der else socket.gethostname()
-    out = []
-    dis = " disabled" if occupe else ""
-    out.append("""<div class="bar"><div class="brand"><span class="logo">✓</span>Audite-moi <span class="host">{h}</span></div>
-<div class="actions">
-<form class="inline" method="post" action="/lancer"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="mode" value="complet"><button class="primary"{d}>Lancer un audit complet</button></form>
-<form class="inline" method="post" action="/lancer"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="mode" value="rapide"><button{d}>Audit rapide</button></form>
-<form class="inline" method="post" action="/deconnexion"><input type="hidden" name="csrf" value="{c}"><button>Se déconnecter</button></form>
-</div></div>""".format(h=esc(hote), c=esc(csrf), d=dis))
+    vu = der
+    if choix:
+        vu = next((d for d in hist if d["_fichier"] == choix), der)
+    out = [barre(csrf, occupe, "tdb", der), '<div class="wrap">']
 
     msgs = {"lance": ("okb", "Demande enregistrée : l’audit démarre dans quelques secondes."),
             "occupe": ("warnb", "Un audit est déjà en cours ou en attente."),
@@ -331,58 +392,94 @@ def tableau_bord(donnees, csrf, nonce, message):
     elif message in msgs:
         out.append('<div class="banner {}">{}</div>'.format(*msgs[message]))
 
-    if not der:
-        out.append('<div class="card"><h2>Aucun rapport pour l’instant</h2><p class="empty">Lancez un premier audit avec le bouton ci-dessus (un audit complet prend quelques minutes).</p></div>')
+    if not vu:
+        out.append('<div class="card"><h2>Aucun rapport pour l’instant</h2><p class="empty">Lancez un premier audit avec le bouton « Lancer un audit » en haut à droite (un audit complet prend quelques minutes).</p></div>')
     else:
-        n, c = der["notes"], der["compteurs"]
-        out.append('<div class="meta">Dernier audit : {d} · {m} · {os} · durée {s} s</div>'.format(
-            d=esc(der.get("date", "")), m="mode " + esc(der.get("mode", "")), os=esc(der.get("os", "")), s=esc(der.get("duree_s", "?"))))
+        if vu is not der:
+            out.append('<div class="banner warnb">Vous consultez un <b>ancien rapport</b> ({}). <a href="/">Revenir au dernier audit</a></div>'.format(esc(vu.get("date", ""))))
+        n, c, f = vu["notes"], vu["compteurs"], vu["fichiers"]
+        out.append('<div class="meta"><span>Audit du <b>{d}</b> · mode {m} · {os} · durée {s} s</span><a class="btn" href="/rapports/{h}">Rapport complet</a><a class="btn" href="/texte/{t}">Version texte</a><a class="btn" href="/rapports/{j}">JSON</a></div>'.format(
+            d=esc(vu.get("date", "")), m=esc(vu.get("mode", "")), os=esc(vu.get("os", "")), s=esc(vu.get("duree_s", "?")),
+            h=esc(f["html"]), t=esc(f["txt"]), j=esc(f["json"])))
         tiles = []
-        for lib, k in (("Santé", "sante"), ("Sécurité", "securite")):
-            tiles.append('<div class="tile score"><span class="grade g-{g}">{g}</span><div><div class="l">{l}</div><div class="v">{v}<small> / 100</small></div></div></div>'
-                         .format(g=esc(n[k]["lettre"]), l=lib, v=esc(n[k]["score"])))
+        for lib, k, cat in (("Santé", "sante", "sante"), ("Sécurité", "securite", "secu")):
+            tiles.append('<button type="button" class="tile score" data-f="cat:{cat}" aria-pressed="false" title="N’afficher que les contrôles « {l} »"><span class="grade g-{g}">{g}</span>'
+                         '<div><div class="l">{l}</div><div class="v">{v}<small> / 100</small></div><span class="h">Cliquer pour filtrer</span></div></button>'
+                         .format(cat=cat, g=esc(n[k]["lettre"]), l=lib, v=esc(n[k]["score"])))
         for k, lib in (("CRIT", "critiques"), ("WARN", "avertissements"), ("OK", "contrôles OK"), ("INFO", "informations")):
-            tiles.append('<div class="tile kpi k-{k}"><div class="v">{v}</div><div class="l">{l}</div></div>'.format(k=k, v=esc(c.get(k, 0)), l=lib))
+            tiles.append('<button type="button" class="tile kpi k-{k}" data-f="niv:{k}" aria-pressed="false"><div class="v">{v}</div><div class="l">{l}</div></button>'
+                         .format(k=k, v=esc(c.get(k, 0)), l=lib))
         out.append('<div class="hero">{}</div>'.format("".join(tiles)))
-        f = der["fichiers"]
-        out.append('<div class="links"><a class="btn" href="/rapports/{h}">Ouvrir le rapport complet</a><a class="btn" href="/rapports/{t}">Version texte</a><a class="btn" href="/rapports/{j}">JSON</a></div>'
-                   .format(h=esc(f["html"]), t=esc(f["txt"]), j=esc(f["json"])))
-        out[-1] = '<div class="card"><h2>Rapport du {}</h2>{}</div>'.format(esc(der.get("date", "")), out[-1])
 
-        secs = der.get("sections", {})
-        items = [x for lvl in ("CRIT", "WARN") for x in der.get("constats", []) if x.get("niveau") == lvl]
-        lis = []
-        for x in items:
-            det = '<details class="d"><summary>Détail</summary><div class="det">{}</div></details>'.format(fmt(x["detail"])) if x.get("detail") else ""
+        secs = vu.get("sections", {})
+        constats = sorted(vu.get("constats", []), key=lambda x: ORDRE.get(x.get("niveau"), 9))
+        lis, vues = [], []
+        for x in constats:
+            sid = x.get("section", "")
+            info = secs.get(sid, {})
+            court = info.get("court") or info.get("titre", sid)
+            if sid not in vues:
+                vues.append(sid)
+            msg = ""
+            if x.get("detail"):
+                d = x["detail"]
+                if x["niveau"] in ("CRIT", "WARN") or len(d) > 160 or "\n" in d:
+                    msg = '<details class="d"><summary>Détail</summary><div class="det">{}</div></details>'.format(fmt(d))
+                else:
+                    msg = '<div class="msgd">{}</div>'.format(fmt(d))
             fx = '<div class="fix">{}</div>'.format(fmt(x["correctif"])) if x.get("correctif") else ""
-            lis.append('<li><div><span class="badge b-{n}">{nf}</span></div><div><span class="sec">{s}</span><span class="ttl">{t}</span>{fx}{det}</div></li>'.format(
-                n=x["niveau"], nf=NIV_FR[x["niveau"]], s=esc(secs.get(x["section"], {}).get("court") or secs.get(x["section"], {}).get("titre", x["section"])), t=fmt(x["titre"]), fx=fx, det=det))
-        out.append('<div class="card"><h2>Plan d’action <span class="mini">{} point(s), du plus urgent au moins urgent</span></h2>{}</div>'.format(
-            len(items), '<ol class="plan">{}</ol>'.format("".join(lis)) if lis else '<p class="empty">Rien à corriger : tout est au vert.</p>'))
+            lis.append('<li data-niv="{n}" data-cat="{cat}" data-sec="{sid}"><div><span class="badge b-{n}">{nf}</span></div><div>'
+                       '<button type="button" class="sec" data-sec="{sid}" title="N’afficher que cette section">{s}</button><span class="ttl">{t}</span>{msg}{fx}</div></li>'.format(
+                           n=esc(x.get("niveau")), cat=esc(info.get("categorie", "")), sid=esc(sid), nf=NIV_FR.get(x.get("niveau"), ""),
+                           s=esc(court), t=fmt(x["titre"]), msg=msg, fx=fx))
+        opts = "".join('<option value="{}">{}</option>'.format(esc(s), esc(secs.get(s, {}).get("titre", s))) for s in vues)
+        seg_cat = "".join('<button type="button" data-v="{}">{}</button>'.format(v, t) for v, t in (("", "Toutes"), ("sante", "Santé"), ("secu", "Sécurité")))
+        seg_niv = "".join('<button type="button" data-v="{}">{}</button>'.format(v, t) for v, t in
+                          (("PB", "À corriger"), ("CRIT", "Critiques"), ("WARN", "Attention"), ("OK", "OK"), ("INFO", "Info"), ("", "Tout")))
+        out.append("""<div class="card" id="constats"><h2>Constats <span class="mini">par défaut : ce qu’il faut corriger, du plus urgent au moins urgent</span></h2>
+<div class="filters"><div class="seg" data-g="cat" role="group" aria-label="Catégorie">{sc}</div><div class="seg" data-g="niv" role="group" aria-label="Niveau">{sn}</div>
+<select id="fsec" aria-label="Section"><option value="">Toutes les sections</option>{o}</select><input id="fq" type="search" placeholder="Rechercher (ex. ssh, zfs, jellyfin…)" aria-label="Rechercher"></div>
+<div class="count" id="fcount"><span></span><button type="button" id="freset" class="cache">Réinitialiser les filtres</button></div>
+<ol class="items" id="items">{li}</ol><p class="vide cache" id="fvide">Aucun constat ne correspond à ces filtres.</p></div>""".format(
+            sc=seg_cat, sn=seg_niv, o=opts, li="".join(lis)))
+        out.append('<script nonce="{}">{}</script>'.format(nonce, JS_FILTRES))
 
-    out.append('<div class="card"><h2>Évolution des notes</h2>{}</div>'.format(graphique(hist, nonce)))
+    out.append('<div class="card" id="evolution"><h2>Évolution des notes</h2>{}</div>'.format(graphique(hist, nonce)))
 
     if hist:
         rows = []
         for d in reversed(hist[-60:]):
             n, c, f = d["notes"], d["compteurs"], d["fichiers"]
-            rows.append("<tr><td>{date}</td><td>{mode}</td><td><span class='pill'><i class='g-{gs}'>{gs}</i>{s}</span></td><td><span class='pill'><i class='g-{gc}'>{gc}</i>{c}</span></td>"
-                        "<td class='num'>{cr}</td><td class='num'>{w}</td><td><a href='/rapports/{h}'>HTML</a> · <a href='/rapports/{t}'>texte</a></td></tr>".format(
-                            date=esc(d.get("date", "")), mode=esc(d.get("mode", "")), gs=esc(n["sante"]["lettre"]), s=esc(n["sante"]["score"]),
+            cur = ' class="cur"' if vu is d else ""
+            rows.append("<tr{cur}><td><a href='/?rapport={j}#constats' title='Afficher ce rapport dans le tableau de bord'>{date}</a></td><td>{mode}</td>"
+                        "<td><span class='pill'><i class='g-{gs}'>{gs}</i>{s}</span></td><td><span class='pill'><i class='g-{gc}'>{gc}</i>{c}</span></td>"
+                        "<td class='num'>{cr}</td><td class='num'>{w}</td><td><a href='/rapports/{h}'>rapport</a> · <a href='/texte/{t}'>texte</a></td></tr>".format(
+                            cur=cur, j=esc(d["_fichier"]), date=esc(d.get("date", "")), mode=esc(d.get("mode", "")), gs=esc(n["sante"]["lettre"]), s=esc(n["sante"]["score"]),
                             gc=esc(n["securite"]["lettre"]), c=esc(n["securite"]["score"]), cr=esc(c.get("CRIT", 0)), w=esc(c.get("WARN", 0)),
                             h=esc(f["html"]), t=esc(f["txt"])))
-        out.append('<div class="card"><h2>Historique <span class="mini">{} rapport(s)</span></h2><div class="tw"><table><thead><tr><th>Date</th><th>Mode</th><th>Santé</th><th>Sécurité</th>'
-                   '<th>Critiques</th><th>Avert.</th><th>Rapport</th></tr></thead><tbody>{}</tbody></table></div></div>'.format(len(hist), "".join(rows)))
+        out.append('<div class="card" id="historique"><h2>Historique <span class="mini">{} rapport(s) · cliquez sur une date pour l’afficher</span></h2><div class="tw"><table><thead><tr><th>Date</th><th>Mode</th><th>Santé</th><th>Sécurité</th>'
+                   '<th>Critiques</th><th>Avert.</th><th>Fichiers</th></tr></thead><tbody>{}</tbody></table></div></div>'.format(len(hist), "".join(rows)))
 
     prochain = donnees.prochain_audit()
-    out.append('<footer>Audite-moi {v}{p} · <a href="https://github.com/oliv2776/Audite-moi">GitHub</a></footer>'.format(
+    out.append('<footer>Audite-moi {v}{p} · <a href="https://github.com/oliv2776/Audite-moi">GitHub</a></footer></div>'.format(
         v=VERSION, p=" · prochain audit automatique : " + esc(prochain) if prochain else ""))
     if occupe:
         out.append("""<script nonce="{n}">(function(){{var j=document.getElementById('journal');
 setInterval(function(){{fetch('/etat.json',{{credentials:'same-origin'}}).then(function(r){{return r.json();}}).then(function(e){{
 if(!e.en_cours&&!e.demande){{location.href='/';return;}} if(j&&e.journal){{j.textContent=e.journal;j.scrollTop=j.scrollHeight;}}
 if(!j&&e.en_cours){{location.reload();}}}}).catch(function(){{}});}},3000);}})();</script>""".format(n=nonce))
-    return page("Audite-moi — " + hote, "".join(out), nonce)
+    hote = der.get("hote", "") if der else socket.gethostname()
+    return page("Audite-moi — " + hote, "".join(out), nonce, nu=True)
+
+
+def page_texte(donnees, csrf, nonce, nom, contenu):
+    hist = donnees.rapports()
+    der = hist[-1] if hist else None
+    etat = donnees.etat()
+    corps = barre(csrf, etat["en_cours"] or etat["demande"], "rapport", der) + \
+        '<div class="wrap"><div class="meta"><a class="btn" href="/">← Tableau de bord</a><a class="btn" href="/rapports/{h}">Version HTML</a><a class="btn" href="/rapports/{t}" download>Télécharger</a></div>' \
+        '<div class="card"><pre class="texte">{c}</pre></div></div>'.format(h=esc(nom[:-4] + ".html"), t=esc(nom), c=esc(contenu))
+    return page("Audite-moi — " + nom, corps, nonce, nu=True)
 
 
 def page_connexion(erreur, nonce):
@@ -476,26 +573,53 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
                 return self.envoyer(401, b'{"erreur":"non connecte"}', "application/json")
             return self.rediriger("/connexion")
         if chemin.path == "/":
-            msg = urllib.parse.parse_qs(chemin.query).get("m", [""])[0]
-            return self.envoyer(200, tableau_bord(self.app.donnees, s["csrf"], nonce, msg), csp=self.csp_page(nonce))
+            q = urllib.parse.parse_qs(chemin.query)
+            choix = q.get("rapport", [""])[0]
+            if not (NOM_RAPPORT.match(choix) and choix.endswith(".json")):
+                choix = ""
+            return self.envoyer(200, tableau_bord(self.app.donnees, s["csrf"], nonce, q.get("m", [""])[0], choix), csp=self.csp_page(nonce))
         if chemin.path == "/etat.json":
             return self.envoyer(200, json.dumps(self.app.donnees.etat()), "application/json; charset=utf-8")
         if chemin.path.startswith("/rapports/"):
             return self.servir_rapport(urllib.parse.unquote(chemin.path[len("/rapports/"):]))
-        return self.envoyer(404, page("Introuvable", '<div class="card">Page introuvable. <a href="/">Retour</a></div>', nonce), csp=self.csp_page(nonce))
+        if chemin.path.startswith("/texte/"):
+            nom = urllib.parse.unquote(chemin.path[len("/texte/"):])
+            corps = self.lire_rapport(nom) if nom.endswith(".txt") else None
+            if corps is None:
+                return self.introuvable(nonce)
+            return self.envoyer(200, page_texte(self.app.donnees, s["csrf"], nonce, nom, corps.decode("utf-8", "replace")), csp=self.csp_page(nonce))
+        return self.introuvable(nonce)
 
-    def servir_rapport(self, nom):
+    def introuvable(self, nonce):
+        return self.envoyer(404, page("Introuvable", '<div class="card">Page ou rapport introuvable. <a href="/">Retour au tableau de bord</a></div>', nonce),
+                            csp=self.csp_page(nonce))
+
+    def lire_rapport(self, nom):
         if not NOM_RAPPORT.match(nom):
-            return self.envoyer(404, b"Rapport introuvable", "text/plain; charset=utf-8")
+            return None
         base = os.path.realpath(self.app.conf["rapports"])
         f = os.path.realpath(os.path.join(base, nom))
         if os.path.dirname(f) != base or not os.path.isfile(f):
-            return self.envoyer(404, b"Rapport introuvable", "text/plain; charset=utf-8")
+            return None
         with open(f, "rb") as fh:
-            corps = fh.read()
+            return fh.read()
+
+    def servir_rapport(self, nom):
+        corps = self.lire_rapport(nom)
+        if corps is None:
+            return self.introuvable(secrets.token_urlsafe(16))
+        ext = nom.rsplit(".", 1)[1]
         types = {"html": "text/html; charset=utf-8", "txt": "text/plain; charset=utf-8", "json": "application/json; charset=utf-8"}
+        if ext == "html":   # barre de retour au tableau de bord, collée en haut du rapport
+            barre_r = ('<div style="position:sticky;top:0;z-index:50;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:9px 20px;'
+                       'background:var(--card,#fff);border-bottom:1px solid var(--line,#ddd);font:600 14px system-ui,sans-serif">'
+                       '<a href="/" style="color:#fff;background:#2f5fd0;text-decoration:none;padding:6px 12px;border-radius:8px">← Tableau de bord</a>'
+                       '<a href="/texte/{t}" style="color:inherit;text-decoration:none;padding:6px 10px;border:1px solid var(--line,#ddd);border-radius:8px">Version texte</a>'
+                       '<span style="color:var(--muted,#666);font-weight:500;font-size:13px">Astuce : cliquez sur les notes ou les compteurs pour filtrer</span></div>'
+                       ).format(t=esc(nom[:-5] + ".txt")).encode()
+            corps = corps.replace(b"<body>", b"<body>" + barre_r, 1)
         csp = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
-        return self.envoyer(200, corps, types[nom.rsplit(".", 1)[1]], csp=csp)
+        return self.envoyer(200, corps, types[ext], csp=csp)
 
     def do_POST(self):
         chemin = urllib.parse.urlsplit(self.path).path

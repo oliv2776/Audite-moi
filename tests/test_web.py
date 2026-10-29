@@ -31,7 +31,9 @@ def rapport(dossier, nom, t, sante, secu):
     with open(os.path.join(dossier, nom + ".json"), "w", encoding="utf-8") as f:
         json.dump(d, f)
     with open(os.path.join(dossier, nom + ".html"), "w", encoding="utf-8") as f:
-        f.write("<!DOCTYPE html><title>rapport</title>")
+        f.write("<!DOCTYPE html><html><body><title>rapport</title></body></html>")
+    with open(os.path.join(dossier, nom + ".txt"), "w", encoding="utf-8") as f:
+        f.write("RAPPORT TEXTE <b>\n")
 
 
 class TestInterface(unittest.TestCase):
@@ -147,6 +149,24 @@ class TestInterface(unittest.TestCase):
         r, _ = self.req("POST", "/connexion", {"mot_de_passe": MDP})
         self.assertEqual(r.status, 429)
         app._echecs.clear()
+
+    def test_navigation(self):
+        ck = self.connexion()
+        r, t = self.req("GET", "/rapports/rapport-nas-test-20260101-1000.html", cookie=ck)
+        self.assertIn('href="/"', t)                               # barre de retour injectée dans le rapport
+        r, t = self.req("GET", "/texte/rapport-nas-test-20260101-1000.txt", cookie=ck)
+        self.assertEqual(r.status, 200)
+        self.assertIn("RAPPORT TEXTE &lt;b&gt;", t)
+        self.assertIn("Tableau de bord", t)
+        r, _ = self.req("GET", "/texte/..%2Fsecret.txt", cookie=ck)
+        self.assertEqual(r.status, 404)
+        r, t = self.req("GET", "/?rapport=rapport-nas-test-20260101-1000.json", cookie=ck)
+        self.assertIn("ancien rapport", t)
+        self.assertIn('data-niv="CRIT"', t)
+        self.assertIn('data-f="cat:sante"', t)                     # tuiles cliquables
+        r, t = self.req("GET", "/?rapport=../../etc/passwd", cookie=ck)
+        self.assertEqual(r.status, 200)
+        self.assertNotIn("ancien rapport", t)
 
     def test_deconnexion(self):
         ck = self.connexion()

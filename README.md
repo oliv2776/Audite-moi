@@ -53,11 +53,11 @@ Options utiles : `--port 9000`, `--ecoute 192.168.1.10`, `--sans-web` (script + 
 
 ### Interface web
 
-- Notes **Santé** / **Sécurité** et compteurs du dernier audit ;
-- **plan d'action** : les problèmes, du plus urgent au moins urgent, avec la correction à appliquer ;
-- **évolution des notes** au fil des audits et **historique** des rapports ;
-- boutons **Lancer un audit complet** (quelques minutes) et **Audit rapide** (sans Lynis, Trivy ni recherche des fichiers SUID), avec le déroulement affiché en direct ;
-- le **rapport complet** (HTML), sa version texte et le JSON.
+- une barre de navigation toujours visible : **Tableau de bord**, **Constats**, **Historique**, **Rapport complet**, et les boutons **▶ Lancer un audit** (complet, quelques minutes) / **Audit rapide** (sans Lynis, Trivy ni recherche des fichiers SUID), avec le déroulement affiché en direct ;
+- les notes **Santé** / **Sécurité** et les compteurs (critiques, avertissements, OK, infos) sont **cliquables** : un clic n'affiche que les constats correspondants (ex. Sécurité + Critiques), un second clic annule ;
+- la liste des **constats** se filtre aussi par catégorie, niveau, section ou mot-clé (ex. « ssh », « jellyfin ») ; par défaut elle montre ce qu'il faut corriger, du plus urgent au moins urgent, avec la correction à appliquer ;
+- **évolution des notes** et **historique** : un clic sur une date affiche cet ancien audit dans le tableau de bord ;
+- le **rapport complet** (avec un bouton « ← Tableau de bord » et les mêmes filtres cliquables), sa version texte et le JSON.
 
 ![Évolution des notes](docs/evolution.png)
 

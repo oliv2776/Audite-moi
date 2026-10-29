@@ -2541,7 +2541,13 @@ nav.toc a{font-size:13px;text-decoration:none;color:var(--ink);background:var(--
 nav.toc a:hover{border-color:var(--muted)}
 nav.toc .dot{font-weight:400}
 .toggle{font-size:13px;color:var(--muted);display:flex;gap:6px;align-items:center;cursor:pointer;white-space:nowrap}
-body.only tr.lvl-OK,body.only tr.lvl-INFO{display:none}
+button.score,button.kpi{font:inherit;color:inherit;text-align:left;cursor:pointer}button.kpi{width:100%}
+button.score:hover,button.kpi:hover{border-color:var(--muted)}
+button.score[aria-pressed=true],button.kpi[aria-pressed=true]{outline:2px solid var(--info);outline-offset:1px}
+.kpi .hint,.score .hint{display:block;font-size:11.5px;color:var(--muted);margin-top:2px}
+.filtre{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--info-bg);color:var(--ink);border-radius:10px;padding:8px 12px;margin:0 0 14px;font-size:14px}
+.filtre button{font:inherit;font-size:13px;font-weight:600;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:4px 10px;cursor:pointer}
+.cache{display:none!important}
 ol.actions{margin:0;padding:0;list-style:none}
 ol.actions li{padding:11px 0;border-top:1px solid var(--line);display:grid;grid-template-columns:96px 1fr;column-gap:8px}
 ol.actions li:first-child{border-top:0}
@@ -2556,7 +2562,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;margin-top:28px}
 EOF
 )
 
-score_card() { local g; g=$(grade "$2"); printf '<div class="score"><span class="grade g-%s">%s</span><div><div class="sl">%s</div><div class="sv">%s<small> / 100</small></div></div></div>' "$g" "$g" "$1" "$2"; }
+score_card() { local g; g=$(grade "$2"); printf '<button type="button" class="score" data-cat="%s" aria-pressed="false" title="Afficher uniquement les contrôles « %s »"><span class="grade g-%s">%s</span><div><div class="sl">%s</div><div class="sv">%s<small> / 100</small></div></div></button>' "$3" "$1" "$g" "$g" "$1" "$2"; }
 
 render_table() {
   local f=$1 line first=1 ncol=0 k c
@@ -2606,14 +2612,15 @@ $CSS
     <h1>$(esc "$HOST")</h1>
     <div class="meta">$(esc "$DATE_HUMAN") · $(esc "$OS_PRETTY") · noyau $(esc "$KERNEL") · $(esc "${CPU_MODEL:-CPU}") · $(hbytes "$MEM_TOTAL") de RAM</div>
   </div>
-  <div class="scores">$(score_card "Santé" "$hs")$(score_card "Sécurité" "$ss")</div>
+  <div class="scores">$(score_card "Santé" "$hs" sante)$(score_card "Sécurité" "$ss" secu)</div>
 </header>
 <div class="kpis">
-  <div class="kpi k-CRIT"><span class="n">$nC</span><span class="l">critique(s)</span></div>
-  <div class="kpi k-WARN"><span class="n">$nW</span><span class="l">avertissement(s)</span></div>
-  <div class="kpi k-OK"><span class="n">$nO</span><span class="l">contrôle(s) OK</span></div>
-  <div class="kpi k-INFO"><span class="n">$nI</span><span class="l">information(s)</span></div>
+  <button type="button" class="kpi k-CRIT" data-lvl="CRIT" aria-pressed="false"><span class="n">$nC</span><span class="l">critique(s)</span></button>
+  <button type="button" class="kpi k-WARN" data-lvl="WARN" aria-pressed="false"><span class="n">$nW</span><span class="l">avertissement(s)</span></button>
+  <button type="button" class="kpi k-OK" data-lvl="OK" aria-pressed="false"><span class="n">$nO</span><span class="l">contrôle(s) OK</span></button>
+  <button type="button" class="kpi k-INFO" data-lvl="INFO" aria-pressed="false"><span class="n">$nI</span><span class="l">information(s)</span></button>
 </div>
+<div class="filtre cache" id="filtre">Filtre : <b id="ftxt"></b><button type="button" id="fclear">Tout afficher</button></div>
 EOF
   # Plan d'action
   local out="" n=0 t m fx
@@ -2622,7 +2629,7 @@ EOF
       [[ ${R_LVL[i]} == "$lvl" ]] || continue
       n=$((n + 1))
       fmt_to "${R_TTL[i]}"; t=$REPLY; fmt_to "${R_MSG[i]}"; m=$REPLY; fmt_to "${R_FIX[i]}"; fx=$REPLY
-      out+="<li><div><span class=\"badge b-$lvl\">${LVL_FR[$lvl]}</span></div><div class=\"body\"><a class=\"sec\" href=\"#${R_SEC[i]}\">${SEC_SHORT[${R_SEC[i]}]}</a><span class=\"ttl\">$t</span>"
+      out+="<li data-lvl=\"$lvl\" data-cat=\"${SEC_CAT[${R_SEC[i]}]}\"><div><span class=\"badge b-$lvl\">${LVL_FR[$lvl]}</span></div><div class=\"body\"><a class=\"sec\" href=\"#${R_SEC[i]}\">${SEC_SHORT[${R_SEC[i]}]}</a><span class=\"ttl\">$t</span>"
       [[ -n $m ]] && out+="<div class=\"msg\">$m</div>"
       [[ -n $fx ]] && out+="<div class=\"fix\">$fx</div>"
       out+="</div></li>"
@@ -2654,8 +2661,8 @@ EOF
       case $lvl in CRIT) rowsC+=$r ;; WARN) rowsW+=$r ;; *) rowsR+=$r ;; esac
     done
     local counts; counts=$(join_list ' · ' "$( ((c1)) && echo "$c1 critique(s)")" "$( ((c2)) && echo "$c2 avertissement(s)")" "$( ((c3)) && echo "$c3 OK")" "$( ((c4)) && echo "$c4 info(s)")")
-    printf '<section class="card" id="%s"><h2>%s <span class="cat">%s</span><span class="mini">%s</span></h2>\n' \
-      "$s" "$(esc "${SEC_TITLE[$s]}")" "$( [[ ${SEC_CAT[$s]} == secu ]] && echo Sécurité || echo Santé)" "$counts"
+    printf '<section class="card" id="%s" data-cat="%s"><h2>%s <span class="cat">%s</span><span class="mini">%s</span></h2>\n' \
+      "$s" "${SEC_CAT[$s]}" "$(esc "${SEC_TITLE[$s]}")" "$( [[ ${SEC_CAT[$s]} == secu ]] && echo Sécurité || echo Santé)" "$counts"
     [[ -n $rowsC$rowsW$rowsR ]] && printf '<table class="findings">%s%s%s</table>\n' "$rowsC" "$rowsW" "$rowsR"
     for i in "${!T_SEC[@]}"; do
       [[ ${T_SEC[i]} == "$s" ]] || continue
@@ -2683,7 +2690,31 @@ EOF
 <footer>Généré par Audite-moi $VERSION en $dur s · note = 100 × 0,75<sup>critiques</sup> × 0,96<sup>avertissements</sup> pour chaque catégorie · rapport confidentiel : il décrit les faiblesses de votre serveur.</footer>
 </div>
 <script>
-(function(){var b=document.getElementById('only');if(!b)return;b.addEventListener('change',function(){document.body.classList.toggle('only',b.checked);});})();
+(function(){
+var st={cat:'',lvl:''},Q=function(s){return Array.prototype.slice.call(document.querySelectorAll(s));};
+var NOMS={sante:'Santé',secu:'Sécurité',CRIT:'critiques',WARN:'avertissements',OK:'contrôles OK',INFO:'informations',PB:'problèmes (critiques et avertissements)'};
+function okLvl(l){return !st.lvl||(st.lvl==='PB'?(l==='CRIT'||l==='WARN'):l===st.lvl);}
+function apply(){
+  Q('section.card[data-cat]').forEach(function(s){
+    var n=0;Q('#'+s.id+' tr[class^="lvl-"]').forEach(function(r){var v=okLvl(r.className.slice(4));r.classList.toggle('cache',!v);if(v)n++;});
+    Q('#'+s.id+' h3, #'+s.id+' .tw, #'+s.id+' details').forEach(function(e){e.classList.toggle('cache',!!st.lvl);});
+    var vis=(!st.cat||s.dataset.cat===st.cat)&&(!st.lvl||n>0);
+    s.classList.toggle('cache',!vis);
+    Q('nav.toc a[href="#'+s.id+'"]').forEach(function(a){a.classList.toggle('cache',!vis);});
+  });
+  Q('#plan li[data-lvl]').forEach(function(li){li.classList.toggle('cache',!((!st.cat||li.dataset.cat===st.cat)&&okLvl(li.dataset.lvl)));});
+  Q('button.score').forEach(function(b){b.setAttribute('aria-pressed',b.dataset.cat===st.cat?'true':'false');});
+  Q('button.kpi').forEach(function(b){b.setAttribute('aria-pressed',b.dataset.lvl===st.lvl?'true':'false');});
+  var t=[];if(st.cat)t.push(NOMS[st.cat]);if(st.lvl)t.push(NOMS[st.lvl]);
+  document.getElementById('ftxt').textContent=t.join(' · ');
+  document.getElementById('filtre').classList.toggle('cache',!t.length);
+  var o=document.getElementById('only');if(o)o.checked=st.lvl==='PB';
+}
+Q('button.score').forEach(function(b){b.addEventListener('click',function(){st.cat=st.cat===b.dataset.cat?'':b.dataset.cat;apply();});});
+Q('button.kpi').forEach(function(b){b.addEventListener('click',function(){st.lvl=st.lvl===b.dataset.lvl?'':b.dataset.lvl;apply();});});
+document.getElementById('fclear').addEventListener('click',function(){st.cat='';st.lvl='';apply();});
+var o=document.getElementById('only');if(o)o.addEventListener('change',function(){st.lvl=o.checked?'PB':'';apply();});
+})();
 </script>
 </body>
 </html>
