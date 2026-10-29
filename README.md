@@ -107,6 +107,21 @@ services:
 | radeontop / intel-gpu-tools | charge instantanée du GPU | `sudo apt install radeontop intel-gpu-tools` |
 | miniupnpc | redirections UPnP de la box | `sudo apt install miniupnpc` |
 
+## Dépannage
+
+**« Le délai d'attente est dépassé » dans le navigateur** : un pare-feu bloque le port 8765 (le plus souvent UFW sur le NAS).
+
+```bash
+sudo systemctl status audite-moi-web --no-pager       # le service doit être « active (running) »
+curl -kI https://127.0.0.1:8765/connexion              # depuis le NAS : doit répondre « HTTP/1.1 200 »
+sudo ufw status                                        # UFW actif sans règle pour 8765 ?
+sudo ufw allow from 10.10.1.0/24 to any port 8765 proto tcp comment Audite-moi   # adaptez à votre réseau local
+```
+
+`sudo ./install.sh --ouvrir-pare-feu` ajoute cette règle automatiquement pour le réseau local du NAS. Pensez aussi à bien taper **https://** (et non http://).
+
+**« La connexion a échoué »** (refus immédiat) : le service ne tourne pas, voir `sudo journalctl -u audite-moi-web -n 30`.
+
 ## Désinstallation
 
 ```bash

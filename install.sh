@@ -10,7 +10,7 @@
 # =============================================================================
 set -euo pipefail
 
-PORT=8765 ECOUTE=0.0.0.0 TLS=1 WEB=1 MINUTEUR=1 NOUVEAU_MDP=0 MINIMAL=0
+PORT=8765 ECOUTE=0.0.0.0 TLS=1 WEB=1 MINUTEUR=1 NOUVEAU_MDP=0 MINIMAL=0 OUVRIR=0
 usage() {
   cat <<'EOF'
 Installation d'Audite-moi
@@ -24,6 +24,7 @@ Installation d'Audite-moi
   --sans-minuteur        pas d'audit automatique hebdomadaire
   --nouveau-mot-de-passe redéfinit le mot de passe de l'interface web
   --minimal              n'installe que les dépendances indispensables
+  --ouvrir-pare-feu      autorise l'interface dans UFW pour le réseau local, sans poser la question
   -h, --help             cette aide
 EOF
 }
@@ -36,6 +37,7 @@ while (($#)); do
     --sans-minuteur) MINUTEUR=0; shift ;;
     --nouveau-mot-de-passe) NOUVEAU_MDP=1; shift ;;
     --minimal) MINIMAL=1; shift ;;
+    --ouvrir-pare-feu) OUVRIR=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Option inconnue : $1" >&2; usage >&2; exit 1 ;;
   esac
@@ -168,17 +170,53 @@ if ((WEB)); then
   echo "  ${schema}://${ipv4:-<ip-du-nas>}:$PORT/"
   ((TLS)) && echo "  (certificat auto-signé : votre navigateur affichera un avertissement la première fois, acceptez-le)"
   [[ -n $MDP_AFFICHE ]] && echo "  Mot de passe généré : $MDP_AFFICHE   (changez-le avec : sudo ./install.sh --nouveau-mot-de-passe)"
-  if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
-    iface=$(ip route show default 2>/dev/null | awk '{print $5; exit}' || true)
-    cidr=$(ip -o -f inet addr show dev "$iface" 2>/dev/null | awk '{print $4; exit}' || true)
-    lan=$(python3 -c 'import ipaddress,sys; print(ipaddress.ip_interface(sys.argv[1]).network)' "$cidr" 2>/dev/null || true)
-    if [[ -n $lan ]] && ! ufw status 2>/dev/null | grep -qE "^$PORT(/tcp)? +ALLOW"; then
-      regle=(ufw allow from "$lan" to any port "$PORT" proto tcp comment "Audite-moi")
-      rep=n
-      [[ -t 0 ]] && read -r -p "  UFW est actif : autoriser l'interface depuis votre réseau local ($lan) ? [O/n] " rep
-      if [[ -t 0 && ! $rep =~ ^[nN] ]]; then "${regle[@]}" >/dev/null && echo "  Règle UFW ajoutée (réseau local uniquement)"
-      else echo "  Pour y accéder depuis votre réseau local : sudo ${regle[*]}"; fi
+  # 1) Le service répond-il sur le serveur lui-même ?
+  if ((SYSTEMD)); then
+    local_ip=127.0.0.1; [[ $ECOUTE != 0.0.0.0 && $ECOUTE != "::" ]] && local_ip=$ECOUTE
+    reponse=""
+    for _ in 1 2 3 4 5 6; do
+      reponse=$(python3 - "$schema://$local_ip:$PORT/connexion" <<'PY' 2>/dev/null || true
+import ssl, sys, urllib.request, urllib.error
+ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+try:
+    print(urllib.request.urlopen(sys.argv[1], context=ctx, timeout=5).status)
+except urllib.error.HTTPError as e:
+    print(e.code)
+except Exception as e:
+    print("erreur : %s" % e)
+PY
+)
+      [[ $reponse == 200 ]] && break
+      sleep 1
+    done
+    if [[ $reponse == 200 ]]; then
+      echo "  ✔ L'interface répond sur le serveur (test local réussi)."
+    else
+      echo "  ✘ L'interface ne répond pas sur le serveur (${reponse:-pas de réponse}) : sudo journalctl -u audite-moi-web -n 30" >&2
     fi
+  fi
+  # 2) Un pare-feu bloque-t-il l'accès depuis le réseau local ?
+  lan=""
+  cidr=$(ip -o -f inet addr show 2>/dev/null | awk -v ip="$ipv4" '{split($4, a, "/"); if (a[1] == ip) {print $4; exit}}' || true)
+  [[ -n $cidr ]] && lan=$(python3 -c 'import ipaddress,sys; print(ipaddress.ip_interface(sys.argv[1]).network)' "$cidr" 2>/dev/null || true)
+  if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
+    if ufw status 2>/dev/null | grep -qE "^$PORT(/tcp)?[[:space:]]+ALLOW"; then
+      echo "  ✔ UFW autorise déjà le port $PORT."
+    else
+      regle=(ufw allow from "${lan:-<votre-réseau>/24}" to any port "$PORT" proto tcp comment "Audite-moi")
+      rep=n
+      if [[ -n $lan ]] && ((OUVRIR)); then rep=o
+      elif [[ -n $lan && -t 0 ]]; then read -r -p "  UFW bloque le port $PORT : l'autoriser depuis votre réseau local ($lan) ? [O/n] " rep; [[ -z $rep ]] && rep=o
+      fi
+      if [[ $rep =~ ^[oOyY] ]]; then
+        "${regle[@]}" >/dev/null && echo "  ✔ Règle UFW ajoutée : port $PORT autorisé depuis $lan uniquement."
+      else
+        echo "  ⚠ UFW bloque le port $PORT : sans règle, le navigateur affichera « délai d'attente dépassé »."
+        echo "    Pour autoriser votre réseau local : sudo ${regle[*]}"
+      fi
+    fi
+  elif [[ $(iptables -S INPUT 2>/dev/null | head -n 1) == "-P INPUT DROP" ]] || nft list ruleset 2>/dev/null | grep -qE 'hook input.*policy drop'; then
+    echo "  ⚠ Un pare-feu (iptables/nftables) filtre les connexions entrantes : autorisez le port TCP $PORT depuis votre réseau local${lan:+ ($lan)}."
   fi
   echo "  N'exposez pas cette interface sur Internet (ou seulement derrière Cloudflare Access) : elle décrit les faiblesses du serveur."
 fi
