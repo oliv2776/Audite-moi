@@ -8,9 +8,16 @@ import unittest
 from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SPEC = importlib.util.spec_from_file_location("audite_moi_mesures", os.path.join(ROOT, "systemd", "audite-moi-mesures"))
+# Le script de mesures n'a volontairement pas d'extension .py.
+# Charger explicitement son code source évite que spec_from_file_location()
+# ne retourne aucun chargeur selon la version de Python.
+from importlib.machinery import SourceFileLoader
+
+MODULE_PATH = os.path.join(ROOT, "systemd", "audite-moi-mesures")
+LOADER = SourceFileLoader("audite_moi_mesures", MODULE_PATH)
+SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
 mesures = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(mesures)
+LOADER.exec_module(mesures)
 
 
 class TestInventaireSMART(unittest.TestCase):
