@@ -858,7 +858,7 @@ check_zfs() {
   fi
   if ((${#POOLS[@]} == 0)); then
     crit "Aucun pool ZFS importé" "Aucun pool n'est importé : les données des pools ne sont pas accessibles." \
-      "`sudo zpool import` pour lister les pools disponibles, puis `sudo zpool import <nom>`"
+      "\`sudo zpool import\` pour lister les pools disponibles, puis \`sudo zpool import <nom>\`"
     return
   fi
   local timers; timers=$(systemctl list-timers --all --no-legend 2>/dev/null)
