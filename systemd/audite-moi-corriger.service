@@ -9,13 +9,11 @@ ExecStart=/usr/bin/python3 /usr/local/lib/audite-moi/audite-moi-corriger
 TimeoutStartSec=5min
 PrivateTmp=yes
 
-# Réduire l'impact d'une erreur dans le service root. Les seules écritures
-# système nécessaires aux corrections sont UFW et les liens d'activation systemd.
+# Réduire l'impact d'une erreur dans le service root. /usr reste en lecture
+# seule ; /etc reste modifiable pour les actions autorisées (UFW, systemd et
+# protection des fichiers .env/compose dont le chemin dépend de l'installation).
 NoNewPrivileges=yes
-ProtectSystem=full
-ReadWritePaths=/etc/systemd/system -/etc/ufw
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
+ProtectSystem=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
