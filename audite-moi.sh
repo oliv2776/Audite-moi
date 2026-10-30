@@ -2771,7 +2771,7 @@ check_ssh() {
   [[ -n $weak ]] && warn "Algorithmes SSH obsolètes acceptés" "$weak" "Retirez les directives Ciphers / MACs / KexAlgorithms personnalisées pour revenir aux valeurs sûres par défaut d'OpenSSH"
 
   if ((log_ok)); then
-    if (("${#pub[@]}")); then
+    if ((${#pub[@]})); then
       ((SSH_PASS)) || warn "SSH joignable depuis Internet" "$nfail tentatives échouées en 7 jours depuis ${#pub[@]} adresse(s) IP publique(s), par ex. : $(join_list ', ' "${pub[@]:0:8}")." \
         "Supprimez la redirection de port SSH sur la box ; pour l'accès à distance, utilisez un VPN (WireGuard, Tailscale) ou Cloudflare Access"
     elif ((nfail > 0)); then
