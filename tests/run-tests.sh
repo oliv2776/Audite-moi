@@ -379,6 +379,20 @@ else
   ko "échec de lecture IPv6 : indisponibilité non signalée"
 fi
 
+echo "▶ Journaux systemd indisponibles"
+OUT_JOURNAL=$TMP/rapports-journal-indisponible
+mkdir -p "$OUT_JOURNAL"
+AUDITE_MOI_JOURNALCTL_ECHEC=1 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_JOURNAL" --config "$TMP/audit.conf" --no-color --quick > "$TMP/journal-indisponible.txt" 2>&1 || true
+JJ=$(ls "$OUT_JOURNAL"/rapport-*.json 2>/dev/null | head -n 1)
+if [[ -n $JJ ]] \
+   && jq -e '.constats[] | select(.titre == "Lecture du journal sudo indisponible")' "$JJ" >/dev/null \
+   && ! jq -e '.constats[] | select(.titre == "Aucun échec sudo (7 jours)")' "$JJ" >/dev/null \
+   && jq -e '.constats[] | select(.titre == "Lecture des modifications de comptes indisponible")' "$JJ" >/dev/null; then
+  ok "échec de journalctl : contrôles sudo et comptes signalés indisponibles, sans faux RAS"
+else
+  ko "échec de journalctl : indisponibilité non distinguée"
+fi
+
 [[ -n ${GARDER:-} ]] && { cp -r "$OUT" "$GARDER"; echo "Rapports copiés dans $GARDER"; }
 echo
 if ((fail)); then echo "Des tests ont échoué."; exit 1; fi
