@@ -1577,7 +1577,14 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
         orig = self.headers.get("Origin")
         if not orig or orig == "null":
             return orig is None
-        return urllib.parse.urlsplit(orig).netloc == self.headers.get("Host", "")
+        try:
+            origine = urllib.parse.urlsplit(orig)
+            return (origine.scheme in ("http", "https")
+                    and origine.netloc.casefold() == self.headers.get("Host", "").casefold()
+                    and not origine.path and not origine.query and not origine.fragment
+                    and not origine.username and not origine.password)
+        except ValueError:
+            return False
 
     # -- routes
     def do_HEAD(self):
@@ -1916,10 +1923,37 @@ class Application:
 class Serveur(http.server.ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    MAX_THREADS = 64
+
+    def __init__(self, *args, **kwargs):
+        self._places = threading.BoundedSemaphore(self.MAX_THREADS)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        # ThreadingHTTPServer crée normalement un thread sans limite par connexion.
+        # Refuser proprement les connexions excédentaires évite l'épuisement mémoire.
+        if not self._places.acquire(blocking=False):
+            try:
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\\r\\nConnection: close\\r\\nContent-Length: 0\\r\\n\\r\\n")
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._places.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._places.release()
 
     def handle_error(self, request, client_address):
         exc = sys.exc_info()[1]
-        sys.stderr.write("{} erreur : {}\n".format(client_address[0] if client_address else "?", exc))
+        sys.stderr.write("{} erreur : {}\\n".format(client_address[0] if client_address else "?", exc))
 
 
 def charger_conf(chemin):
