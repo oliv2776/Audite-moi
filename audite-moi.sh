@@ -1425,9 +1425,26 @@ sauvegardes_verif() {
     IFS=: read -r nom typ cible h <<< "$n"
     isint "${h:-}" || h=${SEUIL[sauvegarde_defaut_heures]:-26}
     local der=""
+    local sortie=""
     case $typ in
-      fichier) [[ -e $cible ]] && der=$(find "$cible" -maxdepth 3 -type f -printf '%T@\n' 2>/dev/null | sort -n | tail -n 1); der=${der%.*} ;;
-      zfs)     der=$(tmo 30 zfs list -H -p -t snapshot -o creation -s creation -d 1 "$cible" 2>/dev/null | tail -n 1) ;;
+      fichier)
+        if [[ -e $cible ]]; then
+          if ! sortie=$(find "$cible" -maxdepth 3 -type f -printf '%T@\n' 2>/dev/null); then
+            info "Contrôle de sauvegarde « $nom » : vérification impossible" "Impossible de parcourir le chemin $cible ; l'état de la sauvegarde n'est pas déterminable." "Vérifiez les permissions et l'accès au volume."
+            lignes+=("$nom$TAB@INFO contrôle indisponible$TAB")
+            continue
+          fi
+          der=$(sort -n <<< "$sortie" | tail -n 1); der=${der%.*}
+        fi
+        ;;
+      zfs)
+        if ! sortie=$(tmo 30 zfs list -H -p -t snapshot -o creation -s creation -d 1 "$cible" 2>/dev/null); then
+          info "Contrôle de sauvegarde « $nom » : vérification impossible" "La commande zfs list a échoué ou dépassé son délai pour $cible ; aucune conclusion n'est tirée sur l'absence de snapshots." "Vérifiez le pool ZFS et relancez : sudo zfs list -t snapshot -r $cible"
+          lignes+=("$nom$TAB@INFO contrôle indisponible$TAB")
+          continue
+        fi
+        der=$(tail -n 1 <<< "$sortie")
+        ;;
       unite)   ts=$(systemctl show -p ExecMainExitTimestamp --value "$cible" 2>/dev/null)
                [[ $(systemctl show -p Result --value "$cible" 2>/dev/null) == success && -n $ts && $ts != n/a ]] && der=$(date -d "$ts" +%s 2>/dev/null) ;;
       *) info "Contrôle de sauvegarde « $nom » : type inconnu ($typ)" "" "Types possibles : fichier, zfs, unite (voir README)"; continue ;;
