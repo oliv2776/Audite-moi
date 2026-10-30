@@ -1373,7 +1373,7 @@ check_reseau() {
     if routes=$(ip route show default 2>/dev/null); then
       gw=$(awk '/default/ {print $3; exit}' <<< "$routes")
       if [[ -z $gw ]]; then
-        warn "Aucune route par défaut" "Le serveur ne peut pas joindre Internet (tunnels, mises à jour)." "Vérifiez la configuration réseau (`/etc/netplan/`)"
+        warn "Aucune route par défaut" "Le serveur ne peut pas joindre Internet (tunnels, mises à jour)." "Vérifiez la configuration réseau (\`/etc/netplan/\`)"
       elif have ping; then
         if ping -c 2 -W 2 "$gw" >/dev/null 2>&1; then ok "Passerelle $gw joignable"; else info "La passerelle $gw ne répond pas au ping" "Certaines box filtrent l'ICMP."; fi
       fi
@@ -1385,7 +1385,7 @@ check_reseau() {
     if getent ahosts cloudflare.com >/dev/null 2>&1; then
       ok "Résolution DNS fonctionnelle"
     else
-      warn "Résolution DNS en échec" "La résolution de cloudflare.com n'a pas abouti ; vérifiez la connectivité et les serveurs DNS." "`resolvectl status` et vérifiez les serveurs DNS de `/etc/netplan/`"
+      warn "Résolution DNS en échec" "La résolution de cloudflare.com n'a pas abouti ; vérifiez la connectivité et les serveurs DNS." "\`resolvectl status\` et vérifiez les serveurs DNS de \`/etc/netplan/\`"
     fi
   else
     info "Contrôle DNS indisponible" "La commande getent n'est pas installée ; la résolution DNS n'a pas pu être vérifiée."
