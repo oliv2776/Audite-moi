@@ -38,7 +38,18 @@ export AUDITE_MOI_FIX=$ROOT/tests/fixtures AUDITE_MOI_DRI_DIR=$TMP/dri AUDITE_MO
 
 echo "▶ Scénario simulé (NAS ZFS + Docker + iGPU Intel + carte AMD + tunnel Cloudflare)"
 OUT=$TMP/rapports
-PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT" --no-color --keep 5 > "$TMP/sortie.txt" 2> "$TMP/erreurs.txt"
+cat > "$TMP/audit.conf" <<'EOC'
+# configuration de test
+EXTERNE=oui
+DOMAINES_EXTRA="nc.exemple.fr direct.exemple.fr"
+OPNSENSE_URL=https://192.168.1.1/
+OPNSENSE_KEY=clef-api
+OPNSENSE_SECRET="secret+/="
+SCAN_RESEAU=oui
+EOC
+chmod 644 "$TMP/audit.conf"
+mkdir -p "$OUT" && printf '00:0d:b9:11:22:33\t192.168.1.1\trouteur.maison\tPC Engines\n' > "$OUT/.inventaire-reseau"
+PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT" --config "$TMP/audit.conf" --no-color --keep 5 > "$TMP/sortie.txt" 2> "$TMP/erreurs.txt"
 rc=$?
 [[ $rc == 2 ]] && ok "code de sortie 2 (problèmes critiques détectés)" || ko "code de sortie attendu 2, obtenu $rc"
 if [[ -s $TMP/erreurs.txt ]]; then ko "messages d'erreur inattendus :"; sed 's/^/      /' "$TMP/erreurs.txt" | head -20; else ok "aucune erreur sur la sortie d'erreur"; fi
@@ -96,6 +107,39 @@ expect WARN "Aucun outil de sauvegarde détecté"
 expect OK   "Onduleur eaton en ligne"
 expect INFO "Indice de durcissement Lynis : 64/100"
 expect WARN "Image exposée nextcloud:29-apache"
+# Vu d'Internet
+expect OK   "cloud.exemple.fr protégé par Cloudflare Access"
+expect CRIT "direct.exemple.fr pointe directement sur votre box"
+expect CRIT "films.exemple.fr expose un fichier sensible : /.git/HEAD"
+expect CRIT "Stash est accessible sans mot de passe depuis Internet"
+expect WARN "Nextcloud 29.0.3 : correctifs disponibles (29.0.16)"
+expect WARN "Votre IP personnelle est publiée dans le DNS (maison.exemple.fr"
+expect INFO "films.exemple.fr accepte TLS 1.0/1.1"
+# Applications
+expect CRIT "Nextcloud : compte(s) administrateur sans double authentification : admin"
+expect WARN "Nextcloud : 2 lien(s) de partage public(s) sans mot de passe"
+expect WARN "Nextcloud ne voit pas les vraies adresses IP"
+expect WARN "Nextcloud : mode debug activé"
+expect WARN "Nextcloud signale des erreurs de configuration"
+expect CRIT "Stash (stash) n'a ni identifiant ni mot de passe"
+expect WARN "Stash a détecté un accès depuis Internet"
+# OPNsense
+expect WARN "audit.conf est lisible par d'autres comptes"
+expect WARN "OPNsense 25.7.3 : mises à jour disponibles"
+expect CRIT "Port 2222/tcp ouvert sur Internet → 192.168.1.10:22 (ce NAS) (SSH)"
+expect WARN "Port 32400/tcp ouvert sur Internet"
+expect CRIT "Le routeur lui-même est accessible depuis Internet (port 443)"
+expect INFO "Port VPN ouvert sur le WAN : udp 51820"
+expect WARN "UPnP activé sur le routeur"
+expect WARN "SSH d'OPNsense : connexion root autorisée"
+jq -e '.constats[] | select(.titre | contains("8080/tcp"))' "$J" >/dev/null && ko "une redirection désactivée est signalée" || ok "redirection désactivée ignorée"
+# Réseau local
+expect INFO "Réseaux trop grands ignorés : 10.30.0.0/16"
+expect INFO "4 appareil(s) trouvé(s) sur 192.168.1.0/24 192.168.20.0/24"
+expect CRIT "API Docker sans TLS ouverte sur le réseau : 192.168.1.30"
+expect WARN "Services risqués sur d'autres appareils du réseau"
+expect INFO "Nouveaux appareils depuis le dernier scan : 3"
+grep -qE 'SECRETHASH|SECRETWG|secret\+/=' "$OUT"/rapport-* && ko "un secret d'OPNsense apparaît dans le rapport" || ok "aucun secret d'OPNsense dans les rapports"
 
 echo "▶ Contrôles du rapport HTML"
 Hf=$(ls "$OUT"/rapport-*.html | head -n 1)

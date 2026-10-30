@@ -17,7 +17,7 @@
 #  https://github.com/oliv2776/Audite-moi
 # =============================================================================
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 PROG=${0##*/}
 NL=$'\n'
 TAB=$'\t'
@@ -31,6 +31,7 @@ SHARED_DIR=/var/lib/audite-moi/rapports   # dossier commun créé par install.sh
 SHARED_GROUP=audite-moi
 
 # ------------------------------------------------------------------- options --
+CONF_FILE=/etc/audite-moi/audit.conf
 OUTDIR="" OUTGROUP="" KEEP=0 QUICK=0 NO_WAKE=0 APT_UPDATE=0 INSTALL_DEPS=0 USE_COLOR=1
 
 usage() {
@@ -43,14 +44,17 @@ Utilisation : sudo $PROG [options]
   -o, --output DIR   dossier des rapports (défaut : $SHARED_DIR si
                      l'interface web est installée, sinon ~/audite-moi de
                      l'utilisateur qui lance sudo)
-  -q, --quick        mode rapide : sans Lynis, Trivy, rkhunter, recherche des
-                     fichiers SUID ni vérifications à l'intérieur des conteneurs
+  -q, --quick        mode rapide : sans Lynis, Trivy, rkhunter, scan du réseau
+                     local, recherche des fichiers SUID ni vérifications à
+                     l'intérieur des conteneurs
       --no-wake      ne réveille pas les disques en veille pour lire SMART
       --apt-update   rafraîchit la liste des paquets (apt-get update) avant l'audit
       --install-deps installe les outils utiles : jq, smartmontools, lynis,
-                     vainfo, pciutils (+ intel-gpu-tools si iGPU Intel)
+                     vainfo, pciutils, curl, nmap (+ intel-gpu-tools si iGPU Intel)
       --group GROUPE rend les rapports lisibles par ce groupe (droits 640)
       --keep N       ne conserve que les N rapports les plus récents
+      --config FICHIER  réglages des modules réseau (défaut : $CONF_FILE) :
+                     test depuis Internet, clé API OPNsense, scan du réseau local
       --no-color     sortie sans couleurs
   -h, --help         affiche cette aide
 
@@ -69,6 +73,8 @@ while (($#)); do
                     OUTGROUP=$2; shift 2 ;;
     --keep)         [[ ${2:-} =~ ^[0-9]+$ ]] || { echo "L'option --keep attend un nombre." >&2; exit 3; }
                     KEEP=$2; shift 2 ;;
+    --config)       [[ -n ${2:-} ]] || { echo "L'option --config attend un fichier." >&2; exit 3; }
+                    CONF_FILE=$2; shift 2 ;;
     -q|--quick)     QUICK=1; shift ;;
     --no-wake)      NO_WAKE=1; shift ;;
     --apt-update)   APT_UPDATE=1; shift ;;
@@ -147,12 +153,14 @@ declare -a T_SEC=() T_TTL=() T_FILE=()                    # tableaux
 declare -a X_SEC=() X_TTL=() X_FILE=()                    # données brutes
 CUR="" SEC_N=0
 
-SEC_ORDER=(systeme materiel disques zfs docker gpu reseau sauvegardes cloudflare maj comptes ssh parefeu dockersec fichiers noyau journaux outils)
+SEC_ORDER=(systeme materiel disques zfs docker gpu reseau sauvegardes cloudflare exposition applis opnsense lan maj comptes ssh parefeu dockersec fichiers noyau journaux outils)
 declare -A SEC_TITLE=(
   [systeme]="Système" [materiel]="Matériel : processeur, mémoire, températures, onduleur"
   [disques]="Disques (SMART)" [zfs]="Pools ZFS" [docker]="Docker : état des conteneurs"
   [gpu]="GPU et transcodage" [reseau]="Réseau" [sauvegardes]="Sauvegardes et snapshots"
-  [cloudflare]="Exposition Internet : tunnels Cloudflare" [maj]="Mises à jour"
+  [cloudflare]="Exposition Internet : tunnels Cloudflare" [exposition]="Vu d'Internet : services publiés"
+  [applis]="Applications exposées : Nextcloud et Stash" [opnsense]="Routeur OPNsense" [lan]="Réseau local (scan)"
+  [maj]="Mises à jour"
   [comptes]="Comptes et privilèges" [ssh]="SSH" [parefeu]="Pare-feu et services réseau"
   [dockersec]="Sécurité Docker" [fichiers]="Fichiers, permissions et intégrité"
   [noyau]="Noyau et durcissement" [journaux]="Journaux et détection d'intrusion"
@@ -161,12 +169,12 @@ declare -A SEC_TITLE=(
 declare -A SEC_SHORT=(
   [systeme]="Système" [materiel]="Matériel" [disques]="Disques" [zfs]="ZFS" [docker]="Docker"
   [gpu]="GPU" [reseau]="Réseau" [sauvegardes]="Sauvegardes" [cloudflare]="Cloudflare"
-  [maj]="Mises à jour" [comptes]="Comptes" [ssh]="SSH" [parefeu]="Pare-feu"
+  [exposition]="Vu d'Internet" [applis]="Applications" [opnsense]="OPNsense" [lan]="Réseau local" [maj]="Mises à jour" [comptes]="Comptes" [ssh]="SSH" [parefeu]="Pare-feu"
   [dockersec]="Sécurité Docker" [fichiers]="Fichiers" [noyau]="Noyau" [journaux]="Journaux" [outils]="Analyses"
 )
 declare -A SEC_CAT=(
   [systeme]=sante [materiel]=sante [disques]=sante [zfs]=sante [docker]=sante [gpu]=sante
-  [reseau]=sante [sauvegardes]=sante [cloudflare]=secu [maj]=secu [comptes]=secu [ssh]=secu
+  [reseau]=sante [sauvegardes]=sante [cloudflare]=secu [exposition]=secu [applis]=secu [opnsense]=secu [lan]=secu [maj]=secu [comptes]=secu [ssh]=secu
   [parefeu]=secu [dockersec]=secu [fichiers]=secu [noyau]=secu [journaux]=secu [outils]=secu
 )
 declare -A LVL_FR=([CRIT]="Critique" [WARN]="Attention" [OK]="OK" [INFO]="Info")
@@ -262,6 +270,9 @@ check_deps() {
     have lynis    || pk+=(lynis)
     have lspci    || pk+=(pciutils)
     have vainfo   || pk+=(vainfo)
+    have curl     || pk+=(curl)
+    have nmap     || pk+=(nmap)
+    have python3  || pk+=(python3)
     if have lspci && lspci 2>/dev/null | grep -Ei 'vga|display|3d' | grep -qi intel && ! have intel_gpu_top; then
       pk+=(intel-gpu-tools)
     fi
@@ -1628,6 +1639,646 @@ check_cloudflare() {
   cf_exposure
 }
 
+# ------------------------------------------------- configuration (audit.conf) --
+declare -A CFG=()
+charger_conf() {
+  [[ -f $CONF_FILE ]] || return 0
+  local line k v
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line =~ ^[[:space:]]*([A-Z_]+)[[:space:]]*=[[:space:]]*(.*)$ ]] || continue
+    k=${BASH_REMATCH[1]}; v=${BASH_REMATCH[2]}
+    v=${v%"${v##*[![:space:]]}"}
+    [[ $v == \"*\" || $v == \'*\' ]] && v=${v:1:${#v}-2}
+    CFG[$k]=$v
+  done < "$CONF_FILE"
+}
+cfg() { printf '%s' "${CFG[$1]:-${2:-}}"; }
+oui() { [[ ${1,,} =~ ^(oui|o|yes|y|1|true|on)$ ]]; }
+
+# Requête HTTP(S) : corps dans $1, en-têtes dans $1.h ; affiche « code url_de_redirection »
+http_get() {   # http_get fichier url [options curl…]
+  local f=$1 url=$2; shift 2
+  tmo 25 curl -sS -m 20 -A "Audite-moi/$VERSION" -o "$f" -D "$f.h" -w '%{http_code} %{redirect_url}' "$@" "$url" 2>/dev/null || echo "000 "
+}
+en_plage() {   # en_plage IP CIDR… → vrai si l'IP appartient à l'une des plages
+  python3 -c 'import ipaddress,sys
+ip = ipaddress.ip_address(sys.argv[1])
+sys.exit(0 if any(ip in ipaddress.ip_network(n, strict=False) for n in sys.argv[2:]) else 1)' "$@" 2>/dev/null
+}
+DNS_MODE=doh
+doh() {   # doh nom A|AAAA → adresses publiques (DNS de Cloudflare en HTTPS : les surcharges DNS locales d'OPNsense sont ignorées)
+  local t=1; [[ $2 == AAAA ]] && t=28
+  case $DNS_MODE in
+    doh) tmo 12 curl -sS -m 10 -H 'accept: application/dns-json' "https://cloudflare-dns.com/dns-query?name=$1&type=$2" 2>/dev/null \
+           | jq -r --argjson t "$t" '.Answer[]? | select(.type == $t) | .data' 2>/dev/null ;;
+    dig) tmo 12 dig +short +time=5 "@1.1.1.1" "$1" "$2" 2>/dev/null | grep -E '^[0-9a-fA-F.:]+$' ;;
+    *)   [[ $2 == A ]] && getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | sort -u ;;
+  esac
+}
+derniere_version() {   # derniere_version dépôt-github [majeure] → dernière version publiée (de la majeure)
+  tmo 20 curl -sS -m 15 "https://api.github.com/repos/$1/releases?per_page=60" 2>/dev/null \
+    | jq -r --arg m "${2:-}" '[.[]? | select(.prerelease == false and .draft == false) | .tag_name | ltrimstr("v")
+        | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) | select($m == "" or startswith($m + "."))]
+        | sort_by(split(".") | map(tonumber)) | last // empty' 2>/dev/null
+}
+version_lt() { [[ $1 != "$2" && $(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1) == "$1" ]]; }
+
+CF_V4=(173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20
+       197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22)
+NC_PUBLIC=0 PUB_IP=""
+
+check_exposition() {
+  section exposition
+  if ! oui "$(cfg EXTERNE oui)"; then info "Test depuis Internet désactivé (EXTERNE=non dans audit.conf)"; return; fi
+  if ! have curl; then info "curl absent : test depuis Internet impossible" "" "\`sudo apt install curl\`"; return; fi
+  local -a hotes=()
+  local r h
+  for r in "${INGRESS[@]}"; do h=${r%%"$US"*}; [[ $h == "*" || $h == \** ]] || hotes+=("$h"); done
+  for h in $(cfg DOMAINES_EXTRA); do hotes+=("$h"); done
+  mapfile -t hotes < <(printf '%s\n' "${hotes[@]}" | grep . | sort -u)
+  if ((${#hotes[@]} == 0)); then
+    info "Aucun nom d'hôte public à tester" "Les routes des tunnels ne sont pas visibles et DOMAINES_EXTRA est vide." "Ajoutez vos noms d'hôte dans /etc/audite-moi/audit.conf : \`DOMAINES_EXTRA=\"nextcloud.exemple.fr stash.exemple.fr\"\`"
+    return
+  fi
+  note "Test depuis Internet de ${#hotes[@]} nom(s) d'hôte…"
+  local m
+  for m in doh dig local; do
+    [[ $m == dig ]] && ! have dig && continue
+    DNS_MODE=$m; [[ -n $(doh cloudflare.com A) ]] && break
+    DNS_MODE=""
+  done
+  if [[ -z $DNS_MODE ]]; then
+    info "Test depuis Internet impossible" "Le serveur n'arrive pas à interroger le DNS public : pas d'accès à Internet, ou sorties filtrées." "Vérifiez que le NAS peut joindre https://cloudflare-dns.com (port 443)"
+    return
+  fi
+  [[ $DNS_MODE == local ]] && note "DNS public injoignable en HTTPS : résolution par le DNS local (les surcharges d'OPNsense peuvent fausser le résultat)."
+  local live; live=$(tmo 10 curl -sS -m 8 https://www.cloudflare.com/ips-v4 2>/dev/null | grep -E '^[0-9.]+/[0-9]+$')
+  [[ -n $live ]] && mapfile -t CF_V4 <<< "$live"
+  PUB_IP=$(tmo 10 curl -sS -m 8 https://1.1.1.1/cdn-cgi/trace 2>/dev/null | awk -F= '$1 == "ip" {print $2}')
+  [[ -n $PUB_IP ]] && info "Adresse IP publique de la maison : $PUB_IP" "Telle que vue depuis Internet (via Cloudflare)."
+
+  local -a rows=()
+  for h in "${hotes[@]}"; do expo_hote "$h"; done
+  tbl "Ce qu'un visiteur voit depuis Internet" < <(printf "Nom d'hôte\tAdresses publiques\tProtection\tApplication\tAuthentification\tHSTS\n"; printf '%s\n' "${rows[@]}")
+
+  # IP personnelle publiée dans le DNS (conteneur de DNS dynamique, enregistrements non proxifiés)
+  local -a noms=()
+  if ((DOCKER_OK)); then
+    mapfile -t noms < <(jq -r '.[] | select((.Config.Image // "") | test("ddns|ddclient"; "i")) | (.Config.Env // []) as $e
+      | ([$e[] | select(startswith("ZONE=") or startswith("DOMAINS=") or startswith("DOMAIN="))] | map(split("=")[1]) | join(",")) as $z
+      | ([$e[] | select(startswith("SUBDOMAIN="))] | map(split("=")[1]) | first // "") as $s
+      | ($z | split(",")[] | select(. != "") | if $s != "" then $s + "." + . else . end)' "$INSPECT" 2>/dev/null | sort -u)
+  fi
+  local n ip
+  for n in "${noms[@]}"; do
+    for ip in $(doh "$n" A); do
+      if [[ -n $PUB_IP && $ip == "$PUB_IP" ]]; then
+        warn "Votre IP personnelle est publiée dans le DNS ($n → $ip)" "Ce nom n'est pas protégé par le proxy Cloudflare (nuage gris) : n'importe qui peut trouver l'adresse de votre box et y chercher des ports ouverts, sans passer par Cloudflare." \
+          "Si ce nom ne sert qu'à vous (VPN…), gardez-le mais vérifiez qu'aucun port inutile n'est redirigé sur OPNsense ; sinon, activez le proxy (nuage orange, \`PROXIED=true\` dans cloudflare-ddns) ou supprimez l'enregistrement"
+      fi
+    done
+  done
+}
+
+expo_hote() {   # appelée par check_exposition (alimente « rows »)
+  local h=$1 ips ips6 ip cf=0 hors=() a
+  ips=$(doh "$h" A); ips6=$(doh "$h" AAAA)
+  if [[ -z $ips$ips6 ]]; then
+    warn "$h ne résout pas dans le DNS public" "Le nom n'existe pas (ou plus) côté Internet." "Vérifiez l'enregistrement DNS dans Cloudflare"
+    rows+=("$h$TAB@WARN aucune$TAB$TAB$TAB$TAB"); return
+  fi
+  for ip in $ips; do
+    if en_plage "$ip" "${CF_V4[@]}"; then cf=1
+    else hors+=("$ip"); fi
+  done
+  local direct=""
+  if ((${#hors[@]})); then
+    if [[ -n $PUB_IP && " ${hors[*]} " == *" $PUB_IP "* ]]; then
+      crit "$h pointe directement sur votre box ($PUB_IP)" "Ce nom contourne Cloudflare : ni tunnel, ni Access, ni WAF. Les visiteurs arrivent sur les ports redirigés par OPNsense." \
+        "Dans Cloudflare > DNS, activez le proxy (nuage orange) pour ce nom ou remplacez-le par la route publique du tunnel"
+      direct=1
+    else
+      info "$h résout hors de Cloudflare : ${hors[*]}" "Service hébergé ailleurs, ou enregistrement non proxifié."
+    fi
+  fi
+  ((cf)) || { rows+=("$h$TAB$(tr '\n' ' ' <<< "$ips")$TAB${direct:+@CRIT direct}$TAB$TAB$TAB"); return; }
+  a=$(head -n 1 <<< "$ips")
+  local f="$WORK/web_${h//[^A-Za-z0-9]/_}" res code loc
+  res=$(http_get "$f" "https://$h/" --resolve "$h:443:$a")
+  code=${res%% *}; loc=${res#* }
+  if [[ $code == 000 ]]; then
+    warn "$h injoignable depuis Internet" "Pas de réponse HTTPS via Cloudflare." "Vérifiez le tunnel et la route publique dans Cloudflare Zero Trust"
+    rows+=("$h$TAB$a$TAB@WARN injoignable$TAB$TAB$TAB"); return
+  fi
+  local hsts="non"; grep -qi '^strict-transport-security:' "$f.h" && hsts="oui"
+  if [[ $loc == *cloudflareaccess.com* || $loc == */cdn-cgi/access/* ]]; then
+    ok "$h protégé par Cloudflare Access" "Les visiteurs doivent s'authentifier auprès de Cloudflare avant d'atteindre l'application."
+    rows+=("$h$TAB$a$TAB@OK Cloudflare Access$TAB(masquée)$TAB@OK avant l'application$TAB$hsts"); return
+  fi
+  local appli="inconnue" auth="?"
+  if grep -qi '^cf-mitigated: *challenge' "$f.h"; then
+    info "$h : Cloudflare présente un défi anti-robot" "Le test automatique ne voit pas l'application (Bot Fight Mode ou règle WAF) : les contrôles de cette application sont incomplets. Un vrai attaquant peut parfois contourner ce défi."
+    rows+=("$h$TAB$a$TAB@OK défi Cloudflare$TAB?$TAB?$TAB$hsts"); return
+  fi
+  # Nextcloud ?
+  local st; st=$(tmo 20 curl -sS -m 15 --resolve "$h:443:$a" "https://$h/status.php" 2>/dev/null)
+  if jq -e '.installed != null and (.versionstring // .version) != null' >/dev/null 2>&1 <<< "$st"; then
+    local v; v=$(jq -r '.versionstring // .version' <<< "$st")
+    appli="Nextcloud $v"; auth="@OK page de connexion"; NC_PUBLIC=1
+    expo_nextcloud "$h" "$a" "$v"
+  else
+    # Stash ? (son API GraphQL répond à cette requête si aucun identifiant n'est défini)
+    local g gc gb
+    g=$(tmo 20 curl -sS -m 15 --resolve "$h:443:$a" -H 'Content-Type: application/json' -X POST -d '{"query":"{ version { version } }"}' -w '\n%{http_code}' "https://$h/graphql" 2>/dev/null)
+    gc=${g##*"$NL"} gb=${g%"$NL"*}
+    if jq -e '.data.version.version' >/dev/null 2>&1 <<< "$gb"; then
+      appli="Stash $(jq -r '.data.version.version' <<< "$gb")"; auth="@CRIT aucune"
+      crit "Stash est accessible sans mot de passe depuis Internet ($h)" "N'importe qui peut parcourir, télécharger ou supprimer votre bibliothèque : l'API répond sans authentification." \
+        "Immédiatement : Stash > Paramètres > Sécurité, définissez un identifiant et un mot de passe ; puis protégez $h par Cloudflare Access (Zero Trust > Access > Applications)"
+    elif [[ $h == *stash* || $loc == */login?returnURL=* ]] || grep -qi '<title>Stash' "$f" 2>/dev/null; then
+      appli="Stash"
+      if [[ $gc == 401 || $gc == 403 || $code == 30* ]]; then
+        auth="@OK identifiant exigé"; ok "Stash exige un identifiant ($h)" "L'API refuse les requêtes anonymes (HTTP $gc)."
+      else
+        auth="@INFO indéterminée"; info "Authentification de Stash indéterminée ($h)" "Réponse de l'API : HTTP $gc."
+      fi
+    else
+      case $code in
+        401|403) auth="@OK refus anonyme (HTTP $code)" ;;
+        30*) auth="@INFO redirige vers ${loc:0:60}" ;;
+        200) auth="@INFO page publique"
+             info "$h : page accessible sans Cloudflare Access" "Vérifiez que l'application exige une connexion forte, ou ajoutez Cloudflare Access." ;;
+        *) auth="HTTP $code" ;;
+      esac
+    fi
+  fi
+  # Fichiers qui ne devraient jamais être publics
+  local p body c
+  for p in /.git/HEAD /.env /.git/config /server-status /phpinfo.php /backup.zip /.DS_Store; do
+    c=$(http_get "$f.p" "https://$h$p" --resolve "$h:443:$a"); c=${c%% *}
+    [[ $c == 200 ]] || continue
+    body=$(head -c 300 "$f.p" 2>/dev/null)
+    if [[ ($p == /.git/HEAD && $body == ref:*) || ($p == /.git/config && $body == *"[core]"*) || ($p == /.env && $body =~ ^[A-Z_]+= ) || ($p == /server-status && $body == *"Apache Server Status"*) || ($p == /phpinfo.php && $body == *"phpinfo"*) || ($p == /backup.zip && $body == PK*) ]]; then
+      crit "$h expose un fichier sensible : $p" "Ce fichier est téléchargeable par n'importe qui et peut contenir des mots de passe ou le code source." "Bloquez ce chemin dans l'application ou par une règle WAF Cloudflare, et changez les secrets qu'il contient"
+    fi
+  done
+  [[ $hsts == non ]] && info "$h : en-tête HSTS absent" "Sans HSTS, un navigateur peut être piégé sur une connexion non chiffrée (Wi-Fi public)." "Cloudflare > SSL/TLS > Edge Certificates > HTTP Strict Transport Security (HSTS)"
+  local c80; c80=$(http_get "$f.80" "http://$h/" --resolve "$h:80:$a"); c80=${c80%% *}
+  [[ $c80 == 200 ]] && info "$h répond en HTTP non chiffré" "La page est servie sans redirection vers HTTPS." "Cloudflare > SSL/TLS > Edge Certificates > Always Use HTTPS"
+  if tmo 15 curl -sS -m 10 -o /dev/null --tlsv1.0 --tls-max 1.1 --ciphers 'DEFAULT:@SECLEVEL=0' --resolve "$h:443:$a" "https://$h/" 2>/dev/null; then
+    info "$h accepte TLS 1.0/1.1 (protocoles obsolètes)" "" "Cloudflare > SSL/TLS > Edge Certificates > Minimum TLS Version : TLS 1.2"
+  fi
+  rows+=("$h$TAB$(tr '\n' ' ' <<< "$ips")$TAB@INFO Cloudflare, sans Access$TAB$appli$TAB$auth$TAB$hsts")
+}
+
+expo_nextcloud() {   # expo_nextcloud hôte ip version
+  local h=$1 a=$2 v=$3 f="$WORK/nc_${1//[^A-Za-z0-9]/_}" c
+  c=$(http_get "$f" "https://$h/data/.ocdata" --resolve "$h:443:$a"); c=${c%% *}
+  [[ $c == 200 ]] && (( $(stat -c %s "$f" 2>/dev/null || echo 0) < 64 )) && ! grep -qi '<html' "$f" && crit "Nextcloud ($h) : dossier de données accessible depuis Internet" "Le fichier /data/.ocdata est téléchargeable : tous les fichiers des utilisateurs le sont probablement aussi." \
+    "Déplacez le dossier de données hors de la racine web ou bloquez /data (configuration du serveur web)"
+  local maj=${v%%.*}
+  [[ $maj =~ ^[0-9]+$ ]] || { info "Version de Nextcloud ($h) : ${v:-inconnue}"; return; }
+  local latest_all latest_maj
+  latest_all=$(derniere_version nextcloud/server); latest_maj=$(derniere_version nextcloud/server "$maj")
+  if [[ -z $latest_all ]]; then
+    info "Nextcloud $v ($h)" "Impossible de joindre GitHub pour comparer avec la dernière version."
+  elif ((maj < ${latest_all%%.*} - 2)); then
+    crit "Nextcloud $v n'est plus maintenu ($h)" "Dernière version : $latest_all. Votre version majeure ne reçoit plus de correctifs de sécurité." \
+      "Mettez à jour (Nextcloud AIO : interface d'administration AIO → « Arrêter les conteneurs » puis « Démarrer et mettre à jour »)"
+  elif [[ -n $latest_maj ]] && version_lt "$v" "$latest_maj"; then
+    warn "Nextcloud $v : correctifs disponibles ($latest_maj) ($h)" "Les versions correctives contiennent souvent des correctifs de sécurité. Dernière version tous canaux : $latest_all." \
+      "Mettez à jour (Nextcloud AIO : interface d'administration AIO → « Arrêter les conteneurs » puis « Démarrer et mettre à jour »)"
+  else
+    ok "Nextcloud $v à jour ($h)" "Dernière version : $latest_all."
+  fi
+  info "Scan de sécurité officiel de Nextcloud" "Nextcloud propose un scanner externe gratuit qui teste votre instance depuis Internet." "Ouvrez https://scan.nextcloud.com et saisissez https://$h"
+}
+
+# ------------------------------------------------ applications exposées --
+occ_nc() { tmo 90 docker exec -u www-data "$NC_C" php /var/www/html/occ --no-interaction "$@" 2>/dev/null; }
+occ_lsio() { tmo 90 docker exec "$NC_C" occ --no-interaction "$@" 2>/dev/null; }
+OCC=occ_nc NC_C=""
+
+check_applis() {
+  section applis
+  if ((!DOCKER_OK)); then info "Docker absent ou inaccessible : section ignorée"; return; fi
+  local nc stc found=0
+  nc=$(jq -r '.[] | select(.State.Status == "running") | select((.Config.Image // "") | test("aio-nextcloud|(^|/)nextcloud:|^nextcloud$|linuxserver/nextcloud")) | .Name | ltrimstr("/")' "$INSPECT" | head -n 1)
+  stc=$(jq -r '.[] | select(.State.Status == "running") | select((.Config.Image // "") | test("stashapp/stash")) | .Name | ltrimstr("/")' "$INSPECT" | head -n 1)
+  [[ -n $nc ]] && { found=1; audit_nextcloud "$nc"; }
+  [[ -n $stc ]] && { found=1; audit_stash "$stc"; }
+  ((found)) || info "Ni Nextcloud ni Stash détecté dans les conteneurs"
+}
+
+audit_nextcloud() {
+  NC_C=$1
+  local stj
+  stj=$(occ_nc status --output=json)
+  if ! jq -e .installed >/dev/null 2>&1 <<< "$stj"; then OCC=occ_lsio; stj=$(occ_lsio status --output=json); fi
+  if ! jq -e .installed >/dev/null 2>&1 <<< "$stj"; then
+    info "Nextcloud ($NC_C) : commande occ inaccessible" "Impossible d'interroger Nextcloud de l'intérieur." "Vérifiez : \`docker exec -u www-data $NC_C php occ status\`"
+    return
+  fi
+  local exposed=0 k
+  ((NC_PUBLIC)) && exposed=1
+  [[ -n ${REACHABLE[$NC_C]:-} ]] && exposed=1
+  for k in "${!EXPOSED[@]}"; do [[ $k == "$NC_C" || $k == *nextcloud* ]] && exposed=1; done
+  local ver; ver=$(jq -r '.versionstring // .version' <<< "$stj")
+  [[ $(jq -r '.maintenance' <<< "$stj") == true ]] && warn "Nextcloud en mode maintenance" "Les utilisateurs ne peuvent pas se connecter." "\`docker exec -u www-data $NC_C php occ maintenance:mode --off\`"
+  info "Nextcloud $ver (conteneur $NC_C)$( ((exposed)) && echo ' — exposé sur Internet')"
+
+  # Double authentification
+  local enforce admins u st2 no2fa=() t
+  enforce=$($OCC twofactorauth:enforce)
+  admins=$($OCC group:list --output=json | jq -r '.admin[]?' 2>/dev/null)
+  for u in $admins; do
+    st2=$($OCC twofactorauth:state "$u")
+    [[ $st2 == *"is enabled"* ]] || no2fa+=("$u")
+  done
+  local lvl=WARN; ((exposed)) && lvl=CRIT
+  if [[ $enforce == *"is enforced"* && $enforce != *"not enforced"* ]]; then
+    ok "Nextcloud : double authentification obligatoire" "$enforce"
+  elif ((${#no2fa[@]})); then
+    add "$lvl" "Nextcloud : compte(s) administrateur sans double authentification : $(join_list ', ' "${no2fa[@]}")" \
+      "Un mot de passe administrateur deviné ou volé (fuite, hameçonnage) donne accès à tous les fichiers de tous les utilisateurs. Administrateurs : $(tr '\n' ' ' <<< "$admins")— gardez-en le moins possible et utilisez un compte ordinaire au quotidien." \
+      "Activez l'application « Two-Factor TOTP Provider » (\`docker exec -u www-data $NC_C php occ app:enable twofactor_totp\`), configurez-la pour chaque admin (Paramètres personnels > Sécurité), puis imposez-la : Paramètres d'administration > Sécurité > « Imposer l'authentification à deux facteurs »"
+  elif [[ -n $admins ]]; then
+    ok "Nextcloud : administrateurs protégés par double authentification" "$(tr '\n' ' ' <<< "$admins")"
+  fi
+
+  # Liens de partage publics
+  local lp ep
+  lp=$($OCC config:app:get core shareapi_enforce_links_password); ep=$($OCC config:app:get core shareapi_enforce_expire_date)
+  local sh sherr=""; sh=$(nc_partages)
+  if [[ $sh == ERR"$US"* ]]; then sherr=${sh#ERR"$US"}; sh=""; fi
+  if [[ -n $sh ]]; then
+    local ntot npw nexp nw liste
+    ntot=$(nlines "$sh"); npw=$(awk -F'\t' '$2 == 1' <<< "$sh" | grep -c .); nexp=$(awk -F'\t' '$3 == 1' <<< "$sh" | grep -c .)
+    nw=$(awk -F'\t' '($4 % 32) >= 4' <<< "$sh" | grep -c .)
+    liste=$(awk -F'\t' '$2 == 1 {printf "%s : %s%s\n", $6, $5, (($4 % 32) >= 4 ? " (dépôt/écriture autorisés)" : "")}' <<< "$sh" | head -n 15)
+    if ((npw > 0)); then
+      add "$( ((exposed)) && echo WARN || echo INFO)" "Nextcloud : $npw lien(s) de partage public(s) sans mot de passe" \
+        "Quiconque obtient le lien (courriel transféré, historique, capture d'écran) accède aux fichiers. Liens sans date d'expiration : $nexp sur $ntot ; liens permettant le dépôt ou la modification : $nw.$NL$liste" \
+        "Revoyez ces partages (Fichiers > Partages) ; imposez mot de passe et expiration : Paramètres d'administration > Partage > « Imposer la protection par mot de passe » et « Imposer une date d'expiration »"
+    else
+      ok "Nextcloud : tous les liens publics ($ntot) sont protégés par mot de passe" "Liens sans date d'expiration : $nexp."
+    fi
+    raw "Nextcloud : liens de partage publics (type, sans mot de passe, sans expiration, droits, chemin, propriétaire)" "$sh"
+  elif [[ -n $sherr ]]; then
+    info "Nextcloud : liens de partage non vérifiés" "$sherr"
+  else
+    ok "Nextcloud : aucun lien de partage public"
+  fi
+  if [[ $lp != yes ]]; then
+    info "Nextcloud : mot de passe non imposé sur les nouveaux liens publics" "" "Paramètres d'administration > Partage > « Imposer la protection par mot de passe »"
+  fi
+  [[ $ep != yes ]] && info "Nextcloud : pas d'expiration imposée sur les liens publics" "" "Paramètres d'administration > Partage > « Imposer une date d'expiration »"
+
+  # Avertissements de sécurité et de configuration de Nextcloud lui-même
+  local sc; sc=$($OCC setupchecks --output=json)
+  if jq -e 'type == "object"' >/dev/null 2>&1 <<< "$sc"; then
+    local err wrn
+    err=$(jq -r '[to_entries[] | .key as $c | .value | to_entries[] | select(.value.severity == "error") | "\($c) — \(.value.name) : \(.value.description // "" | gsub("<[^>]*>"; "") | gsub("\\s+"; " ") | .[0:220])"] | .[]' <<< "$sc" 2>/dev/null)
+    wrn=$(jq -r '[to_entries[] | .key as $c | .value | to_entries[] | select(.value.severity == "warning") | "\($c) — \(.value.name) : \(.value.description // "" | gsub("<[^>]*>"; "") | gsub("\\s+"; " ") | .[0:220])"] | .[]' <<< "$sc" 2>/dev/null)
+    [[ -n $err ]] && warn "Nextcloud signale des erreurs de configuration" "$err" "Détail : Paramètres d'administration > Vue d'ensemble"
+    [[ -n $wrn ]] && info "Nextcloud : avertissements de configuration ($(nlines "$wrn"))" "$wrn" "Détail : Paramètres d'administration > Vue d'ensemble"
+    [[ -z $err$wrn ]] && ok "Nextcloud : aucun avertissement dans les vérifications d'administration"
+  fi
+
+  # Protection contre le brute-force : Nextcloud voit-il les vraies adresses ?
+  [[ $($OCC config:system:get auth.bruteforce.protection.enabled) == false ]] && warn "Nextcloud : protection contre le brute-force désactivée" "" "Retirez \`'auth.bruteforce.protection.enabled' => false\` de config.php"
+  [[ $($OCC config:system:get debug) == true ]] && warn "Nextcloud : mode debug activé" "Le mode debug affiche des détails internes aux visiteurs et ralentit Nextcloud." "\`docker exec -u www-data $NC_C php occ config:system:set debug --value=false --type=boolean\`"
+  local logf dd; logf=$($OCC config:system:get logfile); dd=$($OCC config:system:get datadirectory)
+  [[ -n $logf ]] || logf="$dd/nextcloud.log"
+  local addrs; addrs=$(tmo 30 docker exec "$NC_C" tail -n 4000 "$logf" 2>/dev/null | jq -r '.remoteAddr // empty' 2>/dev/null | grep -vE '^(--|)$')
+  if (( $(nlines "$addrs") >= 20 )); then
+    local npub=0 a
+    while read -r a; do is_private_ip "$a" || npub=$((npub + 1)); done < <(sort -u <<< "$addrs")
+    if ((npub == 0 && exposed)); then
+      warn "Nextcloud ne voit pas les vraies adresses IP des visiteurs" "Toutes les requêtes semblent venir du réseau local (le tunnel) : la protection anti-brute-force ne peut ni identifier ni ralentir un attaquant, et risque de bloquer tout le monde à la fois." \
+        "Déclarez le proxy de confiance : \`docker exec -u www-data $NC_C php occ config:system:set trusted_proxies 0 --value=<IP du proxy/tunnel>\` et \`... config:system:set forwarded_for_headers 0 --value=HTTP_X_FORWARDED_FOR\` (avec Nextcloud AIO, voir la documentation « reverse proxy » d'AIO)"
+    elif ((npub > 0)); then
+      ok "Nextcloud voit les vraies adresses IP des visiteurs" "$npub adresse(s) publique(s) distincte(s) dans le journal récent."
+    fi
+  fi
+  local upd; upd=$($OCC app:update --showonly | grep -i 'new version' | head -n 20)
+  [[ -n $upd ]] && info "Nextcloud : $(nlines "$upd") application(s) à mettre à jour" "$upd" "Paramètres d'administration > Applications > « Tout mettre à jour »"
+}
+
+nc_partages() {   # liens publics : type, sans_mdp(1/0), sans_expiration(1/0), droits, chemin, propriétaire
+  local dbtype dbname dbhost dbuser dbpass pre hostp port dbc q
+  dbtype=$($OCC config:system:get dbtype); dbname=$($OCC config:system:get dbname); dbhost=$($OCC config:system:get dbhost)
+  dbuser=$($OCC config:system:get dbuser); dbpass=$($OCC config:system:get dbpassword); pre=$($OCC config:system:get dbtableprefix)
+  pre=${pre:-oc_}
+  [[ $pre =~ ^[A-Za-z0-9_]+$ ]] || { printf 'ERR%s%s' "$US" "Préfixe de tables inattendu."; return; }
+  hostp=${dbhost%%:*}; port=""; [[ $dbhost == *:* ]] && port=${dbhost##*:}
+  if [[ -z $hostp || $hostp == localhost || $hostp == 127.0.0.1 ]]; then dbc=$NC_C
+  else dbc=$(jq -r --arg h "$hostp" '.[] | select(.State.Status == "running") | select(((.Name | ltrimstr("/")) == $h) or ([(.NetworkSettings.Networks // {})[] | (.Aliases // [])[], (.DNSNames // [])[]] | index($h))) | .Name | ltrimstr("/")' "$INSPECT" | head -n 1); fi
+  [[ -n $dbc ]] || { printf 'ERR%s%s' "$US" "Conteneur de la base de données introuvable ($dbhost)."; return; }
+  q="SELECT share_type, CASE WHEN password IS NULL OR password = '' THEN 1 ELSE 0 END, CASE WHEN expiration IS NULL THEN 1 ELSE 0 END, permissions, file_target, uid_owner FROM ${pre}share WHERE share_type IN (3,4)"
+  local out rc
+  case $dbtype in
+    pgsql)
+      out=$(printf '%s\n' "$dbpass" | tmo 60 docker exec -i "$dbc" sh -c 'read -r PGPASSWORD; export PGPASSWORD; psql -h 127.0.0.1 ${1:+-p "$1"} -U "$2" -d "$3" -tA -F "	" -c "$4"' sh "$port" "$dbuser" "$dbname" "$q" 2>&1); rc=$? ;;
+    mysql)
+      out=$(printf '%s\n' "$dbpass" | tmo 60 docker exec -i "$dbc" sh -c 'read -r MYSQL_PWD; export MYSQL_PWD; c=mysql; command -v mariadb >/dev/null && c=mariadb; $c -h 127.0.0.1 ${1:+-P "$1"} -u "$2" -N -B -e "$4" "$3"' sh "$port" "$dbuser" "$dbname" "$q" 2>&1); rc=$? ;;
+    *) printf 'ERR%s%s' "$US" "Base $dbtype non prise en charge."; return ;;
+  esac
+  if ((rc != 0)); then printf 'ERR%s%s' "$US" "Requête impossible : $(head -n 1 <<< "$out" | cut -c1-160)"; return; fi
+  grep -E '^[34]	' <<< "$out"
+}
+
+audit_stash() {
+  local c=$1 path y
+  path=$(jq -r --arg n "$c" '.[] | select((.Name | ltrimstr("/")) == $n) | (.Config.Env // [])[] | select(startswith("STASH_CONFIG_FILE=")) | split("=")[1]' "$INSPECT" | head -n 1)
+  for p in "$path" /root/.stash/config.yml /config/config.yml /home/stash/.stash/config.yml; do
+    [[ -n $p ]] || continue
+    y=$(tmo 20 docker exec "$c" cat "$p" 2>/dev/null) && [[ -n $y ]] && { path=$p; break; }
+  done
+  if [[ -z $y ]]; then info "Stash ($c) : configuration illisible" "Impossible de lire config.yml dans le conteneur."; return; fi
+  local user dang trip exposed=0
+  [[ -n ${EXPOSED[$c]:-}${REACHABLE[$c]:-} ]] && exposed=1
+  user=$(awk -F': *' '$1 == "username" {print $2}' <<< "$y" | tr -d "\"'")
+  dang=$(awk -F': *' '$1 == "dangerous_allow_public_without_auth" {print $2}' <<< "$y")
+  trip=$(awk -F': *' '$1 == "security_tripwire_accessed_from_public_internet" {print $2}' <<< "$y" | tr -d "\"'")
+  if [[ -z $user ]]; then
+    add "$( ((exposed)) && echo CRIT || echo WARN)" "Stash ($c) n'a ni identifiant ni mot de passe" \
+      "Sans identifiants, toute personne qui atteint Stash (via le tunnel$( ((exposed)) && echo " : ${EXPOSED[$c]:-}") ou le réseau local) a un accès complet. Derrière cloudflared, les visites semblent venir du réseau local : la protection intégrée de Stash contre l'accès depuis Internet ne se déclenche pas." \
+      "Stash > Paramètres > Sécurité : définissez identifiant et mot de passe ; ajoutez Cloudflare Access devant le nom d'hôte"
+  else
+    ok "Stash ($c) protégé par identifiant (« $user »)"
+  fi
+  [[ $dang == true ]] && crit "Stash : accès public sans authentification explicitement autorisé" "dangerous_allow_public_without_auth: true dans $path" "Mettez cette option à false et définissez des identifiants"
+  [[ -n $trip ]] && warn "Stash a détecté un accès depuis Internet sans authentification" "security_tripwire_accessed_from_public_internet : $trip" "Définissez des identifiants, puis retirez cette ligne de $path et redémarrez Stash"
+}
+
+# ------------------------------------------------------------- OPNsense --
+opn_py() {   # analyse de config.xml : lignes F (constat), N (réseau), T (table) ; n'affiche jamais de secret
+  cat <<'PY'
+import sys, ipaddress, xml.etree.ElementTree as ET
+US = "\x1f"
+root = ET.parse(sys.argv[1]).getroot()
+nas_ips = set(sys.argv[2].split())
+def F(lvl, ttl, msg="", fix=""): print(US.join(["F", lvl, ttl, msg.replace("\n", "\\n"), fix]))
+def T(tab, *cells): print(US.join(["T", tab, "\t".join(str(c) for c in cells)]))
+def tx(e, p, d=""):
+    x = e.find(p) if e is not None else None
+    return (x.text or "").strip() if x is not None and x.text else d
+def present(e, p): return e is not None and e.find(p) is not None
+
+# Interfaces et réseaux
+names = {}
+T("Interfaces du routeur", "Interface", "Nom interne", "Adresse", "Active")
+itfs = root.find("interfaces")
+for i in (list(itfs) if itfs is not None else []):
+    descr = tx(i, "descr") or i.tag.upper()
+    names[i.tag] = descr
+    ip, sn = tx(i, "ipaddr"), tx(i, "subnet")
+    T("Interfaces du routeur", descr, i.tag, f"{ip}/{sn}" if ip and sn else (ip or "-"), "oui" if present(i, "enable") else "non")
+    if ip and sn and ip[0].isdigit() and i.tag != "wan":
+        try:
+            net = ipaddress.ip_interface(f"{ip}/{sn}").network
+            if net.is_private: print(US.join(["N", str(net)]))
+        except ValueError: pass
+def nom(itf): return ", ".join(names.get(x, x) for x in itf.split(",")) if itf else "?"
+
+# Redirections de ports (NAT)
+RISQUE = {"22": "SSH", "23": "Telnet", "3389": "RDP", "445": "SMB", "139": "SMB", "5900": "VNC", "21": "FTP", "3306": "MySQL", "5432": "PostgreSQL",
+          "6379": "Redis", "2375": "API Docker", "9000": "Portainer", "9090": "Cockpit", "8765": "Audite-moi", "80": "HTTP", "8080": "HTTP"}
+fw = []
+T("Redirections de ports (NAT)", "Interface", "Protocole", "Port externe", "Destination interne", "Source autorisée", "Description", "État")
+for n in root.findall("./nat/rule"):
+    off = present(n, "disabled")
+    itf, proto = tx(n, "interface"), tx(n, "protocol", "tcp")
+    dport = tx(n, "destination/port", "*")
+    tgt, lport = tx(n, "target"), tx(n, "local-port", dport)
+    src = "toutes" if present(n, "source/any") else (tx(n, "source/address") or tx(n, "source/network") or "?")
+    descr = tx(n, "descr")
+    T("Redirections de ports (NAT)", nom(itf), proto, dport, f"{tgt}:{lport}", src, descr, "désactivée" if off else "@WARN active")
+    if off: continue
+    fw.append(dport)
+    risk = RISQUE.get(lport) or RISQUE.get(dport)
+    cible = " (ce NAS)" if tgt in nas_ips else ""
+    if src == "toutes":
+        lvl = "CRIT" if risk and risk not in ("HTTP",) else "WARN"
+        F(lvl, f"Port {dport}/{proto} ouvert sur Internet → {tgt}:{lport}{cible}" + (f" ({risk})" if risk else ""),
+          f"Redirection active sur {nom(itf)}{(' — ' + descr) if descr else ''}. Ce service est directement attaquable depuis Internet, sans Cloudflare.",
+          "Si l'accès distant passe par les tunnels Cloudflare ou un VPN, supprimez cette redirection (Pare-feu > NAT > Redirection de port) ; sinon limitez la source autorisée")
+    else:
+        F("INFO", f"Port {dport}/{proto} redirigé vers {tgt}:{lport}{cible}, source limitée à {src}", descr)
+nat_out = [x for x in root.findall("./nat/onetoone") if not present(x, "disabled")]
+if nat_out:
+    F("WARN", f"{len(nat_out)} règle(s) NAT 1:1", "Une adresse publique est entièrement associée à une machine interne.", "Vérifiez qu'elles sont toujours nécessaires (Pare-feu > NAT > One-to-One)")
+if not fw:
+    F("OK", "Aucune redirection de port vers le réseau local", "Rien n'est ouvert directement depuis Internet : l'accès distant passe uniquement par les tunnels.")
+
+# Règles d'entrée côté WAN (règles classiques et nouvelles règles)
+wan_pass = []
+for r in root.findall("./filter/rule"):
+    if present(r, "disabled") or tx(r, "type", "pass") != "pass" or present(r, "associated-rule-id"): continue
+    itf = tx(r, "interface")
+    if "wan" not in itf.split(","): continue
+    src = "toutes" if present(r, "source/any") else (tx(r, "source/address") or tx(r, "source/network") or "?")
+    dst = "toutes" if present(r, "destination/any") else (tx(r, "destination/network") or tx(r, "destination/address") or "?")
+    wan_pass.append((tx(r, "protocol", "any"), src, dst, tx(r, "destination/port", "*"), tx(r, "descr")))
+mvc = root.find("./OPNsense/Firewall/Filter/rules")
+for r in (list(mvc) if mvc is not None else []):
+    if tx(r, "enabled", "1") != "1" or tx(r, "action", "pass") != "pass": continue
+    if "wan" not in tx(r, "interface").split(","): continue
+    wan_pass.append((tx(r, "protocol", "any"), tx(r, "source_net", "any"), tx(r, "destination_net", "any"), tx(r, "destination_port", "*"), tx(r, "description")))
+VPN = {"51820": "WireGuard", "1194": "OpenVPN", "500": "IPsec", "4500": "IPsec"}
+admin_ports = {tx(root, "./system/webgui/port") or ("80" if tx(root, "./system/webgui/protocol") == "http" else "443"), "22", "80", "443"}
+for proto, src, dst, port, descr in wan_pass:
+    ouvert = src in ("toutes", "any")
+    self_dst = dst in ("(self)", "wanip", "wan", "toutes", "any")
+    if ouvert and self_dst and (port in admin_ports or port == "*"):
+        F("CRIT", f"Le routeur lui-même est accessible depuis Internet (port {port})", f"Règle WAN : {proto} de {src} vers {dst}:{port} {descr}".strip(),
+          "Supprimez cette règle : l'administration d'OPNsense ne doit être accessible que depuis le réseau local ou un VPN")
+    elif port in VPN:
+        F("INFO", f"Port VPN ouvert sur le WAN : {proto} {port} ({VPN[port]})", f"Source : {src}. {descr}".strip())
+    else:
+        F("WARN" if ouvert else "INFO", f"Règle WAN autorisant l'entrée : {proto} vers {dst}:{port}", f"Source : {src}. {descr}".strip(),
+          "Vérifiez qu'elle est nécessaire (Pare-feu > Règles > WAN)")
+
+# Interface d'administration, SSH, comptes
+wg = root.find("./system/webgui")
+if tx(wg, "protocol", "https") == "http":
+    F("WARN", "Interface d'administration d'OPNsense en HTTP", "Le mot de passe administrateur circule en clair sur le réseau.", "Système > Paramètres > Administration : protocole HTTPS")
+if present(root, "./system/ssh/enabled") or tx(root, "./system/ssh/enabled") == "enabled":
+    if present(root, "./system/ssh/permitrootlogin"):
+        F("WARN", "SSH d'OPNsense : connexion root autorisée", "", "Système > Paramètres > Administration > Secure Shell : décochez « Permit root user login » et utilisez un compte dédié")
+    if present(root, "./system/ssh/passwordauth"):
+        F("INFO", "SSH d'OPNsense : authentification par mot de passe autorisée", "", "Préférez les clés SSH (décochez « Permit password login »)")
+totp = {tx(a, "name") for a in root.findall("./system/authserver") if tx(a, "type") == "totp"}
+modes = set(filter(None, tx(wg, "authmode").split(",")))
+if not (modes & totp):
+    F("INFO", "Connexion à OPNsense sans double authentification", "Un mot de passe administrateur volé suffit pour prendre la main sur le routeur.",
+      "Système > Accès > Serveurs : ajoutez un serveur « Local + Timebased One Time Password », générez une graine OTP pour chaque utilisateur (Système > Accès > Utilisateurs), puis choisissez ce serveur dans Système > Paramètres > Administration > Authentification")
+
+# UPnP, IDS, DNS
+upnp_on = False
+for el in root.iter():
+    if "upnp" in el.tag.lower():
+        for ch in el.iter():
+            if ch.tag.lower() == "enable" and (ch.text or "").strip().lower() in ("1", "on", "yes", "enabled"): upnp_on = True
+F("WARN" if upnp_on else "OK", "UPnP activé sur le routeur" if upnp_on else "UPnP désactivé sur le routeur",
+  "N'importe quel appareil du réseau (console, objet connecté… ou logiciel malveillant) peut ouvrir lui-même des ports sur Internet." if upnp_on else "",
+  "Services > UPnP : désactivez-le, ou limitez-le aux appareils qui en ont besoin (règles d'autorisation)" if upnp_on else "")
+if tx(root, "./OPNsense/IDS/general/enabled") == "1":
+    F("OK", "Détection d'intrusion (Suricata) active", "")
+else:
+    F("INFO", "Détection d'intrusion (Suricata) inactive", "Optionnel sur un réseau domestique.", "Services > Intrusion Detection, ou le plugin os-crowdsec")
+opn = root.find("OPNsense")
+if opn is not None and any(c.tag.lower() == "crowdsec" for c in opn): F("OK", "CrowdSec présent sur le routeur", "Blocage collaboratif des adresses malveillantes.")
+PY
+}
+OPN_NETS=""
+opn_api() {   # opn_api chemin fichier → code HTTP (identifiants passés par l'entrée standard, pas sur la ligne de commande)
+  local -a k=(); oui "$(cfg OPNSENSE_VERIFIER_TLS non)" || k=(-k)
+  printf 'user = "%s:%s"\n' "$(cfg OPNSENSE_KEY)" "$(cfg OPNSENSE_SECRET)" \
+    | tmo 40 curl -sS -m 30 "${k[@]}" -K - -o "$2" -w '%{http_code}' "$(cfg OPNSENSE_URL)$1" 2>/dev/null || echo 000
+}
+
+check_opnsense() {
+  section opnsense
+  local url; url=$(cfg OPNSENSE_URL)
+  if [[ -z $url || -z $(cfg OPNSENSE_KEY) ]]; then
+    info "Audit d'OPNsense non configuré" "Audite-moi peut lire la configuration du routeur (redirections de ports, règles, UPnP, mises à jour) avec une clé API." \
+      "Sur le NAS : \`sudo ./install.sh --configurer-opnsense\` (voir le README pour créer la clé dans OPNsense)"
+    return
+  fi
+  have curl || { info "curl absent : audit d'OPNsense impossible"; return; }
+  url=${url%/}; CFG[OPNSENSE_URL]=$url
+  local m; m=$(stat -c %a "$CONF_FILE" 2>/dev/null)
+  [[ -n $m && ${m: -2} != 00 ]] && warn "$CONF_FILE est lisible par d'autres comptes (droits $m)" "Ce fichier contient la clé API d'OPNsense." "\`sudo chmod 600 $CONF_FILE\`"
+  local fw="$WORK/opn_fw.json" code
+  code=$(opn_api /api/core/firmware/status "$fw")
+  case $code in
+    200) ;;
+    401) warn "OPNsense refuse la clé API (HTTP 401)" "Clé ou secret incorrect." "Vérifiez OPNSENSE_KEY et OPNSENSE_SECRET dans $CONF_FILE"; return ;;
+    000) warn "OPNsense injoignable ($url)" "Pas de réponse de l'API." "Vérifiez OPNSENSE_URL (ex. https://10.10.1.1) et que le NAS peut joindre l'interface d'administration"; return ;;
+    *) info "OPNsense : état des mises à jour illisible (HTTP $code)" "" "Ajoutez le privilège « System: Firmware » à l'utilisateur de la clé API" ;;
+  esac
+  if [[ $code == 200 ]]; then
+    local pv st msg
+    pv=$(jq -r '.product_version // .product.product_version // empty' "$fw" 2>/dev/null)
+    st=$(jq -r '.status // empty' "$fw" 2>/dev/null); msg=$(jq -r '.status_msg // empty' "$fw" 2>/dev/null)
+    case $st in
+      update|upgrade) warn "OPNsense ${pv:+$pv }: mises à jour disponibles" "${msg:-Des mises à jour du routeur attendent.}" "OPNsense > Système > Firmware > Mises à jour" ;;
+      none|"") ok "OPNsense ${pv:+$pv }: aucune mise à jour en attente" "${msg:-Dernière vérification faite par le routeur.}" ;;
+      *) info "OPNsense ${pv:+$pv }: état du firmware « $st »" "$msg" ;;
+    esac
+  fi
+  local xml="$WORK/opn_config.xml"
+  code=$(opn_api /api/core/backup/download/this "$xml")
+  if [[ $code != 200 ]] || ! grep -q '<opnsense>' "$xml" 2>/dev/null; then
+    info "OPNsense : configuration illisible (HTTP $code)" "Sans la configuration, les redirections de ports et les règles ne peuvent pas être vérifiées." \
+      "Ajoutez le privilège « Diagnostics: Backup & Restore » (ou « System: Configuration: Backups ») à l'utilisateur de la clé API (voir README)"
+    rm -f "$xml"; return
+  fi
+  local -A TB=()
+  local -a TORD=()
+  local kind a b c d
+  while IFS=$US read -r kind a b c d; do
+    case $kind in
+      F) add "$a" "$b" "${c//\\n/$NL}" "$d" ;;
+      N) OPN_NETS+="$a " ;;
+      T) [[ -n ${TB[$a]:-} ]] || { TB[$a]="$WORK/opn_t_${#TB[@]}.tsv"; TORD+=("$a"); }; printf '%s\n' "$b" >> "${TB[$a]}" ;;
+    esac
+  done < <(opn_py > "$WORK/opn.py"; python3 -I "$WORK/opn.py" "$xml" "$(hostname -I 2>/dev/null)")
+  local t
+  for t in "${TORD[@]}"; do tbl "$t" < "${TB[$t]}"; done
+  rm -f "$xml"
+}
+
+# ------------------------------------------------------ scan du réseau local --
+nmap_py() {   # résultat XML de nmap → IP, nom, MAC, fabricant, ports ouverts
+  cat <<'PY'
+import sys, xml.etree.ElementTree as ET
+for h in ET.parse(sys.argv[1]).getroot().findall("host"):
+    s = h.find("status")
+    if s is None or s.get("state") != "up": continue
+    ip = mac = vendor = ""
+    for a in h.findall("address"):
+        if a.get("addrtype") == "ipv4": ip = a.get("addr")
+        elif a.get("addrtype") == "mac": mac, vendor = a.get("addr"), a.get("vendor", "")
+    hn = h.find("hostnames/hostname"); name = hn.get("name") if hn is not None else ""
+    ports = []
+    for p in h.findall("ports/port"):
+        st = p.find("state")
+        if st is None or st.get("state") != "open": continue
+        sv = p.find("service")
+        ports.append(p.get("portid") + "/" + p.get("protocol") + ((" " + sv.get("name")) if sv is not None and sv.get("name") else ""))
+    print("\x1f".join([ip, name, mac, vendor, ", ".join(ports)]))
+PY
+}
+check_lan() {
+  section lan
+  if ! oui "$(cfg SCAN_RESEAU oui)"; then info "Scan du réseau désactivé (SCAN_RESEAU=non dans audit.conf)"; return; fi
+  if ((QUICK)); then info "Scan du réseau non exécuté (mode rapide)"; return; fi
+  if ! have nmap; then info "nmap non installé : scan du réseau impossible" "" "\`sudo apt install nmap\`"; return; fi
+  local cibles; cibles=$(cfg SCAN_RESEAUX)
+  local origine="audit.conf (SCAN_RESEAUX)"
+  if [[ -z $cibles && -n $OPN_NETS ]]; then cibles=$OPN_NETS; origine="interfaces d'OPNsense"; fi
+  if [[ -z $cibles ]]; then
+    origine="réseaux du NAS"
+    cibles=$(ip -o -f inet addr show 2>/dev/null | awk '$2 !~ /^(lo|docker|br-|veth|virbr|tailscale|wg|tun)/ {print $4}' \
+      | while read -r c; do python3 -c 'import ipaddress,sys; n=ipaddress.ip_interface(sys.argv[1]).network; print(n) if n.is_private else None' "$c" 2>/dev/null; done | sort -u | tr '\n' ' ')
+  fi
+  local -a ok_c=() trop=()
+  local c
+  for c in $cibles; do
+    if [[ $c =~ /([0-9]+)$ ]] && ((BASH_REMATCH[1] < 22)); then trop+=("$c"); else ok_c+=("$c"); fi
+  done
+  ((${#trop[@]})) && info "Réseaux trop grands ignorés : ${trop[*]}" "Le scan est limité aux réseaux de 1 024 adresses au plus." "Indiquez des sous-réseaux plus précis dans SCAN_RESEAUX (audit.conf)"
+  if ((${#ok_c[@]} == 0)); then info "Aucun réseau à scanner" "" "Renseignez SCAN_RESEAUX dans /etc/audite-moi/audit.conf"; return; fi
+  note "Scan nmap de ${ok_c[*]} (quelques minutes)…"
+  local x="$WORK/nmap.xml"
+  tmo 1800 nmap -T4 --top-ports 200 --open --host-timeout 120s -oX "$x" "${ok_c[@]}" >/dev/null 2>&1
+  [[ -s $x ]] || { warn "Le scan nmap a échoué" "" "Lancez-le à la main : \`sudo nmap -T4 --top-ports 200 --open ${ok_c[*]}\`"; return; }
+  local res; res=$(nmap_py > "$WORK/nmap.py"; python3 -I "$WORK/nmap.py" "$x")
+  local n; n=$(nlines "$res")
+  info "$n appareil(s) trouvé(s) sur ${ok_c[*]}" "Réseaux pris dans : $origine. Le scan montre ce que le NAS peut joindre : un appareil d'un autre sous-réseau peut voir autre chose selon les règles d'OPNsense."
+  local -A RISK=([23]="Telnet (non chiffré)" [21]="FTP (non chiffré)" [2375]="API Docker sans TLS" [3389]="Bureau à distance (RDP)" [5900]="VNC"
+    [6379]="Redis" [27017]="MongoDB" [9200]="Elasticsearch" [11211]="Memcached" [3306]="MySQL/MariaDB" [5432]="PostgreSQL" [1883]="MQTT non chiffré" [554]="flux vidéo RTSP (caméra)")
+  local -a rows=() risq=() crit2375=() pl=()
+  local ip name mac vendor ports p num me
+  local myips=" $(hostname -I 2>/dev/null) "
+  while IFS=$US read -r ip name mac vendor ports; do
+    [[ -n $ip ]] || continue
+    me=""; [[ $myips == *" $ip "* ]] && me=" (ce NAS)"
+    rows+=("$ip$TAB${name:--}$me$TAB${mac:--}$TAB${vendor:--}$TAB${ports:--}")
+    [[ -n $me ]] && continue
+    IFS=',' read -r -a pl <<< "$ports"
+    for p in "${pl[@]}"; do
+      p=${p# }; num=${p%%/*}
+      [[ -n ${RISK[$num]:-} ]] || continue
+      if [[ $num == 2375 ]]; then crit2375+=("$ip${name:+ ($name)}"); else risq+=("$ip${name:+ ($name)} : $num — ${RISK[$num]}"); fi
+    done
+  done <<< "$res"
+  ((${#crit2375[@]})) && crit "API Docker sans TLS ouverte sur le réseau : $(join_list ', ' "${crit2375[@]}")" "Quiconque atteint ce port prend le contrôle total de la machine." "Désactivez l'écoute TCP de Docker sur cette machine (-H tcp://…)"
+  if ((${#risq[@]})); then
+    warn "Services risqués sur d'autres appareils du réseau" "$(printf '%s\n' "${risq[@]}")" \
+      "Désactivez ces services s'ils ne servent pas, changez les mots de passe par défaut, et isolez caméras et objets connectés dans un VLAN séparé (OPNsense)"
+  else
+    ok "Aucun service particulièrement risqué (Telnet, FTP, RDP, VNC, bases de données…) sur les autres appareils"
+  fi
+  tbl "Appareils du réseau local" < <(printf 'Adresse IP\tNom\tAdresse MAC\tFabricant\tPorts ouverts\n'; printf '%s\n' "${rows[@]}" | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n)
+  # Nouveaux appareils depuis le dernier scan
+  local inv="$OUTDIR/.inventaire-reseau" nouveaux=""
+  local actuel; actuel=$(awk -F"$US" '{print ($3 != "" ? tolower($3) : $1) "\t" $1 "\t" $2 "\t" $4}' <<< "$res" | sort -u)
+  if [[ -f $inv ]]; then
+    nouveaux=$(awk -F'\t' 'NR == FNR {vu[$1] = 1; next} !($1 in vu) {printf "%s%s%s%s\n", $2, ($3 != "" ? " (" $3 ")" : ""), ($1 != $2 ? " — " $1 : ""), ($4 != "" ? " — " $4 : "")}' "$inv" - <<< "$actuel")
+    if [[ -n $nouveaux ]]; then
+      info "Nouveaux appareils depuis le dernier scan : $(nlines "$nouveaux")" "$nouveaux" "Vérifiez que vous les reconnaissez (adresse MAC et fabricant) ; un appareil inconnu peut signaler un intrus sur le Wi-Fi"
+    else
+      ok "Aucun nouvel appareil depuis le dernier scan"
+    fi
+  fi
+  printf '%s\n' "$actuel" > "$inv"
+  [[ -n $OUTGROUP ]] && chgrp "$OUTGROUP" "$inv" 2>/dev/null && chmod 640 "$inv"
+}
+
 check_maj() {
   section maj
   if ! have apt-get; then info "Gestionnaire apt absent"; return; fi
@@ -2827,6 +3478,7 @@ prune_reports() {
 # ================================================================== MAIN ===
 main() {
   check_deps
+  charger_conf
   setup_output
   printf '%sAudite-moi %s%s — audit de %s (%s)\n' "$C_BOLD" "$VERSION" "$C_0" "$HOST" "$OS_PRETTY"
   ((QUICK)) && note "Mode rapide : analyses longues désactivées."
@@ -2841,6 +3493,10 @@ main() {
   check_reseau
   check_sauvegardes
   check_cloudflare
+  check_exposition
+  check_applis
+  check_opnsense
+  check_lan
   check_maj
   check_comptes
   check_ssh

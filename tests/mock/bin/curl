@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Faux curl : simule Internet (DNS public, Cloudflare, GitHub, services publiés) et l'API d'OPNsense
+F=$AUDITE_MOI_FIX
+out="" hdr="" wfmt="" stdin_cfg=0 tls_old=0
+url=${*: -1}
+while (($#)); do
+  case $1 in
+    -o) out=$2; shift ;;
+    -D) hdr=$2; shift ;;
+    -w) wfmt=$2; shift ;;
+    -d) shift ;;
+    -K) [[ $2 == - ]] && stdin_cfg=1; shift ;;
+    --tlsv1.0) tls_old=1 ;;
+    -m|-A|-H|-X|--resolve|--ciphers|--tls-max) shift ;;
+  esac
+  shift
+done
+
+code=200 loc="" headers="" body=""
+reponse() {   # reponse code corps [en-têtes] [redirection]
+  code=$1 body=$2 headers=${3:-} loc=${4:-}
+}
+
+case $url in
+  https://cloudflare-dns.com/dns-query*)
+    name=${url#*name=}; name=${name%%&*}; type=${url##*type=}
+    t=1; [[ $type == AAAA ]] && t=28
+    case $name:$type in
+      films.exemple.fr:A)  ips="104.21.10.1 172.67.10.1" ;;
+      cloud.exemple.fr:A)  ips="104.21.10.2" ;;
+      cloudflare.com:A)    ips="104.16.132.229" ;;
+      stash.exemple.fr:A)  ips="172.67.1.3" ;;
+      nc.exemple.fr:A)     ips="104.21.10.4" ;;
+      direct.exemple.fr:A|maison.exemple.fr:A) ips="203.0.113.7" ;;
+      *) ips="" ;;
+    esac
+    printf '{"Status":0,"Answer":['
+    sep=""; for i in $ips; do printf '%s{"name":"%s","type":%s,"TTL":300,"data":"%s"}' "$sep" "$name" "$t" "$i"; sep=","; done
+    printf ']}\n'; exit 0 ;;
+  https://www.cloudflare.com/ips-v4) printf '173.245.48.0/20\n104.16.0.0/13\n104.24.0.0/14\n172.64.0.0/13\n'; exit 0 ;;
+  https://1.1.1.1/cdn-cgi/trace) printf 'fl=1\nh=1.1.1.1\nip=203.0.113.7\nts=1\nvisit_scheme=https\n'; exit 0 ;;
+  https://api.github.com/repos/nextcloud/server/releases*)
+    printf '[{"tag_name":"v32.0.0rc1","prerelease":true,"draft":false},{"tag_name":"v31.0.5","prerelease":false,"draft":false},{"tag_name":"v31.0.4","prerelease":false,"draft":false},{"tag_name":"v30.0.11","prerelease":false,"draft":false},{"tag_name":"v29.0.16","prerelease":false,"draft":false},{"tag_name":"v29.0.15","prerelease":false,"draft":false}]\n'
+    exit 0 ;;
+  https://192.168.1.1/api/*)
+    if ((stdin_cfg)); then cfg=$(cat); else cfg=""; fi
+    [[ $cfg == *'user = "clef-api:secret+/='* ]] || reponse 401 '{"status":401}'
+    if [[ $code == 200 ]]; then
+      case $url in
+        */api/core/firmware/status) reponse 200 '{"product_version":"25.7.3","status":"update","status_msg":"There are 12 updates available, total download size is 48.2MiB."}' ;;
+        */api/core/backup/download/this) reponse 200 "$(cat "$F/opnsense-config.xml")" ;;
+        *) reponse 404 '' ;;
+      esac
+    fi ;;
+  http://*)
+    reponse 301 '' "location: https://${url#http://}" "https://${url#http://}" ;;
+  https://films.exemple.fr/*)
+    ((tls_old)) && exit 0
+    case ${url#https://films.exemple.fr} in
+      /) reponse 302 '' 'location: /web/' 'https://films.exemple.fr/web/' ;;
+      /.git/HEAD) reponse 200 'ref: refs/heads/main' ;;
+      *) reponse 404 'Not found' ;;
+    esac ;;
+  https://cloud.exemple.fr/*)
+    reponse 302 '' 'location: https://maison.cloudflareaccess.com/cdn-cgi/access/login/cloud.exemple.fr' 'https://maison.cloudflareaccess.com/cdn-cgi/access/login/cloud.exemple.fr' ;;
+  https://stash.exemple.fr/*)
+    ((tls_old)) && exit 35
+    case ${url#https://stash.exemple.fr} in
+      /graphql) reponse 200 '{"data":{"version":{"version":"v0.27.2"}}}' ;;
+      *) reponse 200 '<!doctype html><html><head><title>Stash</title></head><body><div id="root"></div></body></html>' 'strict-transport-security: max-age=31536000' ;;
+    esac ;;
+  https://nc.exemple.fr/*)
+    ((tls_old)) && exit 35
+    case ${url#https://nc.exemple.fr} in
+      /) reponse 302 '' $'strict-transport-security: max-age=15552000\r\nlocation: /login' 'https://nc.exemple.fr/login' ;;
+      /status.php) reponse 200 '{"installed":true,"maintenance":false,"needsDbUpgrade":false,"version":"29.0.3.4","versionstring":"29.0.3","edition":"","productname":"Nextcloud","extendedSupport":false}' ;;
+      *) reponse 404 '<html>Not found</html>' 'strict-transport-security: max-age=15552000' ;;
+    esac ;;
+  *) exit 7 ;;
+esac
+
+((tls_old)) && exit 35
+if [[ -n $hdr ]]; then printf 'HTTP/2 %s\r\nserver: cloudflare\r\n%s\r\n\r\n' "$code" "$headers" > "$hdr"; fi
+if [[ -n $out ]]; then printf '%s' "$body" > "$out"; else printf '%s' "$body"; fi
+if [[ -n $wfmt ]]; then
+  w=${wfmt//'%{http_code}'/$code}; w=${w//'%{redirect_url}'/$loc}; w=${w//'\n'/$'\n'}
+  printf '%s' "$w"
+fi
+exit 0

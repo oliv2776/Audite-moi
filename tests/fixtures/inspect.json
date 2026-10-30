@@ -1,550 +1,694 @@
 [
- {
-  "Id": "0000000000000000000000000000000000000000000000000000000000000001",
-  "Name": "/cloudflared",
-  "Path": "cloudflared",
-  "Args": [
-   "tunnel",
-   "--no-autoupdate",
-   "run",
-   "--token",
-   "eyJhIjoiMTIzNDU2Nzg5MCIsInQiOiJhYmNkZWYiLCJzIjoiWlhoaGJYQnNaUT09In0="
-  ],
-  "State": {
-   "Status": "running",
-   "Running": true,
-   "ExitCode": 0,
-   "StartedAt": "2026-10-17T20:00:00.123456789Z",
-   "OOMKilled": false,
-   "Pid": 4101
-  },
-  "RestartCount": 0,
-  "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000065",
-  "Config": {
-   "Image": "cloudflare/cloudflared:2025.2.0",
-   "User": "",
-   "Env": [
-    "PATH=/usr/bin"
-   ],
-   "Labels": {
-    "com.docker.compose.project": "tunnel",
-    "com.docker.compose.service": "cloudflared",
-    "com.docker.compose.project.config_files": "/srv/docker/tunnel/docker-compose.yml",
-    "com.docker.compose.project.working_dir": "/srv/docker/tunnel"
-   }
-  },
-  "HostConfig": {
-   "Privileged": false,
-   "NetworkMode": "proxy",
-   "PidMode": "",
-   "IpcMode": "private",
-   "CapAdd": null,
-   "SecurityOpt": null,
-   "ReadonlyRootfs": false,
-   "Memory": 0,
-   "RestartPolicy": {
-    "Name": "unless-stopped"
-   },
-   "Devices": null,
-   "DeviceRequests": null,
-   "Runtime": "runc",
-   "GroupAdd": null,
-   "LogConfig": {
-    "Type": "json-file",
-    "Config": {
-     "max-size": "10m"
-    }
-   }
-  },
-  "Mounts": [],
-  "NetworkSettings": {
-   "Networks": {
-    "proxy": {
-     "Aliases": [
-      "cloudflared"
-     ],
-     "DNSNames": [
-      "cloudflared",
-      "000000000000"
-     ],
-     "IPAddress": "172.18.0.101"
-    }
-   },
-   "Ports": {}
-  }
- },
- {
-  "Id": "0000000000000000000000000000000000000000000000000000000000000002",
-  "Name": "/jellyfin",
-  "Path": "/init",
-  "Args": [],
-  "State": {
-   "Status": "running",
-   "Running": true,
-   "ExitCode": 0,
-   "StartedAt": "2026-10-17T20:00:00.123456789Z",
-   "OOMKilled": false,
-   "Pid": 4102
-  },
-  "RestartCount": 0,
-  "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000066",
-  "Config": {
-   "Image": "jellyfin/jellyfin:10.10.7",
-   "User": "",
-   "Env": [
-    "PATH=/usr/bin"
-   ],
-   "Labels": {
-    "com.docker.compose.project": "media",
-    "com.docker.compose.service": "jellyfin",
-    "com.docker.compose.project.config_files": "/srv/docker/media/docker-compose.yml",
-    "com.docker.compose.project.working_dir": "/srv/docker/media"
-   }
-  },
-  "HostConfig": {
-   "Privileged": false,
-   "NetworkMode": "proxy",
-   "PidMode": "",
-   "IpcMode": "private",
-   "CapAdd": null,
-   "SecurityOpt": null,
-   "ReadonlyRootfs": false,
-   "Memory": 0,
-   "RestartPolicy": {
-    "Name": "unless-stopped"
-   },
-   "Devices": [
-    {
-     "PathOnHost": "/dev/dri",
-     "PathInContainer": "/dev/dri",
-     "CgroupPermissions": "rwm"
-    }
-   ],
-   "DeviceRequests": null,
-   "Runtime": "runc",
-   "GroupAdd": [
-    "993"
-   ],
-   "LogConfig": {
-    "Type": "json-file",
-    "Config": {
-     "max-size": "10m"
-    }
-   }
-  },
-  "Mounts": [
-   {
-    "Type": "bind",
-    "Source": "/stockage/medias",
-    "Destination": "/media",
-    "RW": false
-   }
-  ],
-  "NetworkSettings": {
-   "Networks": {
-    "proxy": {
-     "Aliases": [
-      "jellyfin"
-     ],
-     "DNSNames": [
-      "jellyfin",
-      "000000000000"
-     ],
-     "IPAddress": "172.18.0.102"
-    }
-   },
-   "Ports": {
-    "8096/tcp": [
-     {
-      "HostIp": "0.0.0.0",
-      "HostPort": "8096"
-     },
-     {
-      "HostIp": "::",
-      "HostPort": "8096"
-     }
-    ]
-   }
-  }
- },
- {
-  "Id": "0000000000000000000000000000000000000000000000000000000000000003",
-  "Name": "/nextcloud",
-  "Path": "/init",
-  "Args": [],
-  "State": {
-   "Status": "running",
-   "Running": true,
-   "ExitCode": 0,
-   "StartedAt": "2026-10-17T20:00:00.123456789Z",
-   "OOMKilled": false,
-   "Pid": 4103
-  },
-  "RestartCount": 0,
-  "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000067",
-  "Config": {
-   "Image": "nextcloud:29-apache",
-   "User": "",
-   "Env": [
-    "POSTGRES_PASSWORD=TresSecret123",
-    "POSTGRES_HOST=db",
-    "NEXTCLOUD_ADMIN_PASSWORD_FILE=/run/secrets/admin",
-    "PATH=/usr/bin"
-   ],
-   "Labels": {
-    "com.docker.compose.project": "cloud",
-    "com.docker.compose.service": "app",
-    "com.docker.compose.project.config_files": "/srv/docker/cloud/docker-compose.yml",
-    "com.docker.compose.project.working_dir": "/srv/docker/cloud"
-   }
-  },
-  "HostConfig": {
-   "Privileged": false,
-   "NetworkMode": "proxy",
-   "PidMode": "",
-   "IpcMode": "private",
-   "CapAdd": null,
-   "SecurityOpt": null,
-   "ReadonlyRootfs": false,
-   "Memory": 0,
-   "RestartPolicy": {
-    "Name": "unless-stopped"
-   },
-   "Devices": null,
-   "DeviceRequests": null,
-   "Runtime": "runc",
-   "GroupAdd": null,
-   "LogConfig": {
-    "Type": "json-file",
-    "Config": {
-     "max-size": "10m"
-    }
-   }
-  },
-  "Mounts": [
-   {
-    "Type": "bind",
-    "Source": "/rapide/nextcloud",
-    "Destination": "/var/www/html",
-    "RW": true
-   }
-  ],
-  "NetworkSettings": {
-   "Networks": {
-    "proxy": {
-     "Aliases": [
-      "nextcloud",
-      "app"
-     ],
-     "IPAddress": "172.18.0.4"
+  {
+    "Id": "0000000000000000000000000000000000000000000000000000000000000001",
+    "Name": "/cloudflared",
+    "Path": "cloudflared",
+    "Args": [
+      "tunnel",
+      "--no-autoupdate",
+      "run",
+      "--token",
+      "eyJhIjoiMTIzNDU2Nzg5MCIsInQiOiJhYmNkZWYiLCJzIjoiWlhoaGJYQnNaUT09In0="
+    ],
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "StartedAt": "2026-10-17T20:00:00.123456789Z",
+      "OOMKilled": false,
+      "Pid": 4101
     },
-    "cloud_backend": {
-     "Aliases": [
-      "app"
-     ],
-     "IPAddress": "172.19.0.3"
-    }
-   },
-   "Ports": {
-    "80/tcp": [
-     {
-      "HostIp": "0.0.0.0",
-      "HostPort": "8080"
-     }
-    ]
-   }
-  }
- },
- {
-  "Id": "0000000000000000000000000000000000000000000000000000000000000004",
-  "Name": "/nextcloud-db",
-  "Path": "/init",
-  "Args": [],
-  "State": {
-   "Status": "running",
-   "Running": true,
-   "ExitCode": 0,
-   "StartedAt": "2026-10-17T20:00:00.123456789Z",
-   "OOMKilled": false,
-   "Pid": 4104,
-   "Health": {
-    "Status": "healthy"
-   }
-  },
-  "RestartCount": 0,
-  "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000068",
-  "Config": {
-   "Image": "postgres:16",
-   "User": "",
-   "Env": [
-    "POSTGRES_PASSWORD=TresSecret123",
-    "PATH=/usr/bin"
-   ],
-   "Labels": {
-    "com.docker.compose.project": "cloud",
-    "com.docker.compose.service": "db",
-    "com.docker.compose.project.config_files": "/srv/docker/cloud/docker-compose.yml",
-    "com.docker.compose.project.working_dir": "/srv/docker/cloud"
-   }
-  },
-  "HostConfig": {
-   "Privileged": false,
-   "NetworkMode": "cloud_backend",
-   "PidMode": "",
-   "IpcMode": "private",
-   "CapAdd": null,
-   "SecurityOpt": null,
-   "ReadonlyRootfs": false,
-   "Memory": 0,
-   "RestartPolicy": {
-    "Name": "unless-stopped"
-   },
-   "Devices": null,
-   "DeviceRequests": null,
-   "Runtime": "runc",
-   "GroupAdd": null,
-   "LogConfig": {
-    "Type": "json-file",
+    "RestartCount": 0,
+    "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000065",
     "Config": {
-     "max-size": "10m"
+      "Image": "cloudflare/cloudflared:2025.2.0",
+      "User": "",
+      "Env": [
+        "PATH=/usr/bin"
+      ],
+      "Labels": {
+        "com.docker.compose.project": "tunnel",
+        "com.docker.compose.service": "cloudflared",
+        "com.docker.compose.project.config_files": "/srv/docker/tunnel/docker-compose.yml",
+        "com.docker.compose.project.working_dir": "/srv/docker/tunnel"
+      }
+    },
+    "HostConfig": {
+      "Privileged": false,
+      "NetworkMode": "proxy",
+      "PidMode": "",
+      "IpcMode": "private",
+      "CapAdd": null,
+      "SecurityOpt": null,
+      "ReadonlyRootfs": false,
+      "Memory": 0,
+      "RestartPolicy": {
+        "Name": "unless-stopped"
+      },
+      "Devices": null,
+      "DeviceRequests": null,
+      "Runtime": "runc",
+      "GroupAdd": null,
+      "LogConfig": {
+        "Type": "json-file",
+        "Config": {
+          "max-size": "10m"
+        }
+      }
+    },
+    "Mounts": [],
+    "NetworkSettings": {
+      "Networks": {
+        "proxy": {
+          "Aliases": [
+            "cloudflared"
+          ],
+          "DNSNames": [
+            "cloudflared",
+            "000000000000"
+          ],
+          "IPAddress": "172.18.0.101"
+        }
+      },
+      "Ports": {}
     }
-   }
   },
-  "Mounts": [],
-  "NetworkSettings": {
-   "Networks": {
-    "cloud_backend": {
-     "Aliases": [
-      "nextcloud-db"
-     ],
-     "DNSNames": [
-      "nextcloud-db",
-      "000000000000"
-     ],
-     "IPAddress": "172.18.0.104"
-    }
-   },
-   "Ports": {
-    "5432/tcp": [
-     {
-      "HostIp": "0.0.0.0",
-      "HostPort": "5432"
-     }
-    ]
-   }
-  }
- },
- {
-  "Id": "0000000000000000000000000000000000000000000000000000000000000005",
-  "Name": "/tdarr",
-  "Path": "/init",
-  "Args": [],
-  "State": {
-   "Status": "running",
-   "Running": true,
-   "ExitCode": 0,
-   "StartedAt": "2026-10-17T20:00:00.123456789Z",
-   "OOMKilled": false,
-   "Pid": 4105
-  },
-  "RestartCount": 7,
-  "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000069",
-  "Config": {
-   "Image": "ghcr.io/haveagitgat/tdarr:latest",
-   "User": "",
-   "Env": [
-    "PUID=1000",
-    "PGID=1000",
-    "PATH=/usr/bin"
-   ],
-   "Labels": {
-    "com.docker.compose.project": "media",
-    "com.docker.compose.service": "tdarr",
-    "com.docker.compose.project.config_files": "/srv/docker/media/docker-compose.yml",
-    "com.docker.compose.project.working_dir": "/srv/docker/media"
-   }
-  },
-  "HostConfig": {
-   "Privileged": true,
-   "NetworkMode": "bridge",
-   "PidMode": "",
-   "IpcMode": "private",
-   "CapAdd": null,
-   "SecurityOpt": null,
-   "ReadonlyRootfs": false,
-   "Memory": 0,
-   "RestartPolicy": {
-    "Name": "unless-stopped"
-   },
-   "Devices": [
-    {
-     "PathOnHost": "/dev/dri/renderD128",
-     "PathInContainer": "/dev/dri/renderD128",
-     "CgroupPermissions": "rwm"
-    }
-   ],
-   "DeviceRequests": null,
-   "Runtime": "runc",
-   "GroupAdd": null,
-   "LogConfig": {
-    "Type": "json-file",
-    "Config": {}
-   }
-  },
-  "Mounts": [],
-  "NetworkSettings": {
-   "Networks": {
-    "bridge": {
-     "Aliases": null,
-     "IPAddress": "172.17.0.2"
-    }
-   },
-   "Ports": {
-    "8265/tcp": [
-     {
-      "HostIp": "0.0.0.0",
-      "HostPort": "8265"
-     }
-    ]
-   }
-  }
- },
- {
-  "Id": "0000000000000000000000000000000000000000000000000000000000000006",
-  "Name": "/portainer",
-  "Path": "/init",
-  "Args": [],
-  "State": {
-   "Status": "running",
-   "Running": true,
-   "ExitCode": 0,
-   "StartedAt": "2026-10-17T20:00:00.123456789Z",
-   "OOMKilled": false,
-   "Pid": 4106
-  },
-  "RestartCount": 0,
-  "Image": "sha256:000000000000000000000000000000000000000000000000000000000000006a",
-  "Config": {
-   "Image": "portainer/portainer-ce:2.21.4",
-   "User": "",
-   "Env": [
-    "PATH=/usr/bin"
-   ],
-   "Labels": {
-    "com.docker.compose.project": "admin",
-    "com.docker.compose.service": "portainer",
-    "com.docker.compose.project.config_files": "/srv/docker/admin/docker-compose.yml",
-    "com.docker.compose.project.working_dir": "/srv/docker/admin"
-   }
-  },
-  "HostConfig": {
-   "Privileged": false,
-   "NetworkMode": "bridge",
-   "PidMode": "",
-   "IpcMode": "private",
-   "CapAdd": null,
-   "SecurityOpt": null,
-   "ReadonlyRootfs": false,
-   "Memory": 0,
-   "RestartPolicy": {
-    "Name": "unless-stopped"
-   },
-   "Devices": null,
-   "DeviceRequests": null,
-   "Runtime": "runc",
-   "GroupAdd": null,
-   "LogConfig": {
-    "Type": "json-file",
+  {
+    "Id": "0000000000000000000000000000000000000000000000000000000000000002",
+    "Name": "/jellyfin",
+    "Path": "/init",
+    "Args": [],
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "StartedAt": "2026-10-17T20:00:00.123456789Z",
+      "OOMKilled": false,
+      "Pid": 4102
+    },
+    "RestartCount": 0,
+    "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000066",
     "Config": {
-     "max-size": "10m"
+      "Image": "jellyfin/jellyfin:10.10.7",
+      "User": "",
+      "Env": [
+        "PATH=/usr/bin"
+      ],
+      "Labels": {
+        "com.docker.compose.project": "media",
+        "com.docker.compose.service": "jellyfin",
+        "com.docker.compose.project.config_files": "/srv/docker/media/docker-compose.yml",
+        "com.docker.compose.project.working_dir": "/srv/docker/media"
+      }
+    },
+    "HostConfig": {
+      "Privileged": false,
+      "NetworkMode": "proxy",
+      "PidMode": "",
+      "IpcMode": "private",
+      "CapAdd": null,
+      "SecurityOpt": null,
+      "ReadonlyRootfs": false,
+      "Memory": 0,
+      "RestartPolicy": {
+        "Name": "unless-stopped"
+      },
+      "Devices": [
+        {
+          "PathOnHost": "/dev/dri",
+          "PathInContainer": "/dev/dri",
+          "CgroupPermissions": "rwm"
+        }
+      ],
+      "DeviceRequests": null,
+      "Runtime": "runc",
+      "GroupAdd": [
+        "993"
+      ],
+      "LogConfig": {
+        "Type": "json-file",
+        "Config": {
+          "max-size": "10m"
+        }
+      }
+    },
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/stockage/medias",
+        "Destination": "/media",
+        "RW": false
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "proxy": {
+          "Aliases": [
+            "jellyfin"
+          ],
+          "DNSNames": [
+            "jellyfin",
+            "000000000000"
+          ],
+          "IPAddress": "172.18.0.102"
+        }
+      },
+      "Ports": {
+        "8096/tcp": [
+          {
+            "HostIp": "0.0.0.0",
+            "HostPort": "8096"
+          },
+          {
+            "HostIp": "::",
+            "HostPort": "8096"
+          }
+        ]
+      }
     }
-   }
   },
-  "Mounts": [
-   {
-    "Type": "bind",
-    "Source": "/var/run/docker.sock",
-    "Destination": "/var/run/docker.sock",
-    "RW": true
-   }
-  ],
-  "NetworkSettings": {
-   "Networks": {
-    "bridge": {
-     "Aliases": null,
-     "IPAddress": "172.17.0.3"
-    }
-   },
-   "Ports": {
-    "9443/tcp": [
-     {
-      "HostIp": "0.0.0.0",
-      "HostPort": "9443"
-     }
-    ]
-   }
-  }
- },
- {
-  "Id": "0000000000000000000000000000000000000000000000000000000000000007",
-  "Name": "/sauvegarde-photos",
-  "Path": "/init",
-  "Args": [],
-  "State": {
-   "Status": "exited",
-   "Running": false,
-   "ExitCode": 1,
-   "StartedAt": "2026-10-17T20:00:00.123456789Z",
-   "OOMKilled": false,
-   "Pid": 0
-  },
-  "RestartCount": 0,
-  "Image": "sha256:000000000000000000000000000000000000000000000000000000000000006b",
-  "Config": {
-   "Image": "alpine:3.19",
-   "User": "",
-   "Env": [
-    "PATH=/usr/bin"
-   ],
-   "Labels": {
-    "com.docker.compose.project": "outils",
-    "com.docker.compose.service": "sauvegarde",
-    "com.docker.compose.project.config_files": "/srv/docker/outils/docker-compose.yml",
-    "com.docker.compose.project.working_dir": "/srv/docker/outils"
-   }
-  },
-  "HostConfig": {
-   "Privileged": false,
-   "NetworkMode": "bridge",
-   "PidMode": "",
-   "IpcMode": "private",
-   "CapAdd": null,
-   "SecurityOpt": null,
-   "ReadonlyRootfs": false,
-   "Memory": 0,
-   "RestartPolicy": {
-    "Name": "no"
-   },
-   "Devices": null,
-   "DeviceRequests": null,
-   "Runtime": "runc",
-   "GroupAdd": null,
-   "LogConfig": {
-    "Type": "json-file",
+  {
+    "Id": "0000000000000000000000000000000000000000000000000000000000000003",
+    "Name": "/nextcloud",
+    "Path": "/init",
+    "Args": [],
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "StartedAt": "2026-10-17T20:00:00.123456789Z",
+      "OOMKilled": false,
+      "Pid": 4103
+    },
+    "RestartCount": 0,
+    "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000067",
     "Config": {
-     "max-size": "10m"
+      "Image": "nextcloud:29-apache",
+      "User": "",
+      "Env": [
+        "POSTGRES_PASSWORD=TresSecret123",
+        "POSTGRES_HOST=db",
+        "NEXTCLOUD_ADMIN_PASSWORD_FILE=/run/secrets/admin",
+        "PATH=/usr/bin"
+      ],
+      "Labels": {
+        "com.docker.compose.project": "cloud",
+        "com.docker.compose.service": "app",
+        "com.docker.compose.project.config_files": "/srv/docker/cloud/docker-compose.yml",
+        "com.docker.compose.project.working_dir": "/srv/docker/cloud"
+      }
+    },
+    "HostConfig": {
+      "Privileged": false,
+      "NetworkMode": "proxy",
+      "PidMode": "",
+      "IpcMode": "private",
+      "CapAdd": null,
+      "SecurityOpt": null,
+      "ReadonlyRootfs": false,
+      "Memory": 0,
+      "RestartPolicy": {
+        "Name": "unless-stopped"
+      },
+      "Devices": null,
+      "DeviceRequests": null,
+      "Runtime": "runc",
+      "GroupAdd": null,
+      "LogConfig": {
+        "Type": "json-file",
+        "Config": {
+          "max-size": "10m"
+        }
+      }
+    },
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/rapide/nextcloud",
+        "Destination": "/var/www/html",
+        "RW": true
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "proxy": {
+          "Aliases": [
+            "nextcloud",
+            "app"
+          ],
+          "IPAddress": "172.18.0.4"
+        },
+        "cloud_backend": {
+          "Aliases": [
+            "app"
+          ],
+          "IPAddress": "172.19.0.3"
+        }
+      },
+      "Ports": {
+        "80/tcp": [
+          {
+            "HostIp": "0.0.0.0",
+            "HostPort": "8080"
+          }
+        ]
+      }
     }
-   }
   },
-  "Mounts": [],
-  "NetworkSettings": {
-   "Networks": {
-    "bridge": {
-     "Aliases": null,
-     "IPAddress": ""
+  {
+    "Id": "0000000000000000000000000000000000000000000000000000000000000004",
+    "Name": "/nextcloud-db",
+    "Path": "/init",
+    "Args": [],
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "StartedAt": "2026-10-17T20:00:00.123456789Z",
+      "OOMKilled": false,
+      "Pid": 4104,
+      "Health": {
+        "Status": "healthy"
+      }
+    },
+    "RestartCount": 0,
+    "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000068",
+    "Config": {
+      "Image": "postgres:16",
+      "User": "",
+      "Env": [
+        "POSTGRES_PASSWORD=TresSecret123",
+        "PATH=/usr/bin"
+      ],
+      "Labels": {
+        "com.docker.compose.project": "cloud",
+        "com.docker.compose.service": "db",
+        "com.docker.compose.project.config_files": "/srv/docker/cloud/docker-compose.yml",
+        "com.docker.compose.project.working_dir": "/srv/docker/cloud"
+      }
+    },
+    "HostConfig": {
+      "Privileged": false,
+      "NetworkMode": "cloud_backend",
+      "PidMode": "",
+      "IpcMode": "private",
+      "CapAdd": null,
+      "SecurityOpt": null,
+      "ReadonlyRootfs": false,
+      "Memory": 0,
+      "RestartPolicy": {
+        "Name": "unless-stopped"
+      },
+      "Devices": null,
+      "DeviceRequests": null,
+      "Runtime": "runc",
+      "GroupAdd": null,
+      "LogConfig": {
+        "Type": "json-file",
+        "Config": {
+          "max-size": "10m"
+        }
+      }
+    },
+    "Mounts": [],
+    "NetworkSettings": {
+      "Networks": {
+        "cloud_backend": {
+          "Aliases": [
+            "nextcloud-db"
+          ],
+          "DNSNames": [
+            "nextcloud-db",
+            "000000000000"
+          ],
+          "IPAddress": "172.18.0.104"
+        }
+      },
+      "Ports": {
+        "5432/tcp": [
+          {
+            "HostIp": "0.0.0.0",
+            "HostPort": "5432"
+          }
+        ]
+      }
     }
-   },
-   "Ports": {}
+  },
+  {
+    "Id": "0000000000000000000000000000000000000000000000000000000000000005",
+    "Name": "/tdarr",
+    "Path": "/init",
+    "Args": [],
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "StartedAt": "2026-10-17T20:00:00.123456789Z",
+      "OOMKilled": false,
+      "Pid": 4105
+    },
+    "RestartCount": 7,
+    "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000069",
+    "Config": {
+      "Image": "ghcr.io/haveagitgat/tdarr:latest",
+      "User": "",
+      "Env": [
+        "PUID=1000",
+        "PGID=1000",
+        "PATH=/usr/bin"
+      ],
+      "Labels": {
+        "com.docker.compose.project": "media",
+        "com.docker.compose.service": "tdarr",
+        "com.docker.compose.project.config_files": "/srv/docker/media/docker-compose.yml",
+        "com.docker.compose.project.working_dir": "/srv/docker/media"
+      }
+    },
+    "HostConfig": {
+      "Privileged": true,
+      "NetworkMode": "bridge",
+      "PidMode": "",
+      "IpcMode": "private",
+      "CapAdd": null,
+      "SecurityOpt": null,
+      "ReadonlyRootfs": false,
+      "Memory": 0,
+      "RestartPolicy": {
+        "Name": "unless-stopped"
+      },
+      "Devices": [
+        {
+          "PathOnHost": "/dev/dri/renderD128",
+          "PathInContainer": "/dev/dri/renderD128",
+          "CgroupPermissions": "rwm"
+        }
+      ],
+      "DeviceRequests": null,
+      "Runtime": "runc",
+      "GroupAdd": null,
+      "LogConfig": {
+        "Type": "json-file",
+        "Config": {}
+      }
+    },
+    "Mounts": [],
+    "NetworkSettings": {
+      "Networks": {
+        "bridge": {
+          "Aliases": null,
+          "IPAddress": "172.17.0.2"
+        }
+      },
+      "Ports": {
+        "8265/tcp": [
+          {
+            "HostIp": "0.0.0.0",
+            "HostPort": "8265"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Id": "0000000000000000000000000000000000000000000000000000000000000006",
+    "Name": "/portainer",
+    "Path": "/init",
+    "Args": [],
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "StartedAt": "2026-10-17T20:00:00.123456789Z",
+      "OOMKilled": false,
+      "Pid": 4106
+    },
+    "RestartCount": 0,
+    "Image": "sha256:000000000000000000000000000000000000000000000000000000000000006a",
+    "Config": {
+      "Image": "portainer/portainer-ce:2.21.4",
+      "User": "",
+      "Env": [
+        "PATH=/usr/bin"
+      ],
+      "Labels": {
+        "com.docker.compose.project": "admin",
+        "com.docker.compose.service": "portainer",
+        "com.docker.compose.project.config_files": "/srv/docker/admin/docker-compose.yml",
+        "com.docker.compose.project.working_dir": "/srv/docker/admin"
+      }
+    },
+    "HostConfig": {
+      "Privileged": false,
+      "NetworkMode": "bridge",
+      "PidMode": "",
+      "IpcMode": "private",
+      "CapAdd": null,
+      "SecurityOpt": null,
+      "ReadonlyRootfs": false,
+      "Memory": 0,
+      "RestartPolicy": {
+        "Name": "unless-stopped"
+      },
+      "Devices": null,
+      "DeviceRequests": null,
+      "Runtime": "runc",
+      "GroupAdd": null,
+      "LogConfig": {
+        "Type": "json-file",
+        "Config": {
+          "max-size": "10m"
+        }
+      }
+    },
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/var/run/docker.sock",
+        "Destination": "/var/run/docker.sock",
+        "RW": true
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "bridge": {
+          "Aliases": null,
+          "IPAddress": "172.17.0.3"
+        }
+      },
+      "Ports": {
+        "9443/tcp": [
+          {
+            "HostIp": "0.0.0.0",
+            "HostPort": "9443"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Id": "0000000000000000000000000000000000000000000000000000000000000007",
+    "Name": "/sauvegarde-photos",
+    "Path": "/init",
+    "Args": [],
+    "State": {
+      "Status": "exited",
+      "Running": false,
+      "ExitCode": 1,
+      "StartedAt": "2026-10-17T20:00:00.123456789Z",
+      "OOMKilled": false,
+      "Pid": 0
+    },
+    "RestartCount": 0,
+    "Image": "sha256:000000000000000000000000000000000000000000000000000000000000006b",
+    "Config": {
+      "Image": "alpine:3.19",
+      "User": "",
+      "Env": [
+        "PATH=/usr/bin"
+      ],
+      "Labels": {
+        "com.docker.compose.project": "outils",
+        "com.docker.compose.service": "sauvegarde",
+        "com.docker.compose.project.config_files": "/srv/docker/outils/docker-compose.yml",
+        "com.docker.compose.project.working_dir": "/srv/docker/outils"
+      }
+    },
+    "HostConfig": {
+      "Privileged": false,
+      "NetworkMode": "bridge",
+      "PidMode": "",
+      "IpcMode": "private",
+      "CapAdd": null,
+      "SecurityOpt": null,
+      "ReadonlyRootfs": false,
+      "Memory": 0,
+      "RestartPolicy": {
+        "Name": "no"
+      },
+      "Devices": null,
+      "DeviceRequests": null,
+      "Runtime": "runc",
+      "GroupAdd": null,
+      "LogConfig": {
+        "Type": "json-file",
+        "Config": {
+          "max-size": "10m"
+        }
+      }
+    },
+    "Mounts": [],
+    "NetworkSettings": {
+      "Networks": {
+        "bridge": {
+          "Aliases": null,
+          "IPAddress": ""
+        }
+      },
+      "Ports": {}
+    }
+  },
+  {
+    "Id": "0000000000000000000000000000000000000000000000000000000000000008",
+    "Name": "/stash",
+    "Path": "/init",
+    "Args": [],
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "StartedAt": "2026-10-17T20:00:00.123456789Z",
+      "OOMKilled": false,
+      "Pid": 4108
+    },
+    "RestartCount": 0,
+    "Image": "sha256:000000000000000000000000000000000000000000000000000000000000006c",
+    "Config": {
+      "Image": "stashapp/stash:v0.27.2",
+      "User": "",
+      "Env": [
+        "STASH_CONFIG_FILE=/root/.stash/config.yml",
+        "PATH=/usr/bin"
+      ],
+      "Labels": {
+        "com.docker.compose.project": "media",
+        "com.docker.compose.service": "stash",
+        "com.docker.compose.project.config_files": "/srv/docker/media/docker-compose.yml",
+        "com.docker.compose.project.working_dir": "/srv/docker/media"
+      }
+    },
+    "HostConfig": {
+      "Privileged": false,
+      "NetworkMode": "proxy",
+      "PidMode": "",
+      "IpcMode": "private",
+      "CapAdd": null,
+      "SecurityOpt": null,
+      "ReadonlyRootfs": false,
+      "Memory": 0,
+      "RestartPolicy": {
+        "Name": "unless-stopped"
+      },
+      "Devices": null,
+      "DeviceRequests": null,
+      "Runtime": "runc",
+      "GroupAdd": null,
+      "LogConfig": {
+        "Type": "json-file",
+        "Config": {
+          "max-size": "10m"
+        }
+      }
+    },
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/stockage/medias",
+        "Destination": "/media",
+        "RW": false
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "proxy": {
+          "Aliases": [
+            "stash"
+          ],
+          "DNSNames": [
+            "stash",
+            "000000000000"
+          ],
+          "IPAddress": "172.18.0.108"
+        }
+      },
+      "Ports": {
+        "9999/tcp": null
+      }
+    }
+  },
+  {
+    "Id": "0000000000000000000000000000000000000000000000000000000000000009",
+    "Name": "/cloudflare-ddns",
+    "Path": "/init",
+    "Args": [],
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "StartedAt": "2026-10-17T20:00:00.123456789Z",
+      "OOMKilled": false,
+      "Pid": 4109
+    },
+    "RestartCount": 0,
+    "Image": "sha256:000000000000000000000000000000000000000000000000000000000000006d",
+    "Config": {
+      "Image": "oznu/cloudflare-ddns:latest",
+      "User": "",
+      "Env": [
+        "API_KEY=cf-xxxxx",
+        "ZONE=exemple.fr",
+        "SUBDOMAIN=maison",
+        "PROXIED=false"
+      ],
+      "Labels": {
+        "com.docker.compose.project": "media",
+        "com.docker.compose.service": "ddns",
+        "com.docker.compose.project.config_files": "/srv/docker/media/docker-compose.yml",
+        "com.docker.compose.project.working_dir": "/srv/docker/media"
+      }
+    },
+    "HostConfig": {
+      "Privileged": false,
+      "NetworkMode": "proxy",
+      "PidMode": "",
+      "IpcMode": "private",
+      "CapAdd": null,
+      "SecurityOpt": null,
+      "ReadonlyRootfs": false,
+      "Memory": 0,
+      "RestartPolicy": {
+        "Name": "unless-stopped"
+      },
+      "Devices": null,
+      "DeviceRequests": null,
+      "Runtime": "runc",
+      "GroupAdd": null,
+      "LogConfig": {
+        "Type": "json-file",
+        "Config": {
+          "max-size": "10m"
+        }
+      }
+    },
+    "Mounts": [],
+    "NetworkSettings": {
+      "Networks": {
+        "bridge": {
+          "Aliases": [],
+          "DNSNames": [],
+          "IPAddress": "172.17.0.9"
+        }
+      },
+      "Ports": {}
+    }
   }
- }
 ]

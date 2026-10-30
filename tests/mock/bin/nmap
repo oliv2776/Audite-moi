@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Faux nmap : renvoie un scan d'exemple au format XML (-oX fichier)
+out=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do [[ ${args[i]} == -oX ]] && out=${args[i+1]}; done
+[[ -n $out ]] || exit 1
+printf '%s\n' "${args[@]}" > "${out}.cibles"
+cp "$AUDITE_MOI_FIX/nmap.xml" "$out"

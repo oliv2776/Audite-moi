@@ -10,7 +10,7 @@
 # =============================================================================
 set -euo pipefail
 
-PORT=8765 ECOUTE=0.0.0.0 TLS=1 WEB=1 MINUTEUR=1 NOUVEAU_MDP=0 MINIMAL=0 OUVRIR=0
+PORT=8765 ECOUTE=0.0.0.0 TLS=1 WEB=1 MINUTEUR=1 NOUVEAU_MDP=0 MINIMAL=0 OUVRIR=0 OPN=0
 usage() {
   cat <<'EOF'
 Installation d'Audite-moi
@@ -25,6 +25,7 @@ Installation d'Audite-moi
   --nouveau-mot-de-passe redéfinit le mot de passe de l'interface web
   --minimal              n'installe que les dépendances indispensables
   --ouvrir-pare-feu      autorise l'interface dans UFW depuis tous les réseaux privés, sans poser la question
+  --configurer-opnsense  enregistre l'adresse et la clé API du routeur OPNsense (voir le README)
   -h, --help             cette aide
 EOF
 }
@@ -38,6 +39,7 @@ while (($#)); do
     --nouveau-mot-de-passe) NOUVEAU_MDP=1; shift ;;
     --minimal) MINIMAL=1; shift ;;
     --ouvrir-pare-feu) OUVRIR=1; shift ;;
+    --configurer-opnsense) OPN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Option inconnue : $1" >&2; usage >&2; exit 1 ;;
   esac
@@ -54,9 +56,9 @@ SYSTEMD=0; [[ -d /run/systemd/system ]] && SYSTEMD=1
 etape() { printf '\n\e[1m▶ %s\e[0m\n' "$*"; }
 
 etape "Dépendances"
-paquets=(jq python3 smartmontools)
+paquets=(jq python3 smartmontools curl)
 ((TLS && WEB)) && paquets+=(openssl)
-((MINIMAL)) || paquets+=(lynis vainfo pciutils)
+((MINIMAL)) || paquets+=(lynis vainfo pciutils nmap)
 manque=()
 for p in "${paquets[@]}"; do dpkg -s "$p" >/dev/null 2>&1 || manque+=("$p"); done
 if ((${#manque[@]})); then
@@ -84,6 +86,74 @@ install -d -o root -g audite-moi -m 750 "$VAR" "$ETC"
 install -d -o root -g audite-moi -m 2750 "$VAR/rapports" "$VAR/etat"
 install -d -o root -g audite-moi -m 2770 "$VAR/demande"
 echo "$VAR/{rapports,etat,demande}"
+
+etape "Réglages des contrôles réseau"
+CONF=$ETC/audit.conf
+if [[ ! -f $CONF ]]; then
+  cat > "$CONF" <<'EOC'
+# Audite-moi — réglages des contrôles réseau (lu par root uniquement : gardez ce fichier en 600)
+# Format : CLÉ=valeur (une par ligne). Ce fichier n'est jamais exécuté.
+
+# Test depuis Internet des services publiés (tunnels Cloudflare) : oui / non
+EXTERNE=oui
+# Noms d'hôte supplémentaires à tester depuis Internet (séparés par des espaces)
+DOMAINES_EXTRA=""
+
+# Routeur OPNsense (lecture seule via l'API) — voir le README pour créer la clé
+#   sudo ./install.sh --configurer-opnsense
+OPNSENSE_URL=""
+OPNSENSE_KEY=""
+OPNSENSE_SECRET=""
+# Vérifier le certificat HTTPS du routeur (non : certificat auto-signé d'origine)
+OPNSENSE_VERIFIER_TLS=non
+
+# Scan nmap du réseau local pendant l'audit complet : oui / non
+SCAN_RESEAU=oui
+# Réseaux à scanner (vide = ceux d'OPNsense, sinon ceux du NAS), ex. "10.10.1.0/24 192.168.10.0/24"
+SCAN_RESEAUX=""
+EOC
+  echo "Modèle créé : $CONF"
+fi
+chown root:root "$CONF"; chmod 600 "$CONF"
+
+conf_set() {   # conf_set CLÉ valeur : remplace (ou ajoute) la ligne dans audit.conf
+  CLE=$1 VAL=$2 python3 - "$CONF" <<'PY'
+import os, re, sys
+p, k, v = sys.argv[1], os.environ["CLE"], os.environ["VAL"]
+lignes = open(p, encoding="utf-8").read().splitlines()
+nouv = f'{k}="{v}"'
+for i, l in enumerate(lignes):
+    if re.match(rf"\s*{k}\s*=", l): lignes[i] = nouv; break
+else: lignes.append(nouv)
+tmp = p + ".tmp"
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as f: f.write("\n".join(lignes) + "\n")
+os.replace(tmp, p)
+PY
+}
+
+if ((OPN)); then
+  [[ -t 0 ]] || { echo "--configurer-opnsense demande un terminal interactif." >&2; exit 1; }
+  defaut=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
+  read -r -p "Adresse de l'interface d'OPNsense [https://${defaut:-192.168.1.1}] : " url
+  url=${url:-https://${defaut:-192.168.1.1}}
+  [[ $url == http*://* ]] || url="https://$url"
+  read -r -p "Clé API (key) : " cle_api
+  read -r -s -p "Secret API (secret, non affiché) : " secret_api; echo
+  if [[ -z $cle_api || -z $secret_api || $cle_api$secret_api$url == *[\"\\[:space:]]* ]]; then
+    echo "Clé ou secret vide ou invalide : rien n'a été enregistré." >&2; exit 1
+  fi
+  code=$(printf 'user = "%s:%s"\n' "$cle_api" "$secret_api" | curl -sS -k -m 15 -K - -o /dev/null -w '%{http_code}' "${url%/}/api/core/firmware/status" 2>/dev/null || true)
+  case $code in
+    200) echo "✔ Connexion à l'API d'OPNsense réussie" ;;
+    401) echo "✘ OPNsense refuse cette clé (HTTP 401) : vérifiez la clé et le secret." >&2; exit 1 ;;
+    403) echo "⚠ Clé acceptée mais privilège « System: Firmware » manquant (voir le README) ; enregistrement quand même." ;;
+    *)   echo "⚠ OPNsense ne répond pas (code ${code:-aucun}) à ${url%/} ; enregistrement quand même." ;;
+  esac
+  conf_set OPNSENSE_URL "${url%/}"; conf_set OPNSENSE_KEY "$cle_api"; conf_set OPNSENSE_SECRET "$secret_api"
+  unset secret_api cle_api
+  echo "Clé enregistrée dans $CONF (lisible par root uniquement)"
+fi
 
 MDP_AFFICHE=""
 if ((WEB)); then

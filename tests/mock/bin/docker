@@ -1,6 +1,28 @@
 #!/usr/bin/env bash
 # Faux docker : conteneurs décrits dans tests/fixtures/inspect.json
 F=$AUDITE_MOI_FIX; I=$F/inspect.json
+occ() {   # réponses simulées de « php occ » (Nextcloud)
+  case $1 in
+    "status --output=json") echo '{"installed":true,"version":"29.0.3.4","versionstring":"29.0.3","edition":"","maintenance":false,"needsDbUpgrade":false}' ;;
+    "twofactorauth:enforce") echo "Two-factor authentication is not enforced" ;;
+    "group:list --output=json") echo '{"admin":["admin","olivier"],"users":["olivier","marie"]}' ;;
+    "twofactorauth:state admin") echo "Two-factor authentication is not enabled for user admin" ;;
+    "twofactorauth:state olivier") echo "Two-factor authentication is enabled for user olivier" ;;
+    "config:app:get core shareapi_enforce_links_password") exit 1 ;;
+    "config:app:get core shareapi_enforce_expire_date") echo yes ;;
+    "config:system:get dbtype") echo pgsql ;;
+    "config:system:get dbname") echo nextcloud ;;
+    "config:system:get dbhost") echo nextcloud-db ;;
+    "config:system:get dbuser") echo oc_admin ;;
+    "config:system:get dbpassword") echo TresSecret123 ;;
+    "config:system:get dbtableprefix") echo oc_ ;;
+    "config:system:get datadirectory") echo /var/www/html/data ;;
+    "config:system:get debug") echo true ;;
+    "setupchecks --output=json") echo '{"security":{"OCA\\Settings\\SetupChecks\\Https":{"name":"HTTPS access and URLs","severity":"error","description":"Accessing site insecurely via http. <b>Use https</b>.","linkToDoc":null},"OCA\\Settings\\SetupChecks\\Ok":{"name":"Ok","severity":"success","description":""}},"system":{"OCA\\Settings\\SetupChecks\\PhpMemory":{"name":"PHP memory limit","severity":"warning","description":"The PHP memory limit is below 512 MB.","linkToDoc":null}}}' ;;
+    "app:update --showonly") printf 'calendar new version available: 4.7.3\ncontacts new version available: 6.0.1\n' ;;
+    *) exit 1 ;;
+  esac
+}
 cmd=$1; shift
 case $cmd in
   info)
@@ -32,6 +54,15 @@ EOT
     case "$*" in
       *"ls /dev/dri"*) [[ $1 == tdarr ]] && printf 'renderD128\n' || printf 'card0\ncard1\nrenderD128\nrenderD129\n' ;;
       *"cloudflared --version"*) echo "cloudflared version 2025.2.0 (built 2025-02-04-1205 UTC)" ;;
+      *"nextcloud php /var/www/html/occ"*) a="$*"; occ "${a##*--no-interaction }" ;;
+      "nextcloud tail -n 4000 /var/www/html/data/nextcloud.log")
+        for i in $(seq 1 25); do printf '{"reqId":"r%s","level":1,"remoteAddr":"172.18.0.%s","user":"olivier","app":"core","message":"x"}\n' "$i" $((2 + i % 3)); done ;;
+      "-i nextcloud-db sh -c "*)
+        read -r pw
+        [[ $pw == TresSecret123 && $* == *"psql -h 127.0.0.1"* && $* == *"oc_share WHERE share_type IN (3,4)"* ]] || { echo "psql: error: authentication failed" >&2; exit 2; }
+        printf '3\t1\t1\t1\t/Photos vacances\tolivier\n3\t0\t0\t1\t/Docs/Contrat.pdf\tadmin\n3\t1\t1\t15\t/Dépôt\tolivier\n' ;;
+      "stash cat /root/.stash/config.yml")
+        printf 'host: 0.0.0.0\nport: 9999\nstash:\n  - path: /data\ngenerated: /generated\nsecurity_tripwire_accessed_from_public_internet: "198.51.100.23"\n' ;;
       *) exit 1 ;;
     esac ;;
   *) exit 1 ;;

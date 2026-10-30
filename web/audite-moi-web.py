@@ -335,7 +335,7 @@ def barre(csrf, occupe, actif, der=None):
     return """<header class="topbar"><div class="in"><a class="brand" href="/"><span class="logo">✓</span>Audite-moi <span class="host">{h}</span></a>
 <nav class="nav">{nav}</nav><div class="actions">
 <form class="inline" method="post" action="/lancer"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="mode" value="complet"><button class="primary"{d} title="Audit complet (quelques minutes)">▶ Lancer un audit</button></form>
-<form class="inline" method="post" action="/lancer"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="mode" value="rapide"><button{d} title="Sans Lynis, Trivy ni recherche des fichiers SUID">Audit rapide</button></form>
+<form class="inline" method="post" action="/lancer"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="mode" value="rapide"><button{d} title="Sans Lynis, Trivy, scan du réseau local ni recherche des fichiers SUID">Audit rapide</button></form>
 <form class="inline" method="post" action="/deconnexion"><input type="hidden" name="csrf" value="{c}"><button title="Se déconnecter">Déconnexion</button></form>
 </div></div></header>""".format(h=esc(hote), nav=nav, c=esc(csrf), d=dis)
 

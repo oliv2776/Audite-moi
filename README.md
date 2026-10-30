@@ -1,6 +1,6 @@
 # Audite-moi
 
-**Bilan de santé et audit de sécurité pour un NAS sous Ubuntu**, avec une interface web : pools ZFS, disques, conteneurs Docker, transcodage GPU (iGPU Intel/AMD + carte graphique AMD/NVIDIA), tunnels Cloudflare, SSH, pare-feu, mises à jour, sauvegardes…
+**Bilan de santé et audit de sécurité pour un NAS sous Ubuntu**, avec une interface web : pools ZFS, disques, conteneurs Docker, transcodage GPU (iGPU Intel/AMD + carte graphique AMD/NVIDIA), tunnels Cloudflare, services publiés vus depuis Internet, Nextcloud et Stash, routeur OPNsense, réseau local, SSH, pare-feu, mises à jour, sauvegardes…
 
 Chaque audit produit un rapport classé par priorité (**critique**, **attention**, **OK**, **info**), avec pour chaque problème la commande ou le réglage à appliquer, et deux notes sur 100 : **Santé** et **Sécurité**.
 
@@ -21,6 +21,10 @@ Chaque audit produit un rapport classé par priorité (**critique**, **attention
 
 **Sécurité**
 - **Tunnels Cloudflare** : connexion du tunnel (point de contrôle `/ready`), version de cloudflared, services d'origine injoignables, noms d'hôte publiés et conteneurs ciblés, Cloudflare Access, services aussi joignables sans passer par le tunnel.
+- **Vu d'Internet** : chaque nom d'hôte publié est testé comme le ferait un visiteur, en passant par Cloudflare : IP de la maison qui fuit dans le DNS (nom non proxifié, DNS dynamique), Cloudflare Access actif ou non, application qui répond **sans authentification** (Stash), version de Nextcloud comparée aux dernières versions publiées, fichiers sensibles téléchargeables (`.git`, `.env`, dossier de données de Nextcloud), HSTS, HTTPS forcé, TLS obsolète.
+- **Nextcloud et Stash, de l'intérieur** : administrateurs sans double authentification, liens de partage publics sans mot de passe ni expiration (avec la liste), avertissements de sécurité de Nextcloud (`occ setupchecks`), mode debug, protection anti-brute-force qui ne voit pas les vraies adresses IP derrière le tunnel, applications à mettre à jour ; Stash sans identifiant, accès depuis Internet détecté par Stash.
+- **Routeur OPNsense** (clé API en lecture) : redirections de ports vers le réseau local, règles WAN, interface d'administration exposée, UPnP, SSH du routeur, double authentification, mises à jour en attente, détection d'intrusion.
+- **Réseau local** (scan `nmap` de tous les sous-réseaux) : inventaire des appareils, services risqués (Telnet, FTP, RDP, VNC, API Docker, bases de données, caméras…), nouveaux appareils depuis le scan précédent.
 - **Mises à jour** : correctifs de sécurité en attente, mises à jour automatiques, fin de support d'Ubuntu.
 - **Comptes et SSH** : UID 0, mots de passe vides, sudo sans mot de passe, groupe docker, clés SSH, configuration de sshd, tentatives de connexion depuis Internet, fail2ban / CrowdSec.
 - **Pare-feu** : UFW, ports Docker qui **contournent UFW**, bases de données exposées, Samba (SMB1, partages invités), NFS, redirections UPnP de la box.
@@ -39,11 +43,12 @@ sudo ./install.sh
 ```
 
 L'installateur :
-1. installe les dépendances (`jq`, `python3`, `smartmontools`, `openssl`, ainsi que `lynis`, `vainfo` et `pciutils` sauf avec `--minimal`) ;
+1. installe les dépendances (`jq`, `python3`, `smartmontools`, `curl`, `openssl`, ainsi que `lynis`, `vainfo`, `pciutils` et `nmap` sauf avec `--minimal`) ;
 2. copie le script dans `/usr/local/sbin/audite-moi` ;
 3. crée l'utilisateur système `audite-moi` (sans shell ni droits root) qui fait tourner l'interface web ;
 4. vous demande un mot de passe et crée un certificat HTTPS auto-signé ;
-5. active l'interface web, un audit complet automatique **chaque lundi vers 7 h 30**, et lance un premier audit.
+5. crée `/etc/audite-moi/audit.conf`, les réglages des contrôles réseau (lisible par root uniquement) ;
+6. active l'interface web, un audit complet automatique **chaque lundi vers 7 h 30**, et lance un premier audit.
 
 Ouvrez ensuite **`https://<ip-du-nas>:8765/`**. Le navigateur affichera un avertissement la première fois (certificat auto-signé) : acceptez-le.
 
@@ -53,7 +58,7 @@ Options utiles : `--port 9000`, `--ecoute 192.168.1.10`, `--sans-web` (script + 
 
 ### Interface web
 
-- une barre de navigation toujours visible : **Tableau de bord**, **Constats**, **Historique**, **Rapport complet**, et les boutons **▶ Lancer un audit** (complet, quelques minutes) / **Audit rapide** (sans Lynis, Trivy ni recherche des fichiers SUID), avec le déroulement affiché en direct ;
+- une barre de navigation toujours visible : **Tableau de bord**, **Constats**, **Historique**, **Rapport complet**, et les boutons **▶ Lancer un audit** (complet, quelques minutes) / **Audit rapide** (sans Lynis, Trivy, scan du réseau local ni recherche des fichiers SUID), avec le déroulement affiché en direct ;
 - les notes **Santé** / **Sécurité** et les compteurs (critiques, avertissements, OK, infos) sont **cliquables** : un clic n'affiche que les constats correspondants (ex. Sécurité + Critiques), un second clic annule ;
 - la liste des **constats** se filtre aussi par catégorie, niveau, section ou mot-clé (ex. « ssh », « jellyfin ») ; par défaut elle montre ce qu'il faut corriger, du plus urgent au moins urgent, avec la correction à appliquer ;
 - **évolution des notes** et **historique** : un clic sur une date affiche cet ancien audit dans le tableau de bord ;
@@ -74,6 +79,35 @@ Sans installation, le script fonctionne aussi seul : `sudo ./audite-moi.sh` (les
 Codes de sortie : `0` rien à signaler, `1` avertissements, `2` problèmes critiques, `3` erreur.
 
 ![Rapport](docs/rapport.png)
+
+## Contrôles réseau : Internet, Nextcloud, Stash, OPNsense, réseau local
+
+Ils se règlent dans `/etc/audite-moi/audit.conf` (créé par l'installateur ; `sudo nano /etc/audite-moi/audit.conf`) :
+
+| Réglage | Rôle |
+|---|---|
+| `EXTERNE=oui` | teste depuis Internet les noms d'hôte des tunnels Cloudflare (trouvés automatiquement) |
+| `DOMAINES_EXTRA="a.exemple.fr b.exemple.fr"` | autres noms à tester (si les routes du tunnel ne sont pas visibles) |
+| `OPNSENSE_URL`, `OPNSENSE_KEY`, `OPNSENSE_SECRET` | accès en lecture à OPNsense (voir ci-dessous) |
+| `SCAN_RESEAU=oui` | scan `nmap` du réseau local lors de l'audit complet |
+| `SCAN_RESEAUX="10.10.1.0/24 192.168.10.0/24"` | réseaux à scanner (par défaut : ceux d'OPNsense, sinon ceux du NAS ; 1 024 adresses au plus par réseau) |
+
+**Test depuis Internet.** Le NAS interroge le DNS public (DNS de Cloudflare en HTTPS, pour ignorer les surcharges DNS locales) puis visite chaque nom d'hôte *via* Cloudflare, exactement comme un visiteur. Les tests sont non intrusifs : quelques requêtes de lecture (page d'accueil, `status.php`, requête GraphQL de version pour Stash, présence de fichiers sensibles). Pour aller plus loin sur Nextcloud, le scanner officiel [scan.nextcloud.com](https://scan.nextcloud.com) est indiqué dans le rapport.
+
+**Nextcloud et Stash** sont trouvés automatiquement parmi les conteneurs (Nextcloud AIO compris) et interrogés de l'intérieur (`occ`, `config.yml`). Les liens de partage publics sont lus dans la base de données de Nextcloud ; le mot de passe de la base est transmis par l'entrée standard et n'apparaît ni dans les rapports ni dans la liste des processus.
+
+### Créer la clé API d'OPNsense
+
+1. **Système > Accès > Utilisateurs > +** : utilisateur `audite-moi`, cochez « Générer un mot de passe brouillé » (il ne se connectera jamais à l'interface).
+2. Dans **Privilèges effectifs**, ajoutez uniquement **System: Firmware** et **Diagnostics: Backup & Restore** (selon la version : **System: Configuration: Backups**). Enregistrez.
+3. Rouvrez l'utilisateur, section **Clés API**, bouton **+** : OPNsense télécharge un fichier `apikey.txt` contenant `key=` et `secret=`.
+4. Sur le NAS : `sudo ./install.sh --configurer-opnsense` (adresse du routeur, clé, secret ; la connexion est testée).
+
+Le privilège de sauvegarde permet de lire **toute** la configuration du routeur (c'est elle qui contient les redirections et les règles), y compris des empreintes de mots de passe et des clés VPN : la clé est donc rangée dans `audit.conf` en `600` (root seulement) et passée à `curl` par l'entrée standard ; la configuration est analysée dans un dossier temporaire privé, supprimé à la fin, et aucun secret n'est écrit dans les rapports. Supprimez cette clé dans OPNsense si vous arrêtez de vous en servir.
+
+### Scanner le réseau depuis le NAS ou depuis OPNsense ?
+
+Le scan part du NAS car c'est lui qui a les outils (nmap, rapports, historique) et qu'il peut se comparer d'une semaine à l'autre : il signale les nouveaux appareils. Mais il ne voit que ce que **le NAS** a le droit de joindre : si OPNsense isole un VLAN (objets connectés, invités) du réseau du NAS, ce VLAN apparaîtra vide, ce qui est justement le signe que l'isolation fonctionne. La vue complète des règles entre sous-réseaux, elle, vient de l'audit de la configuration d'OPNsense. Les deux se complètent ; il n'est pas utile d'installer nmap sur le routeur.
 
 ## Sécurité de l'interface web
 
@@ -106,6 +140,7 @@ services:
 | vainfo | profils d'encodage VA-API | `sudo apt install vainfo` |
 | radeontop / intel-gpu-tools | charge instantanée du GPU | `sudo apt install radeontop intel-gpu-tools` |
 | miniupnpc | redirections UPnP de la box | `sudo apt install miniupnpc` |
+| nmap | scan du réseau local | `sudo apt install nmap` |
 
 ## Dépannage
 
