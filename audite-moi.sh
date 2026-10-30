@@ -2708,10 +2708,26 @@ check_ssh() {
   [[ $kbd == yes && $usepam == yes ]] && SSH_PASS=1
   info "Serveur SSH $( ((active)) && echo actif || echo installé mais inactif)" "Port(s) : ${port% } — écoute : ${lad% }"
 
-  # Journaux d'authentification (7 jours)
-  local lf="$WORK/ssh.log"
-  have journalctl && tmo 60 journalctl --since "7 days ago" --no-pager -q -o short-iso -t sshd -t sshd-session > "$lf" 2>/dev/null
-  [[ -s $lf ]] || cat /var/log/auth.log.1 /var/log/auth.log 2>/dev/null | grep -E 'sshd(-session)?\[' > "$lf"
+  # Journaux d'authentification (7 jours) : une collecte vide n'est fiable
+  # que si au moins une source a pu être lue.
+  local lf="$WORK/ssh.log" log_ok=0 auth_dir=${AUDITE_MOI_AUTH_LOG_DIR:-/var/log}
+  : > "$lf"
+  if have journalctl; then
+    if tmo 60 journalctl --since "7 days ago" --no-pager -q -o short-iso -t sshd -t sshd-session > "$lf" 2>/dev/null; then
+      log_ok=1
+    fi
+  fi
+  local -a auth_files=()
+  local af
+  for af in "$auth_dir/auth.log.1" "$auth_dir/auth.log"; do
+    [[ -f $af && -r $af ]] && auth_files+=("$af")
+  done
+  if (("${#auth_files[@]}")); then
+    if cat "${auth_files[@]}" >/dev/null 2>&1; then
+      log_ok=1
+      grep -hE 'sshd(-session)?\\[' "${auth_files[@]}" >> "$lf" || true
+    fi
+  fi
   local fails nfail ipc acc
   fails=$(grep -E 'Failed (password|publickey|keyboard)|Invalid user|Connection closed by (authenticating|invalid) user|Disconnected from (authenticating|invalid) user|maximum authentication attempts' "$lf")
   nfail=$(nlines "$fails")
@@ -2754,13 +2770,17 @@ check_ssh() {
   grep -qE '(diffie-hellman-group1-sha1|diffie-hellman-group-exchange-sha1)' <<< "$kex" && weak+="échanges de clés : $kex"
   [[ -n $weak ]] && warn "Algorithmes SSH obsolètes acceptés" "$weak" "Retirez les directives Ciphers / MACs / KexAlgorithms personnalisées pour revenir aux valeurs sûres par défaut d'OpenSSH"
 
-  if ((${#pub[@]})); then
-    ((SSH_PASS)) || warn "SSH joignable depuis Internet" "$nfail tentatives échouées en 7 jours depuis ${#pub[@]} adresse(s) IP publique(s), par ex. : $(join_list ', ' "${pub[@]:0:8}")." \
-      "Supprimez la redirection du port SSH sur la box ; pour l'accès à distance, utilisez un VPN (WireGuard, Tailscale) ou Cloudflare Access"
-  elif ((nfail > 0)); then
-    info "$nfail tentative(s) SSH échouée(s) en 7 jours, depuis le réseau local" "$(head -n 5 <<< "$ipc")"
+  if ((log_ok)); then
+    if (("${#pub[@]}")); then
+      ((SSH_PASS)) || warn "SSH joignable depuis Internet" "$nfail tentatives échouées en 7 jours depuis ${#pub[@]} adresse(s) IP publique(s), par ex. : $(join_list ', ' "${pub[@]:0:8}")." \
+        "Supprimez la redirection de port SSH sur la box ; pour l'accès à distance, utilisez un VPN (WireGuard, Tailscale) ou Cloudflare Access"
+    elif ((nfail > 0)); then
+      info "$nfail tentative(s) SSH échouée(s) en 7 jours, depuis le réseau local" "$(head -n 5 <<< "$ipc")"
+    else
+      ok "Aucune tentative de connexion SSH échouée (7 jours)"
+    fi
   else
-    ok "Aucune tentative de connexion SSH échouée (7 jours)"
+    info "Journaux SSH indisponibles" "Ni journalctl ni les fichiers auth.log ne sont lisibles ; les tentatives et connexions SSH des 7 derniers jours ne peuvent pas être vérifiées."
   fi
   ((${#accpub[@]})) && warn "Connexions SSH réussies depuis Internet (7 jours)" "$(printf '%s\n' "${accpub[@]}")" \
     "Vérifiez qu'il s'agit bien de vous ; sinon changez immédiatement mots de passe et clés, et examinez \`last -i\`"
