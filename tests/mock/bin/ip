@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+if [[ ${AUDITE_MOI_IP_ROUTE_ECHEC:-0} == 1 && "$*" == "route show default" ]]; then exit 1; fi
+if [[ ${AUDITE_MOI_IP_IPV6_ECHEC:-0} == 1 && "$*" == "-6 addr show scope global" ]]; then exit 1; fi
 case "$*" in
   "-br addr") printf 'lo UNKNOWN 127.0.0.1/8\nenp3s0 UP 192.168.1.10/24 2a01:e0a:1:2::10/64\n' ;;
   "route") echo "default via 192.168.1.1 dev enp3s0 proto dhcp" ;;
