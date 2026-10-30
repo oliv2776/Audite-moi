@@ -276,21 +276,37 @@ def lire_disque(nom, info, membre, avant, maintenant):
 
 
 def disques(membres, precedent, maintenant):
+    """Inventorie les disques ; ne jamais interpréter un échec SMART comme une disparition."""
+    avant = {d["nom"]: d for d in precedent.get("disques", []) if isinstance(d, dict) and d.get("nom")}
     rc, out = cmd("smartctl", "--scan-open", "-j")
     try:
-        scan = json.loads(out).get("devices", [])
+        donnees = json.loads(out) if out.strip() else None
     except ValueError:
-        scan = []
-    avant = {d["nom"]: d for d in precedent.get("disques", []) if isinstance(d, dict) and d.get("nom")}
+        donnees = None
+    scan = donnees.get("devices") if isinstance(donnees, dict) else None
+    if rc != 0 or not isinstance(scan, list):
+        # Un inventaire vide après une erreur de commande/JSON n'est pas une preuve
+        # que tous les disques ont été débranchés. Conserver les dernières mesures
+        # et signaler explicitement qu'elles sont périmées.
+        perimes = []
+        for disque in avant.values():
+            copie = dict(disque)
+            copie["donnees_perimees"] = True
+            copie["raison_peremption"] = "Inventaire SMART indisponible ; dernière mesure conservée"
+            perimes.append(copie)
+        perimes.sort(key=lambda d: (d.get("pool") is None, d.get("pool") or "", d.get("role") != "donnees", d["nom"]))
+        return perimes, False
     res, vus = [], set()
     for info in scan:
+        if not isinstance(info, dict):
+            continue
         nom = os.path.basename(info.get("name", ""))
         if not nom or nom in vus:
             continue
         vus.add(nom)
         res.append(lire_disque(nom, info, membres.get(nom, {}), avant.get(nom), maintenant))
     res.sort(key=lambda d: (d.get("pool") is None, d.get("pool") or "", d.get("role") != "donnees", d["nom"]))
-    return res
+    return res, True
 
 
 # ---------------------------------------------------------- fichiers d'état --
@@ -608,11 +624,16 @@ def alertes(conf, mes, ecoute, chemin_etat, rapports, maintenant, groupe):
         elif j is None or j > 2 * S("alerte_pool_plein_jours", 30):
             a["bientot"] = False
 
-    # Disques : changement d'état, erreurs CRC en hausse, disque disparu
+    # Disques : changement d'état, erreurs CRC en hausse, disque disparu.
+    # Un inventaire SMART en échec ne permet ni de confirmer une disparition,
+    # ni de modifier l'état mémorisé des disques.
     sd = st.setdefault("disques", {})
     vus = set()
+    scan_disques_ok = mes.get("smart_scan_ok", True)
     for d in mes["disques"]:
         vus.add(d["nom"])
+        if not scan_disques_ok:
+            continue
         a = sd.get(d["nom"])
         etat = d.get("etat")
         nom = "{} ({})".format(d["nom"], d.get("modele") or d.get("type") or "?")
@@ -628,7 +649,7 @@ def alertes(conf, mes, ecoute, chemin_etat, rapports, maintenant, groupe):
             msgs.append("🟠 <b>Erreurs CRC en hausse sur {}</b> : {} → {}\nCâble SATA ou connecteur à vérifier.".format(e(nom), a["crc"], d["crc"]))
         sd[d["nom"]] = {"etat": etat, "crc": d.get("crc"), "vu": maintenant}
     for nom, a in list(sd.items()):
-        if nom not in vus:
+        if scan_disques_ok and nom not in vus:
             if not a.get("absent"):
                 msgs.append("🔴 <b>Disque {} introuvable</b>\nIl n'apparaît plus : débranché, câble ou disque mort ?".format(e(nom)))
                 a["absent"] = True
@@ -740,7 +761,9 @@ def main():
     etat = os.path.dirname(os.path.abspath(a.sortie))
     precedent = lire_json(a.sortie, {})
     p, membres = pools()
-    res = {"horodatage": maintenant, "pools": p, "volumes": volumes(), "disques": disques(membres, precedent, maintenant)}
+    liste_disques, scan_smart_ok = disques(membres, precedent, maintenant)
+    res = {"horodatage": maintenant, "pools": p, "volumes": volumes(), "disques": liste_disques,
+           "smart_scan_ok": scan_smart_ok}
     for pool in res["pools"]:
         etats = [d.get("etat") for d in res["disques"] if d.get("pool") == pool["nom"]]
         types = {d.get("type") for d in res["disques"] if d.get("pool") == pool["nom"] and d.get("role") == "donnees" and d.get("type")}
