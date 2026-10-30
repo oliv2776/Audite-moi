@@ -10,10 +10,10 @@ Group=audite-moi
 ExecStart=/usr/bin/python3 /usr/local/lib/audite-moi/audite-moi-web.py --config /etc/audite-moi/web.json
 Restart=on-failure
 RestartSec=5
-# Durcissement : le serveur web n'a besoin que de lire les rapports et de déposer une demande
+# Durcissement : le serveur web lit les rapports, dépose des demandes et enregistre les constats acceptés
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/audite-moi/demande
+ReadWritePaths=/var/lib/audite-moi/demande /var/lib/audite-moi/reglages
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

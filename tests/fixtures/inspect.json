@@ -534,6 +534,14 @@
         "Config": {
           "max-size": "10m"
         }
+      },
+      "PortBindings": {
+        "3000/tcp": [
+          {
+            "HostIp": "",
+            "HostPort": "3000"
+          }
+        ]
       }
     },
     "Mounts": [],

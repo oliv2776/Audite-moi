@@ -1,5 +1,5 @@
 [Unit]
-Description=Audite-moi : relevé des disques et des pools (page Matériel)
+Description=Audite-moi : relevé des disques et des pools, connexions reçues et alertes Telegram
 Documentation=https://github.com/oliv2776/Audite-moi
 After=zfs.target
 
@@ -9,10 +9,10 @@ ExecStart=/usr/bin/python3 /usr/local/lib/audite-moi/audite-moi-mesures
 Nice=10
 IOSchedulingClass=idle
 TimeoutStartSec=10min
-# Lecture seule : smartctl et zpool ont besoin de root, mais rien n'est modifié
+# Lecture seule : smartctl, zpool et la table des connexions ont besoin de root, mais rien n'est modifié
 ProtectSystem=strict
 ReadWritePaths=/var/lib/audite-moi/etat /var/lib/audite-moi/demande
 ProtectHome=read-only
 PrivateTmp=yes
-PrivateNetwork=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 NoNewPrivileges=yes

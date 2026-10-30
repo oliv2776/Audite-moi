@@ -3,6 +3,8 @@
 F=$AUDITE_MOI_FIX; I=$F/inspect.json
 occ() {   # réponses simulées de « php occ » (Nextcloud)
   case $1 in
+    status) echo "  - installed: true" ;;
+    config:system:set*|config:app:set*|config:app:delete*|app:enable*|"twofactorauth:enforce --on"|"twofactorauth:enforce --off") echo "occ $1" >> "${AUDITE_MOI_TRACE:-/dev/null}"; echo "ok" ;;
     "status --output=json") echo '{"installed":true,"version":"29.0.3.4","versionstring":"29.0.3","edition":"","maintenance":false,"needsDbUpgrade":false}' ;;
     "twofactorauth:enforce") echo "Two-factor authentication is not enforced" ;;
     "group:list --output=json") echo '{"admin":["admin","olivier"],"users":["olivier","marie"]}' ;;
@@ -31,8 +33,15 @@ case $cmd in
       *SecurityOptions*) echo '["name=apparmor","name=seccomp,profile=builtin","name=cgroupns"]' ;;
       *ServerVersion*) echo '27.3.1|zfs|/var/lib/docker|json-file|2' ;;
     esac ;;
-  ps) jq -r '.[].Id' "$I" ;;
-  inspect) cat "$I" ;;
+  ps) if [[ $* == *Names* ]]; then jq -r '.[].Name | ltrimstr("/")' "$I"; else jq -r '.[].Id' "$I"; fi ;;
+  update) echo "docker update $*" >> "${AUDITE_MOI_TRACE:-/dev/null}"; echo "${*: -1}" ;;
+  inspect)
+    if [[ $1 == -f ]]; then n=${*: -1}
+      case $2 in
+        *RestartPolicy*) jq -r --arg n "/$n" '.[] | select(.Name == $n) | .HostConfig.RestartPolicy.Name // ""' "$I" ;;
+        *Config.Image*) jq -r --arg n "/$n" '.[] | select(.Name == $n) | .Config.Image' "$I" ;;
+      esac
+    else cat "$I"; fi ;;
   image) cat "$F/images.txt" ;;
   stats)
     cat <<EOT

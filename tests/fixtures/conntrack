@@ -1,0 +1,3 @@
+ipv4     2 tcp      6 431999 ESTABLISHED src=172.18.0.2 dst=192.168.1.10 sport=40312 dport=9443 src=172.18.0.106 dst=172.18.0.2 sport=9443 dport=40312 [ASSURED] mark=0 zone=0 use=2
+ipv4     2 udp      17 25 src=89.84.1.2 dst=192.168.1.10 sport=51820 dport=51820 src=192.168.1.10 dst=89.84.1.2 sport=51820 dport=51820 mark=0 zone=0 use=2
+ipv4     2 tcp      6 102 TIME_WAIT src=192.168.1.10 dst=1.1.1.1 sport=55000 dport=443 src=1.1.1.1 dst=192.168.1.10 sport=443 dport=55000 [ASSURED] mark=0 zone=0 use=2

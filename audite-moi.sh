@@ -17,7 +17,7 @@
 #  https://github.com/oliv2776/Audite-moi
 # =============================================================================
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 PROG=${0##*/}
 NL=$'\n'
 TAB=$'\t'
@@ -32,6 +32,9 @@ SHARED_GROUP=audite-moi
 
 # ------------------------------------------------------------------- options --
 CONF_FILE=/etc/audite-moi/audit.conf
+ACCEPTES_FILE=${AUDITE_MOI_ACCEPTES:-/var/lib/audite-moi/reglages/acceptes.json}
+TRAFIC_FILE=${AUDITE_MOI_TRAFIC:-/var/lib/audite-moi/etat/trafic.json}
+MESURES_FILE=${AUDITE_MOI_MESURES:-/var/lib/audite-moi/etat/mesures.json}
 OUTDIR="" OUTGROUP="" KEEP=0 QUICK=0 NO_WAKE=0 APT_UPDATE=0 INSTALL_DEPS=0 USE_COLOR=1
 
 usage() {
@@ -149,6 +152,7 @@ sanitize() {
 
 # ---------------------------------------------------------------- résultats --
 declare -a R_SEC=() R_LVL=() R_TTL=() R_MSG=() R_FIX=()   # constats
+declare -a R_ACT=() R_ACC=() R_LV0=()   # corrections proposées (JSON), raison d'acceptation, niveau d'origine
 declare -a T_SEC=() T_TTL=() T_FILE=()                    # tableaux
 declare -a X_SEC=() X_TTL=() X_FILE=()                    # données brutes
 CUR="" SEC_N=0
@@ -177,7 +181,7 @@ declare -A SEC_CAT=(
   [reseau]=sante [sauvegardes]=sante [cloudflare]=secu [exposition]=secu [applis]=secu [opnsense]=secu [lan]=secu [maj]=secu [comptes]=secu [ssh]=secu
   [parefeu]=secu [dockersec]=secu [fichiers]=secu [noyau]=secu [journaux]=secu [outils]=secu
 )
-declare -A LVL_FR=([CRIT]="Critique" [WARN]="Attention" [OK]="OK" [INFO]="Info")
+declare -A LVL_FR=([CRIT]="Critique" [WARN]="Attention" [OK]="OK" [INFO]="Info" [ACC]="Accepté")
 
 section() {
   CUR=$1; SEC_N=$((SEC_N + 1))
@@ -186,7 +190,7 @@ section() {
 
 add() {   # add NIVEAU "titre" ["détail"] ["correctif"]   (le texte entre `…` est affiché comme du code)
   local lvl=$1 ttl=$2 msg=${3:-} fix=${4:-} c tag first
-  R_SEC+=("$CUR"); R_LVL+=("$lvl"); R_TTL+=("$ttl"); R_MSG+=("$msg"); R_FIX+=("$fix")
+  R_SEC+=("$CUR"); R_LVL+=("$lvl"); R_TTL+=("$ttl"); R_MSG+=("$msg"); R_FIX+=("$fix"); R_ACT+=(""); R_ACC+=(""); R_LV0+=("$lvl")
   case $lvl in
     CRIT) c=$C_R tag="CRIT" ;; WARN) c=$C_Y tag="WARN" ;; OK) c=$C_G tag=" OK " ;; *) c=$C_B tag="INFO" ;;
   esac
@@ -194,6 +198,34 @@ add() {   # add NIVEAU "titre" ["détail"] ["correctif"]   (le texte entre `…`
   ((${#first} > 100)) && first="${first:0:97}…"
   if [[ -n $first ]]; then printf '  %s[%s]%s %s %s— %s%s\n' "$c" "$tag" "$C_0" "$ttl" "$C_D" "$first" "$C_0"
   else printf '  %s[%s]%s %s\n' "$c" "$tag" "$C_0" "$ttl"; fi
+}
+# action TYPE CIBLE LIBELLÉ APERÇU : propose une correction en un clic pour le dernier constat
+# (l'aperçu n'est qu'affiché : audite-moi-corriger recalcule et vérifie lui-même la commande)
+action() {
+  local i=$(( ${#R_ACT[@]} - 1 )) a
+  ((i >= 0)) || return 0
+  a=$(jq -cn --arg t "$1" --arg c "$2" --arg l "$3" --arg p "$4" '{type: $t, cible: $c, libelle: $l, apercu: $p}')
+  if [[ -z ${R_ACT[i]} ]]; then R_ACT[i]="[$a]"; else R_ACT[i]="${R_ACT[i]%]},$a]"; fi
+}
+cle_constat() {   # identifiant stable d'un constat : section|titre, chiffres remplacés par « # »
+  local k="$1|$2"
+  k=${k//[0-9]/#}
+  while [[ $k == *'##'* ]]; do k=${k//'##'/'#'}; done
+  printf '%s' "$k"
+}
+# Constats acceptés depuis l'interface (« c'est voulu ») : ils ne comptent plus dans la note
+appliquer_acceptes() {
+  [[ -f $ACCEPTES_FILE ]] || return 0
+  local -A ACC=()
+  local k r i
+  while IFS=$US read -r k r; do [[ -n $k ]] && ACC[$k]=${r:-accepté}; done < <(jq -r 'to_entries[] | "\(.key)\u001f\(.value.raison // "")"' "$ACCEPTES_FILE" 2>/dev/null)
+  ((${#ACC[@]})) || return 0
+  for i in "${!R_LVL[@]}"; do
+    [[ ${R_LVL[i]} == OK ]] && continue
+    k=$(cle_constat "${R_SEC[i]}" "${R_TTL[i]}")
+    [[ -n ${ACC[$k]:-} ]] || continue
+    R_ACC[i]=${ACC[$k]}; R_LVL[i]=ACC
+  done
 }
 ok()   { add OK   "$@"; }
 info() { add INFO "$@"; }
@@ -749,6 +781,7 @@ check_disques() {
     ok "Surveillance continue smartd active"
   else
     warn "smartd n'est pas actif" "Les disques ne sont surveillés qu'au lancement de cet audit." "\`sudo systemctl enable --now smartmontools\`"
+    action smartd-activer "smartmontools" "Activer smartd" "sudo systemctl enable --now smartmontools"
   fi
   tbl "Disques" < <(printf 'Disque\tModèle\tN° de série\tType\tCapacité\tPool ZFS\tSMART\tTemp.\tHeures\tRéalloués / en attente / irrécup.\tCRC\tUsure\tDernier auto-test\n'; printf '%s\n' "${rows[@]}")
 }
@@ -836,6 +869,7 @@ check_zfs() {
         elif ((d > 40)); then
           warn "Pool $p : dernier scrub il y a $d jours" "Un scrub mensuel détecte et corrige la corruption silencieuse avant qu'elle ne devienne irréparable." \
             "\`sudo zpool scrub $p\`, puis vérifiez la planification des scrubs"
+          action zfs-scrub "$p" "Lancer un scrub de $p" "sudo zpool scrub $p"
           scrub_disp="@WARN il y a $d j"
         else
           ok "Pool $p : dernier scrub il y a $d jour(s)" "Réparé : $rep, erreurs : ${nerr:-0}"
@@ -854,6 +888,7 @@ check_zfs() {
         info "Pool $p : dernier resilver" "$scan — la date du dernier scrub n'est plus affichée après un resilver." ;;
       "none requested"*|"")
         warn "Pool $p : aucun scrub n'a jamais été lancé" "Le scrub vérifie toutes les données et répare la corruption silencieuse." "\`sudo zpool scrub $p\`"
+        action zfs-scrub "$p" "Lancer un scrub de $p" "sudo zpool scrub $p"
         scrub_disp="@WARN jamais" ;;
       *cancel*)
         warn "Pool $p : le dernier scrub a été annulé" "$scan" "\`sudo zpool scrub $p\`"; scrub_disp="@WARN annulé" ;;
@@ -871,6 +906,7 @@ check_zfs() {
       else
         warn "Pool $p (SSD) : aucun TRIM" "Sans TRIM, les SSD perdent en performances et s'usent davantage. (Le TRIM mensuel d'Ubuntu ne traite par défaut que les pools 100 % NVMe.)" \
           "\`sudo zpool set autotrim=on $p\` (ou un TRIM mensuel : \`sudo zfs set org.debian:periodic-trim=enable $p\`)"
+        action zfs-autotrim "$p" "Activer le TRIM automatique de $p" "sudo zpool set autotrim=on $p"
       fi
     fi
     prow+=("$p$TAB$media$TAB@$( [[ $health == ONLINE ]] && echo OK || echo CRIT) $health$TAB$(hbytes "$size")$TAB$(hbytes "$alloc")$TAB$(hbytes "$free")$TAB@$caplvl $cap %$TAB$frag %$TAB$scrub_disp")
@@ -923,6 +959,26 @@ check_zfs() {
       | grep -vE '/[0-9a-f]{64}(-init)?[[:space:]]' | head -n 150 \
       | numfmt --to=iec-i --suffix=o --format='%.1f' --field=2-4 -d "$TAB" --invalid=ignore 2>/dev/null)
   mapfile -t ZFS_MOUNTS < <(tmo 60 zfs list -H -o mountpoint,mounted -t filesystem 2>/dev/null | awk -F'\t' '$2 == "yes" && $1 ~ /^\// {print $1}' | grep -vE '/[0-9a-f]{64}' | head -n 200)
+  zfs_tendances
+}
+
+# Rythme de remplissage des pools (relevés horaires d'audite-moi-mesures, régression sur 30 jours)
+zfs_tendances() {
+  [[ -f $MESURES_FILE ]] || return 0
+  local p opj j90 jp obs
+  while IFS=$US read -r p opj j90 jp obs; do
+    isint "$opj" || continue
+    if ((opj <= 0)); then
+      ok "Pool $p : occupation stable ou en baisse (sur $obs jours)"
+    elif isint "$j90" && ((j90 <= 60)); then
+      add "$( ((j90 <= 14)) && echo CRIT || echo WARN)" "Pool $p rempli à 90 % dans environ $j90 jours"         "Au rythme des $obs derniers jours (+$(hbytes "$opj") par jour)$(isint "$jp" && echo ", il sera plein dans environ $jp jours"). Au-delà de 80-90 %, ZFS ralentit nettement."         "Libérez de la place (snapshots anciens : \`zfs list -t snapshot -o name,used -s used\`, fichiers en double, corbeilles) ou prévoyez des disques"
+    elif isint "$j90"; then
+      info "Pool $p : +$(hbytes "$opj") par jour" "90 % atteints dans environ $(( j90 / 30 )) mois au rythme des $obs derniers jours."
+    elif isint "$jp"; then
+      info "Pool $p : +$(hbytes "$opj") par jour" "Déjà au-delà de 90 % ; plein dans environ $jp jours."
+    fi
+  done < <(jq -r '.pools[]? | select(.tendance) | [.nom, (.tendance.octets_par_jour | tostring), ((.tendance.jours_avant_90 // "") | tostring),
+           ((.tendance.jours_avant_plein // "") | tostring), (.tendance.jours_observes | tostring)] | join("\u001f")' "$MESURES_FILE" 2>/dev/null)
 }
 
 check_docker() {
@@ -1269,6 +1325,72 @@ check_reseau() {
   fi
 }
 
+# Vérifie que les sauvegardes tournent vraiment : dernière exécution réussie et copie hors du serveur
+sauvegardes_verif() {
+  local -a lignes=() distants=()
+  local u svc res st ts age nom typ cible h n
+  local re='restic|borg|kopia|rclone|syncoid|zrepl|duplicity|rsnapshot|backup|sauvegarde'
+  # 1) tâches planifiées (minuteurs systemd) de sauvegarde
+  while read -r u; do
+    [[ -n $u ]] || continue
+    svc=$(systemctl show -p Unit --value "$u" 2>/dev/null); svc=${svc:-${u%.timer}.service}
+    res=$(systemctl show -p Result --value "$svc" 2>/dev/null)
+    st=$(systemctl show -p ExecMainStatus --value "$svc" 2>/dev/null)
+    ts=$(systemctl show -p ExecMainExitTimestamp --value "$svc" 2>/dev/null)
+    age=""; [[ -n $ts && $ts != n/a ]] && age=$(( (NOW - $(date -d "$ts" +%s 2>/dev/null || echo "$NOW")) / 3600 ))
+    if [[ $res != success || ( -n $st && $st != 0 ) ]]; then
+      warn "Sauvegarde « ${svc%.service} » : dernière exécution en échec" "Résultat : ${res:-?}, code ${st:-?}${age:+, il y a $age h}." "Consultez le journal : \`journalctl -u $svc -n 50\`"
+      lignes+=("${svc%.service}$TAB@CRIT échec$TAB${age:+il y a $age h}")
+    elif [[ -z $age ]]; then
+      info "Sauvegarde « ${svc%.service} » : jamais exécutée depuis le démarrage" "Le minuteur $u existe mais le service n'a pas encore tourné."
+      lignes+=("${svc%.service}$TAB@INFO pas encore exécutée$TAB")
+    elif ((age > 8 * 24)); then
+      warn "Sauvegarde « ${svc%.service} » : dernière réussite il y a $((age / 24)) jours" "La tâche ne semble plus s'exécuter." "\`systemctl status $u\` et \`journalctl -u $svc -n 50\`"
+      lignes+=("${svc%.service}$TAB@WARN il y a $((age / 24)) j$TAB")
+    else
+      lignes+=("${svc%.service}$TAB@OK réussie${TAB}il y a $age h")
+    fi
+    local ex; ex=$(systemctl show -p ExecStart --value "$svc" 2>/dev/null)
+    grep -qE '[a-z0-9_.-]+@[a-z0-9_.-]+:|sftp:|s3:|b2:|rclone:|rest:|azure:|gs:|swift:|ssh://' <<< "$ex" && distants+=("${svc%.service}")
+  done < <(systemctl list-timers --all --no-legend 2>/dev/null | grep -Ei "$re" | grep -v dpkg-db-backup | grep -oE '[A-Za-z0-9@_.:-]+\.timer' | sort -u)
+  grep -rhsE "$re|zfs send" /etc/crontab /etc/cron.d /var/spool/cron/crontabs 2>/dev/null | grep -v '^[[:space:]]*#' \
+    | grep -qE '[a-z0-9_.-]+@[a-z0-9_.-]+:|sftp:|s3:|b2:|rclone:|rest:|ssh ' && distants+=("cron")
+  # 2) contrôles déclarés dans audit.conf : SAUVEGARDES="nom:type:cible:heures …"
+  for n in $(cfg SAUVEGARDES); do
+    IFS=: read -r nom typ cible h <<< "$n"
+    isint "${h:-}" || h=26
+    local der=""
+    case $typ in
+      fichier) [[ -e $cible ]] && der=$(find "$cible" -maxdepth 3 -type f -printf '%T@\n' 2>/dev/null | sort -n | tail -n 1); der=${der%.*} ;;
+      zfs)     der=$(tmo 30 zfs list -H -p -t snapshot -o creation -s creation -d 1 "$cible" 2>/dev/null | tail -n 1) ;;
+      unite)   ts=$(systemctl show -p ExecMainExitTimestamp --value "$cible" 2>/dev/null)
+               [[ $(systemctl show -p Result --value "$cible" 2>/dev/null) == success && -n $ts && $ts != n/a ]] && der=$(date -d "$ts" +%s 2>/dev/null) ;;
+      *) info "Contrôle de sauvegarde « $nom » : type inconnu ($typ)" "" "Types possibles : fichier, zfs, unite (voir README)"; continue ;;
+    esac
+    if ! isint "${der:-}"; then
+      warn "Sauvegarde « $nom » : aucune trace trouvée" "Contrôle : $typ $cible" "Vérifiez la sauvegarde et le chemin indiqué dans SAUVEGARDES (audit.conf)"
+      lignes+=("$nom$TAB@WARN introuvable$TAB")
+    elif (( (NOW - der) / 3600 > h )); then
+      warn "Sauvegarde « $nom » : dernière copie il y a $(( (NOW - der) / 3600 )) h" "Au-delà du délai prévu ($h h). Contrôle : $typ $cible" "Vérifiez que la tâche de sauvegarde tourne toujours"
+      lignes+=("$nom$TAB@WARN il y a $(( (NOW - der) / 3600 )) h$TAB")
+    else
+      lignes+=("$nom$TAB@OK à jour${TAB}il y a $(( (NOW - der) / 3600 )) h")
+    fi
+  done
+  if ((${#lignes[@]})); then
+    tbl "Dernières sauvegardes" < <(printf 'Sauvegarde\tÉtat\tDernière réussite\n'; printf '%s\n' "${lignes[@]}")
+    if ((${#distants[@]})); then
+      ok "Copie hors du serveur détectée : $(join_list ', ' "${distants[@]}")"
+    else
+      info "Aucune copie hors du serveur détectée" "Les sauvegardes semblent rester sur cette machine ou sur le réseau local : un incendie, un vol ou un rançongiciel qui atteint le réseau peut tout emporter." \
+        "Ajoutez une copie distante chiffrée (restic ou kopia vers un stockage en ligne, syncoid vers un autre site)"
+    fi
+  elif [[ -z $(cfg SAUVEGARDES) ]]; then
+    info "Vérification des sauvegardes non configurée" "Aucune tâche de sauvegarde planifiée n'a été trouvée à vérifier automatiquement (sauvegarde dans un conteneur, sur un autre appareil…)." \
+      "Indiquez dans /etc/audite-moi/audit.conf ce qui prouve qu'une sauvegarde a réussi, ex. \`SAUVEGARDES=\"photos:zfs:usb/photos:26 cloud:fichier:/mnt/backup/dernier:48\"\` (voir README)"
+  fi
+}
+
 check_sauvegardes() {
   section sauvegardes
   local p n last age
@@ -1322,6 +1444,7 @@ check_sauvegardes() {
     warn "Aucun outil de sauvegarde détecté" "La redondance ZFS (miroir, RAIDZ) protège d'une panne de disque, pas d'une suppression, d'un rançongiciel, d'un incendie ou d'une erreur de manipulation. Règle 3-2-1 : 3 copies, 2 supports, 1 hors site." \
       "Par exemple \`syncoid\` (paquet sanoid) vers un autre pool ou serveur, ou restic/kopia vers un stockage distant chiffré"
   fi
+  sauvegardes_verif
 }
 
 # ------------------------------------------------- tunnels Cloudflare -----
@@ -1493,6 +1616,7 @@ cf_docker() {
   if [[ -z $pol || $pol == no ]]; then
     warn "Tunnel « $name » sans redémarrage automatique" "Le conteneur cloudflared a été lancé sans politique de redémarrage : après un redémarrage du NAS ou de Docker, vos services ne seront plus joignables depuis Internet." \
       "Immédiatement : \`docker update --restart unless-stopped $name\` ; idéalement, décrivez le tunnel dans un docker-compose avec \`restart: unless-stopped\`"
+    action docker-restart "$name" "Redémarrage automatique de $name" "docker update --restart unless-stopped $name"
   fi
   CF_NETS+=" $(jq -r --arg id "$id" '.[] | select(.Id == $id) | (.NetworkSettings.Networks // {}) | keys[]' "$INSPECT" | tr '\n' ' ')"
   cf_analyse "$name" "$meta" "$recent" "$pid" docker "$id"
@@ -1902,6 +2026,7 @@ audit_nextcloud() {
     add "$lvl" "Nextcloud : compte(s) administrateur sans double authentification : $(join_list ', ' "${no2fa[@]}")" \
       "Un mot de passe administrateur deviné ou volé (fuite, hameçonnage) donne accès à tous les fichiers de tous les utilisateurs. Administrateurs : $(tr '\n' ' ' <<< "$admins")— gardez-en le moins possible et utilisez un compte ordinaire au quotidien." \
       "Activez l'application « Two-Factor TOTP Provider » (\`docker exec -u www-data $NC_C php occ app:enable twofactor_totp\`), configurez-la pour chaque admin (Paramètres personnels > Sécurité), puis imposez-la : Paramètres d'administration > Sécurité > « Imposer l'authentification à deux facteurs »"
+    action nc-2fa-imposer "$NC_C" "Imposer la double authentification (Nextcloud)" "occ app:enable twofactor_totp && occ twofactorauth:enforce --on"
   elif [[ -n $admins ]]; then
     ok "Nextcloud : administrateurs protégés par double authentification" "$(tr '\n' ' ' <<< "$admins")"
   fi
@@ -1931,6 +2056,7 @@ audit_nextcloud() {
   fi
   if [[ $lp != yes ]]; then
     info "Nextcloud : mot de passe non imposé sur les nouveaux liens publics" "" "Paramètres d'administration > Partage > « Imposer la protection par mot de passe »"
+    action nc-liens-mdp "$NC_C" "Imposer un mot de passe sur les nouveaux liens" "occ config:app:set core shareapi_enforce_links_password --value=yes"
   fi
   [[ $ep != yes ]] && info "Nextcloud : pas d'expiration imposée sur les liens publics" "" "Paramètres d'administration > Partage > « Imposer une date d'expiration »"
 
@@ -1947,7 +2073,10 @@ audit_nextcloud() {
 
   # Protection contre le brute-force : Nextcloud voit-il les vraies adresses ?
   [[ $($OCC config:system:get auth.bruteforce.protection.enabled) == false ]] && warn "Nextcloud : protection contre le brute-force désactivée" "" "Retirez \`'auth.bruteforce.protection.enabled' => false\` de config.php"
-  [[ $($OCC config:system:get debug) == true ]] && warn "Nextcloud : mode debug activé" "Le mode debug affiche des détails internes aux visiteurs et ralentit Nextcloud." "\`docker exec -u www-data $NC_C php occ config:system:set debug --value=false --type=boolean\`"
+  if [[ $($OCC config:system:get debug) == true ]]; then
+    warn "Nextcloud : mode debug activé" "Le mode debug affiche des détails internes aux visiteurs et ralentit Nextcloud." "\`docker exec -u www-data $NC_C php occ config:system:set debug --value=false --type=boolean\`"
+    action nc-debug-off "$NC_C" "Désactiver le mode debug (Nextcloud)" "occ config:system:set debug --value=false --type=boolean"
+  fi
   local logf dd; logf=$($OCC config:system:get logfile); dd=$($OCC config:system:get datadirectory)
   [[ -n $logf ]] || logf="$dd/nextcloud.log"
   local addrs; addrs=$(tmo 30 docker exec "$NC_C" tail -n 4000 "$logf" 2>/dev/null | jq -r '.remoteAddr // empty' 2>/dev/null | grep -vE '^(--|)$')
@@ -2015,10 +2144,27 @@ audit_stash() {
 # ------------------------------------------------------------- OPNsense --
 opn_py() {   # analyse de config.xml : lignes F (constat), N (réseau), T (table) ; n'affiche jamais de secret
   cat <<'PY'
-import sys, ipaddress, xml.etree.ElementTree as ET
+import sys, socket, ipaddress, xml.etree.ElementTree as ET
 US = "\x1f"
 root = ET.parse(sys.argv[1]).getroot()
 nas_ips = set(sys.argv[2].split())
+ecoute = set(sys.argv[3].split()) if len(sys.argv) > 3 else set()
+def service_present(tgt, port, proto):
+    """True : un service répond ; False : rien n'écoute ; None : impossible à dire."""
+    if not port.isdigit():
+        return None
+    protos = ["tcp", "udp"] if proto in ("tcp/udp", "any", "") else [proto]
+    if tgt in nas_ips:
+        return any("{}/{}".format(p, port) in ecoute for p in protos)
+    if "tcp" not in protos:
+        return None
+    try:
+        socket.create_connection((tgt, int(port)), timeout=2).close()
+        return True
+    except ConnectionRefusedError:
+        return False
+    except OSError:
+        return None
 def F(lvl, ttl, msg="", fix=""): print(US.join(["F", lvl, ttl, msg.replace("\n", "\\n"), fix]))
 def T(tab, *cells): print(US.join(["T", tab, "\t".join(str(c) for c in cells)]))
 def tx(e, p, d=""):
@@ -2057,6 +2203,13 @@ for n in root.findall("./nat/rule"):
     T("Redirections de ports (NAT)", nom(itf), proto, dport, f"{tgt}:{lport}", src, descr, "désactivée" if off else "@WARN active")
     if off: continue
     fw.append(dport)
+    repond = service_present(tgt, lport, proto)
+    if repond is False:
+        F("WARN", f"Redirection de port inutile : {dport}/{proto} → {tgt}:{lport} (rien n'écoute)",
+          f"Redirection active sur {nom(itf)}{(' — ' + descr) if descr else ''}, mais aucun service ne répond sur {tgt}:{lport}. "
+          "Le jour où un programme utilisera ce port, il sera directement exposé à Internet.",
+          "Supprimez cette redirection : OPNsense > Pare-feu > NAT > Redirection de port")
+        continue
     risk = RISQUE.get(lport) or RISQUE.get(dport)
     cible = " (ce NAS)" if tgt in nas_ips else ""
     if src == "toutes":
@@ -2176,6 +2329,7 @@ check_opnsense() {
       "Ajoutez le privilège « Diagnostics: Backup & Restore » (ou « System: Configuration: Backups ») à l'utilisateur de la clé API (voir README)"
     rm -f "$xml"; return
   fi
+  ecoutes_prep
   local -A TB=()
   local -a TORD=()
   local kind a b c d
@@ -2185,7 +2339,7 @@ check_opnsense() {
       N) OPN_NETS+="$a " ;;
       T) [[ -n ${TB[$a]:-} ]] || { TB[$a]="$WORK/opn_t_${#TB[@]}.tsv"; TORD+=("$a"); }; printf '%s\n' "$b" >> "${TB[$a]}" ;;
     esac
-  done < <(opn_py > "$WORK/opn.py"; python3 -I "$WORK/opn.py" "$xml" "$(hostname -I 2>/dev/null)")
+  done < <(opn_py > "$WORK/opn.py"; python3 -I "$WORK/opn.py" "$xml" "$(hostname -I 2>/dev/null)" "${!ECOUTE[*]}")
   local t
   for t in "${TORD[@]}"; do tbl "$t" < "${TB[$t]}"; done
   rm -f "$xml"
@@ -2528,6 +2682,196 @@ check_ssh() {
   fi
 }
 
+# ------------------------------------------- ports en écoute et règles UFW --
+declare -A ECOUTE=()        # "tcp/22" → processus ou conteneur (hors boucle locale, ports Docker publiés compris)
+declare -A ECOUTE_ARRET=()  # "tcp/8080" → conteneur arrêté qui publie ce port
+ECOUTE_OK=0
+ecoutes_prep() {
+  ((ECOUTE_OK)) && return 0
+  ECOUTE_OK=1
+  local proto state rq sq loc peer proc addr port who k
+  if have ss; then
+    while read -r proto state rq sq loc peer proc; do
+      [[ -n $loc ]] || continue
+      port=${loc##*:}; addr=${loc%:*}; addr=${addr%%%*}
+      case $addr in 127.*|"[::1]"|::1) continue ;; esac
+      isint "$port" || continue
+      who=$(grep -oE '"[^"]+"' <<< "$proc" | head -n 1 | tr -d '"')
+      [[ $who == docker-proxy && -n ${PORTMAP[$port]:-} ]] && who="conteneur ${PORTMAP[$port]}"
+      k="${proto%6}/$port"
+      [[ -z ${ECOUTE[$k]:-} || ${ECOUTE[$k]} == noyau ]] && ECOUTE[$k]=${who:-noyau}
+    done < <(ss -H -tulpn 2>/dev/null)
+  fi
+  if ((DOCKER_OK)); then
+    local n st hp cp
+    while IFS=$US read -r n st hp cp; do
+      k="${cp#*/}/$hp"
+      if [[ $st == running ]]; then
+        [[ -z ${ECOUTE[$k]:-} || ${ECOUTE[$k]} == docker-proxy ]] && ECOUTE[$k]="conteneur $n"
+      else
+        ECOUTE_ARRET[$k]=$n
+      fi
+    done < <(jq -r '.[] | (.Name | ltrimstr("/")) as $n | .State.Status as $s | (.HostConfig.PortBindings // .NetworkSettings.Ports // {}) | to_entries[] | .key as $k
+      | (.value // [])[] | select((.HostPort // "") | test("^[0-9]+$")) | select((.HostIp // "") | test("^127\\.|^::1$") | not)
+      | "\($n)\u001f\($s)\u001f\(.HostPort)\u001f\($k)"' "$INSPECT")
+  fi
+}
+# qui_ecoute PROTO(tcp|udp|any) PORTS(22 | 6881:6889 | 80,443) [tableau associatif] → nom du service, sinon rien
+qui_ecoute() {
+  local proto=$1 spec=$2 tab=${3:-ECOUTE} part a b k p
+  local -a parts
+  local -n T=$tab
+  IFS=',' read -r -a parts <<< "$spec"
+  for part in "${parts[@]}"; do
+    a=${part%%[:-]*}; b=${part##*[:-]}
+    isint "$a" && isint "$b" || continue
+    for k in "${!T[@]}"; do
+      p=${k#*/}
+      [[ $proto == any || ${k%%/*} == "$proto" ]] || continue
+      ((p >= a && p <= b)) && { printf '%s' "${T[$k]}"; return 0; }
+    done
+  done
+  return 1
+}
+ufw_py() {   # « ufw show added » → règle, protocole, ports, source, profil d'application
+  cat <<'PY'
+import shlex, sys
+for ligne in sys.stdin:
+    ligne = ligne.rstrip("\n")
+    try:
+        t = shlex.split(ligne)
+    except ValueError:
+        continue
+    if len(t) < 3 or t[0] != "ufw" or t[1] not in ("allow", "limit"):
+        continue
+    t = t[2:]
+    if t and t[0] in ("in", "out"):
+        if t[0] == "out":
+            continue
+        t = t[1:]
+    if "comment" in t:
+        t = t[:t.index("comment")]
+    t = [x for x in t if x not in ("log", "log-all")]
+    proto, ports, src, app = "any", "", "Anywhere", ""
+    if len(t) == 1:
+        x = t[0]
+        if "/" in x:
+            ports, proto = x.split("/", 1)
+        elif x[:1].isdigit():
+            ports = x
+        else:
+            app = x
+    else:
+        sens, i = "", 0
+        while i < len(t):
+            k, v = t[i], (t[i + 1] if i + 1 < len(t) else "")
+            if k in ("from", "to"):
+                sens = k
+                if k == "from":
+                    src = "Anywhere" if v == "any" else v
+            elif k == "proto":
+                proto = v
+            elif k == "port" and sens != "from":
+                ports = v
+            elif k == "app" and sens != "from":
+                app = v
+            i += 2
+    print("\x1f".join([ligne, proto, ports, src, app]))
+PY
+}
+ufw_orphelines() {
+  have ufw || return 0
+  local added; added=$(tmo 15 ufw show added 2>/dev/null | grep -E '^ufw (allow|limit) ')
+  [[ -n $added ]] || return 0
+  ecoutes_prep
+  ufw_py > "$WORK/ufw.py"
+  local -a rows=() orph=() orph_l=()
+  local l proto ports src app ent e pr pp who arret depuis n_pub=0
+  while IFS=$US read -r l proto ports src app; do
+    local -a entrees=()
+    if [[ -n $app ]]; then
+      while read -r e; do [[ -n $e ]] && entrees+=("$e"); done < <(tmo 10 ufw app info "$app" 2>/dev/null | awk '/^Ports?:/ {f = 1; next} f && NF {print $1}')
+      ((${#entrees[@]})) || entrees=("?")
+    elif [[ -n $ports ]]; then
+      entrees=("$ports/$proto")
+    else
+      rows+=("${l#ufw }$TAB${src/Anywhere/partout}$TAB@INFO tous les ports$TAB")
+      continue
+    fi
+    who="" arret=""
+    for ent in "${entrees[@]}"; do
+      [[ $ent == "?" ]] && { who="profil inconnu"; break; }
+      pp=${ent%/*}; pr=any; [[ $ent == */* ]] && pr=${ent##*/}
+      who=$(qui_ecoute "$pr" "$pp") && break
+      who=""
+      arret=$(qui_ecoute "$pr" "$pp" ECOUTE_ARRET) || arret=""
+    done
+    depuis=${src/Anywhere/partout}
+    if [[ -n $who ]]; then
+      rows+=("${l#ufw }$TAB$depuis$TAB@OK utilisée$TAB$who$( [[ $who == conteneur* ]] && echo ' (Docker contourne UFW : règle sans effet)')")
+    elif [[ -n $arret ]]; then
+      rows+=("${l#ufw }$TAB$depuis$TAB@INFO service arrêté$TAB$arret (conteneur arrêté)")
+    else
+      rows+=("${l#ufw }$TAB$depuis$TAB@WARN rien n'écoute$TAB—")
+      orph+=("$l"); orph_l+=("${l#ufw } (depuis $depuis)")
+      [[ $src == Anywhere ]] && n_pub=$((n_pub + 1))
+    fi
+  done < <(python3 -I "$WORK/ufw.py" <<< "$added")
+  if ((${#orph[@]})); then
+    add "$( ((n_pub)) && echo WARN || echo INFO)" "${#orph[@]} règle(s) UFW ouvrent des ports où rien n'écoute" \
+      "Ces règles ne servent à rien aujourd'hui, mais le jour où un programme ou un conteneur démarre sur l'un de ces ports, il sera ouvert sans que vous l'ayez décidé.$NL$(printf '%s\n' "${orph_l[@]}")" \
+      "Supprimez celles qui ne servent plus : bouton « Corriger » dans l'interface, ou \`sudo ufw delete <règle>\` (ex. \`sudo ufw delete ${orph[0]#ufw }\`)"
+    local r
+    local rs
+    for r in "${orph[@]:0:40}"; do rs=${r#ufw }; rs=${rs%% comment *}; action ufw-supprimer "$r" "Supprimer « $rs »" "sudo ufw delete $rs"; done
+  else
+    ok "Chaque règle UFW correspond à un service actif"
+  fi
+  tbl "Règles UFW et services derrière" < <(printf 'Règle\tDepuis\tÉtat\tService\n'; printf '%s\n' "${rows[@]}")
+}
+
+# Ports en écoute que personne n'utilise (observation des connexions par audite-moi-mesures)
+trafic_analyse() {
+  [[ -f $TRAFIC_FILE ]] || return 0
+  ecoutes_prep
+  local debut jours
+  debut=$(jq -r '.debut // 0' "$TRAFIC_FILE" 2>/dev/null); isint "$debut" || return 0
+  jours=$(( (NOW - debut) / 86400 ))
+  if ((jours < 7)); then
+    info "Observation des connexions en cours ($jours jour(s) sur 7)" "Au bout de 7 jours, l'audit signalera les ports en écoute que personne n'utilise et ceux qui reçoivent des connexions directes depuis Internet."
+    return 0
+  fi
+  local -A VU=() PUB=() EX=()
+  local k v p x
+  while IFS=$US read -r k v p x; do VU[$k]=$v; PUB[$k]=$p; EX[$k]=$x; done < <(jq -r '.ports // {} | to_entries[] | "\(.key)\u001f\(.value.vu // 0)\u001f\(.value.publiques // 0)\u001f\((.value.exemples_publics // [])[:5] | join(", "))"' "$TRAFIC_FILE")
+  local -a inutiles=() publics=()
+  local who port
+  for k in "${!ECOUTE[@]}"; do
+    port=${k#*/}; who=${ECOUTE[$k]}
+    case $port in 5353|137|138|67|68|546|547|1900|3702|5355) continue ;; esac   # diffusion / découverte locale
+    v=${VU[$k]:-0}
+    if ((v == 0)); then
+      inutiles+=("$k — $who : aucune connexion en $jours jours")
+    elif (( (NOW - v) / 86400 >= 30 )); then
+      inutiles+=("$k — $who : dernière connexion il y a $(( (NOW - v) / 86400 )) jours")
+    fi
+    if (( ${PUB[$k]:-0} > 0 )); then
+      case $port in 51820|1194|500|4500) continue ;; esac
+      publics+=("$k — $who : ${PUB[$k]} adresse(s) publique(s), ex. ${EX[$k]}")
+    fi
+  done
+  if ((${#publics[@]})); then
+    warn "Connexions directes depuis Internet sur ce serveur" "Ces ports ont reçu des connexions venant d'adresses publiques, sans passer par les tunnels Cloudflare :$NL$(printf '%s\n' "${publics[@]}" | sort -t/ -k2n)" \
+      "Vérifiez les redirections de ports d'OPNsense et l'IPv6 ; si l'accès distant doit passer par les tunnels ou un VPN, fermez ces ports côté routeur"
+  fi
+  if ((${#inutiles[@]})); then
+    info "${#inutiles[@]} port(s) en écoute sans utilisation observée" "Observation de $jours jours (relevé toutes les 10 minutes : une connexion très brève peut passer inaperçue).$NL$(printf '%s\n' "${inutiles[@]}" | sort -t/ -k2n)" \
+      "Pour chaque service inutile : arrêtez-le, ou limitez son écoute (\`127.0.0.1:PORT:PORT\` pour un conteneur). Une règle UFW ne suffit pas pour les conteneurs Docker"
+  else
+    ok "Tous les ports en écoute ont été utilisés ces $jours derniers jours"
+  fi
+}
+
 check_parefeu() {
   section parefeu
   local ufw_on=0
@@ -2619,6 +2963,8 @@ check_parefeu() {
   ((${#admin[@]})) && info "Interfaces d'administration accessibles sur le réseau local" "$(printf '%s\n' "${admin[@]}" | sort -u)" \
     "Ne les publiez jamais via un tunnel sans Cloudflare Access ; activez leur authentification forte"
   ((${#rows[@]})) && tbl "Ports en écoute (hors boucle locale)" < <(printf 'Proto\tPort\tAdresse\tProcessus\n'; printf '%s\n' "${rows[@]}" | sort -t "$TAB" -k2,2n -u)
+  ufw_orphelines
+  trafic_analyse
 
   if have testparm && [[ -f $SMB_CONF ]]; then
     local tp minp guests
@@ -2794,16 +3140,17 @@ check_dockersec() {
   ((${#rows[@]})) && tbl "Posture de sécurité des conteneurs" < <(printf 'Conteneur\tExposition\tPrivilégié\tSocket Docker\tRéseau\tUtilisateur\tCapacités ajoutées\tMontages sensibles\tno-new-privileges\tLimite RAM\tÂge de l’image\n'; printf '%s\n' "${rows[@]}")
 
   # Fichiers compose et .env lisibles par tous et contenant des secrets
-  local -a weak=()
+  local -a weak=() weakf=()
   local f m
   while IFS= read -r f; do
     [[ -f $f ]] || continue
     m=$(stat -c '%a' "$f")
-    (( 8#$m & 8#004 )) && grep -qiE '(password|passwd|secret|token|api[_-]?key)[[:space:]]*[:=]' "$f" && weak+=("$f ($m)")
+    (( 8#$m & 8#004 )) && grep -qiE '(password|passwd|secret|token|api[_-]?key)[[:space:]]*[:=]' "$f" && { weak+=("$f ($m)"); weakf+=("$f"); }
   done < <( { jq -r '.[] | (.Config.Labels // {}) | (.["com.docker.compose.project.config_files"] // empty) | split(",")[]' "$INSPECT"
               jq -r '.[] | (.Config.Labels // {}) | (.["com.docker.compose.project.working_dir"] // empty) | . + "/.env"' "$INSPECT"; } | sort -u)
   if ((${#weak[@]})); then
     warn "Fichiers compose/.env contenant des secrets lisibles par tous" "$(printf '%s\n' "${weak[@]}")" "\`chmod 600 <fichier>\` (ou 640 avec un groupe d'administration)"
+    for f in "${weakf[@]:0:20}"; do action chmod-600 "$f" "Protéger ${f##*/} (${f%/*})" "sudo chmod 600 $f"; done
   fi
 }
 
@@ -3198,7 +3545,7 @@ h3{font-size:12.5px;margin:20px 0 8px;color:var(--muted);text-transform:uppercas
 .mini{margin-left:auto;font-size:12.5px;font-weight:500;color:var(--muted)}
 .badge{display:inline-block;min-width:78px;text-align:center;font-size:11px;font-weight:750;padding:3px 8px;border-radius:999px;text-transform:uppercase;letter-spacing:.04em}
 .b-CRIT{background:var(--crit-bg);color:var(--crit)}.b-WARN{background:var(--warn-bg);color:var(--warn)}
-.b-OK{background:var(--ok-bg);color:var(--ok)}.b-INFO{background:var(--info-bg);color:var(--info)}
+.b-OK{background:var(--ok-bg);color:var(--ok)}.b-INFO{background:var(--info-bg);color:var(--info)}.b-ACC{background:var(--soft,#eee);color:var(--muted,#666)}
 table{border-collapse:collapse;width:100%}
 table.findings td{padding:9px 8px;border-top:1px solid var(--line);vertical-align:top}
 table.findings tr:first-child td{border-top:0}
@@ -3339,6 +3686,7 @@ EOF
       case $lvl in CRIT) c1=$((c1 + 1)) ;; WARN) c2=$((c2 + 1)) ;; OK) c3=$((c3 + 1)) ;; *) c4=$((c4 + 1)) ;; esac
       fmt_to "${R_TTL[i]}"
       r="<tr class=\"lvl-$lvl\"><td><span class=\"badge b-$lvl\">${LVL_FR[$lvl]}</span></td><td><div class=\"ttl\">$REPLY</div>"
+      if [[ -n ${R_ACC[i]} ]]; then fmt_to "Accepté (${LVL_FR[${R_LV0[i]}]} à l'origine) : ${R_ACC[i]}"; r+="<div class=\"msg\"><b>$REPLY</b></div>"; fi
       if [[ -n ${R_MSG[i]} ]]; then fmt_to "${R_MSG[i]}"; r+="<div class=\"msg\">$REPLY</div>"; fi
       if [[ -n ${R_FIX[i]} ]]; then fmt_to "${R_FIX[i]}"; r+="<div class=\"fix\">$REPLY</div>"; fi
       r+="</td></tr>"
@@ -3433,6 +3781,7 @@ render_txt() {
     for i in "${!R_SEC[@]}"; do
       [[ ${R_SEC[i]} == "$s" ]] || continue
       printf ' [%-9s] %s\n' "${LVL_FR[${R_LVL[i]}]}" "${R_TTL[i]}"
+      [[ -n ${R_ACC[i]} ]] && printf '      (accepté : %s)\n' "${R_ACC[i]}"
       [[ -n ${R_MSG[i]} ]] && printf '      %s\n' "${R_MSG[i]//$NL/$NL      }"
       [[ -n ${R_FIX[i]} ]] && printf '      → %s\n' "${R_FIX[i]//$NL/$NL        }"
     done
@@ -3452,7 +3801,8 @@ render_json() {
   local secs; secs=$(for s in "${SEC_ORDER[@]}"; do printf '%s%s%s%s%s%s%s\n' "$s" "$US" "${SEC_TITLE[$s]}" "$US" "${SEC_SHORT[$s]}" "$US" "${SEC_CAT[$s]}"; done \
     | jq -Rn '[inputs | split("\u001f") | {key: .[0], value: {titre: .[1], court: .[2], categorie: .[3]}}] | from_entries')
   for i in "${!R_LVL[@]}"; do
-    printf '%s%s%s%s%s%s%s%s%s%s' "${R_SEC[i]}" "$US" "${R_LVL[i]}" "$US" "${R_TTL[i]}" "$US" "${R_MSG[i]}" "$US" "${R_FIX[i]}" "$RS"
+    printf '%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s' "${R_SEC[i]}" "$US" "${R_LV0[i]}" "$US" "${R_TTL[i]}" "$US" "${R_MSG[i]}" "$US" "${R_FIX[i]}" "$US" \
+      "$(cle_constat "${R_SEC[i]}" "${R_TTL[i]}")" "$US" "${R_ACC[i]}" "$US" "${R_ACT[i]}" "$RS"
   done | jq -Rs --arg hote "$HOST" --arg date "$DATE_HUMAN" --argjson horodatage "$START" --arg version "$VERSION" \
       --arg os "$OS_PRETTY" --arg noyau "$KERNEL" --argjson duree "$dur" --arg mode "$( ((QUICK)) && echo rapide || echo complet)" \
       --argjson hs "$hs" --argjson ss "$ss" --arg hg "$(grade "$hs")" --arg sg "$(grade "$ss")" \
@@ -3463,7 +3813,9 @@ render_json() {
      fichiers: {html: ($base + ".html"), txt: ($base + ".txt"), json: ($base + ".json")},
      sections: $secs,
      constats: (split("\u001e") | map(select(length > 0) | split("\u001f")
-       | {section: .[0], niveau: .[1], titre: .[2], detail: .[3], correctif: .[4]}))}'
+       | {section: .[0], niveau: .[1], titre: .[2], detail: .[3], correctif: .[4], cle: .[5]}
+         + (if (.[6] // "") != "" then {accepte: .[6]} else {} end)
+         + (if (.[7] // "") != "" then {actions: (.[7] | fromjson)} else {} end)))}'
 }
 
 prune_reports() {
@@ -3506,6 +3858,7 @@ main() {
   check_noyau
   check_journaux
   check_outils
+  appliquer_acceptes
 
   local nC nW nO nI hs ss dur
   nC=$(count_lvl CRIT); nW=$(count_lvl WARN); nO=$(count_lvl OK); nI=$(count_lvl INFO)

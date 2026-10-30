@@ -1,0 +1,10 @@
+[Unit]
+Description=Audite-moi : application d'une correction demandée depuis l'interface web
+Documentation=https://github.com/oliv2776/Audite-moi
+
+[Service]
+Type=oneshot
+# Liste fermée de corrections, proposées par le dernier audit et vérifiées avant exécution (voir le script)
+ExecStart=/usr/bin/python3 /usr/local/lib/audite-moi/audite-moi-corriger
+TimeoutStartSec=5min
+PrivateTmp=yes

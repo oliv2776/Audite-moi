@@ -13,16 +13,23 @@ leurs dernières valeurs connues sont conservées.
 """
 import argparse
 import grp
+import html
+import ipaddress
 import json
 import os
 import re
+import socket
 import subprocess
+import sys
 import time
+import urllib.parse
+import urllib.request
 
 SYS_BLOCK = os.environ.get("AUDITE_MOI_SYS_BLOCK", "/sys/block")
 FS_LOCAUX = {"ext2", "ext3", "ext4", "xfs", "btrfs", "vfat", "f2fs", "exfat"}
 ID_DOCKER = re.compile(r"/[0-9a-f]{64}(-init)?$")
 SEPT_JOURS = 7 * 86400
+CONNTRACK = os.environ.get("AUDITE_MOI_CONNTRACK", "/proc/net/nf_conntrack")
 
 
 def cmd(*args, timeout=60):
@@ -264,21 +271,449 @@ def disques(membres, precedent, maintenant):
     return res
 
 
+# ---------------------------------------------------------- fichiers d'état --
+def ecrire_json(chemin, donnees, groupe, indent=None):
+    tmp = chemin + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(donnees, f, ensure_ascii=False, indent=indent)
+    try:
+        os.chown(tmp, 0, grp.getgrnam(groupe).gr_gid)
+    except (KeyError, OSError):
+        pass
+    os.replace(tmp, chemin)
+
+
+def lire_json(chemin, defaut):
+    try:
+        with open(chemin, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, type(defaut)) else defaut
+    except (OSError, ValueError):
+        return defaut
+
+
+def lire_conf(chemin):
+    conf = {}
+    try:
+        lignes = open(chemin, encoding="utf-8").read().splitlines()
+    except OSError:
+        return conf
+    for l in lignes:
+        m = re.match(r"^\s*([A-Z_]+)\s*=\s*(.*?)\s*$", l)
+        if m:
+            v = m.group(2)
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            conf[m.group(1)] = v
+    return conf
+
+
+def oui(v):
+    return str(v).strip().lower() in ("oui", "o", "yes", "y", "1", "true", "on")
+
+
+# ----------------------------------------- ports en écoute et connexions reçues --
+def ips_hote():
+    rc, out = cmd("hostname", "-I")
+    return set(out.split())
+
+
+def ecoutes():
+    """Ports en écoute hors boucle locale : {"tcp/22": "sshd"}."""
+    res = {}
+    rc, out = cmd("ss", "-H", "-tulpn")
+    for l in out.splitlines():
+        c = l.split()
+        if len(c) < 5:
+            continue
+        loc = c[4]
+        port, adr = loc.rsplit(":", 1)[-1], loc.rsplit(":", 1)[0].split("%")[0]
+        if not port.isdigit() or adr.startswith("127.") or adr in ("[::1]", "::1"):
+            continue
+        m = re.search(r'"([^"]+)"', l)
+        res.setdefault("{}/{}".format(c[0].rstrip("6"), port), m.group(1) if m else "noyau")
+    return res
+
+
+def publique(ip):
+    try:
+        return ipaddress.ip_address(ip).is_global
+    except ValueError:
+        return False
+
+
+def connexions(ips, ecoute):
+    """Connexions entrantes vues maintenant : {(proto, port, ip source)}."""
+    vues = set()
+    # Table de suivi des connexions du noyau : garde aussi les connexions récemment fermées et les ports Docker (DNAT).
+    # À défaut de /proc/net/nf_conntrack, l'outil « conntrack » donne le même format avec -o extended.
+    try:
+        lignes = open(CONNTRACK, encoding="utf-8", errors="replace").read().splitlines()
+    except OSError:
+        lignes = cmd("conntrack", "-L", "-o", "extended")[1].splitlines()
+    for l in lignes:
+        c = l.split()
+        if len(c) < 4 or c[2] not in ("tcp", "udp"):
+            continue
+        kv = {}
+        for t in c:
+            if "=" in t:
+                k, _, v = t.partition("=")
+                kv.setdefault(k, v)          # première occurrence = sens d'origine
+        if kv.get("dst") in ips and kv.get("src") not in ips and kv.get("dport", "").isdigit():
+            vues.add((c[2], kv["dport"], kv.get("src", "")))
+    rc, out = cmd("ss", "-H", "-tn", "state", "established")
+    for l in out.splitlines():
+        c = l.split()
+        if len(c) < 4:
+            continue
+        loc, pair = c[-2], c[-1]
+        port = loc.rsplit(":", 1)[-1]
+        src = pair.rsplit(":", 1)[0].strip("[]").replace("::ffff:", "")
+        if "tcp/" + port in ecoute and src not in ips and not src.startswith("127."):
+            vues.add(("tcp", port, src))
+    return vues
+
+
+def trafic(chemin, ips, ecoute, maintenant, groupe):
+    t = lire_json(chemin, {})
+    t.setdefault("debut", maintenant)
+    t["releves"] = t.get("releves", 0) + 1
+    ports = t.setdefault("ports", {})
+    for proto, port, src in connexions(ips, ecoute):
+        e = ports.setdefault("{}/{}".format(proto, port), {})
+        if e.get("vu") != maintenant:
+            e["releves"] = e.get("releves", 0) + 1
+        e["vu"] = maintenant
+        if publique(src):
+            ex = e.setdefault("exemples_publics", [])
+            if src not in ex:
+                ex.append(src)
+                del ex[:-50]
+                e["publiques"] = e.get("publiques", 0) + 1
+    t["maj"] = maintenant
+    ecrire_json(chemin, t, groupe)
+
+
+# ------------------------------------------------- historique et tendances --
+def historique(chemin, mes, maintenant):
+    dernier = 0
+    try:
+        with open(chemin, "rb") as f:
+            f.seek(0, 2)
+            taille = f.tell()
+            f.seek(max(0, taille - 4096))
+            fin = f.read().decode("utf-8", "replace").strip().splitlines()
+        dernier = json.loads(fin[-1]).get("t", 0) if fin else 0
+    except (OSError, ValueError, IndexError):
+        taille = 0
+    if maintenant - dernier < 3500:      # un point par heure
+        return
+    point = {"t": maintenant,
+             "pools": {p["nom"]: [p.get("utilise"), p.get("taille")] for p in mes["pools"] if p.get("taille")},
+             "disques": {d["nom"]: [d.get("temperature"), d.get("crc"), d.get("realloues")] for d in mes["disques"] if not d.get("veille")}}
+    with open(chemin, "a", encoding="utf-8") as f:
+        f.write(json.dumps(point, separators=(",", ":")) + "\n")
+    os.chmod(chemin, 0o640)
+    if taille > 4_000_000:               # au-delà, on ne garde que deux ans
+        lignes = [l for l in open(chemin, encoding="utf-8") if json.loads(l).get("t", 0) > maintenant - 730 * 86400]
+        with open(chemin, "w", encoding="utf-8") as f:
+            f.writelines(lignes)
+
+
+def tendances(chemin, mes, maintenant):
+    """Régression linéaire sur 30 jours : progression et date de remplissage de chaque pool."""
+    series = {}
+    try:
+        for l in open(chemin, encoding="utf-8"):
+            try:
+                p = json.loads(l)
+            except ValueError:
+                continue
+            if p.get("t", 0) < maintenant - 30 * 86400:
+                continue
+            for nom, (u, t) in p.get("pools", {}).items():
+                if u is not None and t:
+                    series.setdefault(nom, []).append((p["t"], u, t))
+    except OSError:
+        pass
+    for pool in mes["pools"]:
+        s = series.get(pool["nom"], [])
+        if len(s) < 6 or s[-1][0] - s[0][0] < 3 * 86400:
+            continue
+        n = len(s)
+        mx = sum(x for x, _, _ in s) / n
+        my = sum(y for _, y, _ in s) / n
+        den = sum((x - mx) ** 2 for x, _, _ in s)
+        if not den:
+            continue
+        pente = sum((x - mx) * (y - my) for x, y, _ in s) / den * 86400      # octets par jour
+        tend = {"octets_par_jour": int(pente), "jours_observes": round((s[-1][0] - s[0][0]) / 86400, 1)}
+        u, t = pool.get("utilise"), pool.get("taille")
+        if pente > 0 and u is not None and t:
+            for seuil, cle in ((0.9, "jours_avant_90"), (1.0, "jours_avant_plein")):
+                reste = seuil * t - u
+                tend[cle] = max(0, int(reste / pente)) if reste > 0 else 0
+        pool["tendance"] = tend
+
+
+# ------------------------------------------------------------- alertes --
+def cle_constat(section, titre):
+    k = re.sub(r"\d", "#", "{}|{}".format(section, titre))
+    return re.sub(r"#+", "#", k)
+
+
+def problemes(rapport):
+    res = {}
+    for c in rapport.get("constats", []):
+        if c.get("niveau") in ("CRIT", "WARN") and not c.get("accepte"):
+            res[c.get("cle") or cle_constat(c.get("section", ""), c.get("titre", ""))] = c
+    return res
+
+
+def oct_(n):
+    n = float(n or 0)
+    for u in ("o", "Ko", "Mo", "Go", "To", "Po"):
+        if abs(n) < 1024 or u == "Po":
+            return ("{:.0f} {}" if n >= 100 or u == "o" else "{:.1f} {}").format(n, u).replace(".", ",")
+        n /= 1024
+
+
+def e(s):
+    return html.escape(str(s), quote=False)
+
+
+def resume_rapport(nouveau, ancien):
+    n = nouveau.get("notes", {})
+    def note(k):
+        x = n.get(k, {})
+        txt = "{} {}".format(x.get("lettre", "?"), x.get("score", "?"))
+        if ancien:
+            d = x.get("score", 0) - ancien.get("notes", {}).get(k, {}).get("score", 0)
+            txt += " (▲{})".format(d) if d > 0 else " (▼{})".format(-d) if d < 0 else " (=)"
+        return txt
+    l = ["📋 <b>Audit {} de {} terminé</b>".format(e(nouveau.get("mode", "")), e(nouveau.get("hote", ""))),
+         "Santé {} · Sécurité {}".format(note("sante"), note("securite"))]
+    pn = problemes(nouveau)
+    if ancien:
+        pa = problemes(ancien)
+        nouv = [pn[k] for k in pn if k not in pa]
+        for niv, ico, lib in (("CRIT", "🔴", "Nouveaux problèmes critiques"), ("WARN", "🟠", "Nouveaux avertissements")):
+            x = [c for c in nouv if c["niveau"] == niv]
+            if x:
+                l.append("\n{} <b>{}</b> :".format(ico, lib))
+                l += ["• " + e(c["titre"]) for c in x[:8]] + (["• … et {} autre(s)".format(len(x) - 8)] if len(x) > 8 else [])
+        res = len([k for k in pa if k not in pn])
+        if res:
+            l.append("\n✅ {} problème(s) résolu(s)".format(res))
+        if not nouv and not res:
+            l.append("Rien de nouveau depuis l'audit précédent.")
+    else:
+        c = nouveau.get("compteurs", {})
+        l.append("{} critique(s), {} avertissement(s)".format(c.get("CRIT", 0), c.get("WARN", 0)))
+    for c in nouveau.get("constats", []):
+        if c.get("titre", "").startswith("Nouveaux appareils depuis le dernier scan") and not c.get("accepte"):
+            l.append("\n🆕 <b>{}</b>\n{}".format(e(c["titre"]), e("\n".join(c.get("detail", "").splitlines()[:6]))))
+    return "\n".join(l)
+
+
+def unites_sauvegarde():
+    rc, out = cmd("systemctl", "list-timers", "--all", "--no-legend")
+    res = {}
+    for t in sorted(set(re.findall(r"[A-Za-z0-9@_.:-]+\.timer", out))):
+        if not re.search(r"restic|borg|kopia|rclone|syncoid|zrepl|duplicity|rsnapshot|backup|sauvegarde", t, re.I) or "dpkg-db-backup" in t:
+            continue
+        svc = cmd("systemctl", "show", "-p", "Unit", "--value", t)[1].strip() or t[:-6] + ".service"
+        res[svc] = cmd("systemctl", "show", "-p", "Result", "--value", svc)[1].strip()
+    return res
+
+
+def envoyer_telegram(conf, texte):
+    if os.environ.get("AUDITE_MOI_TELEGRAM_FICHIER"):        # tests : on écrit le message au lieu de l'envoyer
+        with open(os.environ["AUDITE_MOI_TELEGRAM_FICHIER"], "a", encoding="utf-8") as f:
+            f.write(texte + "\n----\n")
+        return True
+    jeton, chat = conf.get("TELEGRAM_TOKEN", ""), conf.get("TELEGRAM_CHAT_ID", "")
+    if not jeton or not chat:
+        return False
+    url = conf.get("INTERFACE_URL", "")
+    if url:
+        texte += '\n\n<a href="{}">Ouvrir Audite-moi</a>'.format(html.escape(url))
+    donnees = urllib.parse.urlencode({"chat_id": chat, "text": texte[:4000], "parse_mode": "HTML", "disable_web_page_preview": "true"}).encode()
+    try:
+        req = urllib.request.Request("https://api.telegram.org/bot{}/sendMessage".format(jeton), data=donnees)
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return bool(json.load(r).get("ok"))
+    except (OSError, ValueError) as exc:
+        sys.stderr.write("Telegram : envoi impossible ({})\n".format(type(exc).__name__))   # jamais le jeton dans les journaux
+        return False
+
+
+def alertes(conf, mes, ecoute, chemin_etat, rapports, maintenant, groupe):
+    st = lire_json(chemin_etat, {})
+    actif = bool(conf.get("TELEGRAM_TOKEN") and conf.get("TELEGRAM_CHAT_ID")) or bool(os.environ.get("AUDITE_MOI_TELEGRAM_FICHIER"))
+    actif = actif and oui(conf.get("ALERTES", "oui"))
+    premier = not st.get("actif")         # première exécution avec Telegram configuré : un message de bienvenue, pas de rafale
+    msgs = []
+    hote = socket.gethostname()
+
+    # Pools : état, remplissage, date de remplissage prévue
+    sp = st.setdefault("pools", {})
+    for p in mes["pools"]:
+        a = sp.setdefault(p["nom"], {})
+        etat = p.get("etat", "")
+        if etat and etat != "ONLINE" and a.get("etat") != etat:
+            msgs.append("🔴 <b>Pool {} : {}</b>\nUn disque est défaillant ou absent : la redondance est réduite ou perdue.".format(e(p["nom"]), e(etat)))
+        elif etat == "ONLINE" and a.get("etat") not in (None, "ONLINE"):
+            msgs.append("✅ Pool {} de nouveau en ligne (ONLINE)".format(e(p["nom"])))
+        a["etat"] = etat
+        if p.get("taille"):
+            pct = 100.0 * p["utilise"] / p["taille"]
+            seuil = max([s for s in (80, 90, 95) if pct >= s] or [0])
+            if seuil > a.get("seuil", 0):
+                msgs.append("{} <b>Pool {} rempli à {:.0f} %</b> ({} libres)".format("🔴" if seuil >= 90 else "🟠", e(p["nom"]), pct, oct_(p["libre"])))
+                a["seuil"] = seuil
+            elif pct < a.get("seuil", 0) - 3:
+                a["seuil"] = seuil
+        j = (p.get("tendance") or {}).get("jours_avant_plein")
+        if j is not None and j < 30 and not a.get("bientot"):
+            msgs.append("🟠 <b>Pool {} plein dans environ {} jours</b> au rythme actuel (+{} par jour)".format(
+                e(p["nom"]), j, oct_(p["tendance"]["octets_par_jour"])))
+            a["bientot"] = True
+        elif j is None or j > 60:
+            a["bientot"] = False
+
+    # Disques : changement d'état, erreurs CRC en hausse, disque disparu
+    sd = st.setdefault("disques", {})
+    vus = set()
+    for d in mes["disques"]:
+        vus.add(d["nom"])
+        a = sd.get(d["nom"])
+        etat = d.get("etat")
+        nom = "{} ({})".format(d["nom"], d.get("modele") or d.get("type") or "?")
+        if d.get("veille"):
+            continue
+        rang = {"ok": 0, "inconnu": 0, "attention": 1, "critique": 2}
+        if a and rang.get(etat, 0) > rang.get(a.get("etat"), 0):
+            msgs.append("{} <b>Disque {} : {}</b>\n{}".format("🔴" if etat == "critique" else "🟠", e(nom), "état critique" if etat == "critique" else "à surveiller",
+                                                            e("\n".join("• " + r for r in d.get("raisons", [])))))
+        elif a and etat == "ok" and a.get("etat") in ("attention", "critique"):
+            msgs.append("✅ Disque {} de nouveau sain".format(e(nom)))
+        elif a and d.get("crc") and a.get("crc") is not None and d["crc"] > a["crc"] and etat == a.get("etat"):
+            msgs.append("🟠 <b>Erreurs CRC en hausse sur {}</b> : {} → {}\nCâble SATA ou connecteur à vérifier.".format(e(nom), a["crc"], d["crc"]))
+        sd[d["nom"]] = {"etat": etat, "crc": d.get("crc"), "vu": maintenant}
+    for nom, a in list(sd.items()):
+        if nom not in vus:
+            if not a.get("absent"):
+                msgs.append("🔴 <b>Disque {} introuvable</b>\nIl n'apparaît plus : débranché, câble ou disque mort ?".format(e(nom)))
+                a["absent"] = True
+            if maintenant - a.get("vu", maintenant) > 30 * 86400:
+                del sd[nom]
+
+    # Nouveau port en écoute (non vu depuis 30 jours)
+    se = st.setdefault("ecoutes", {})
+    nouveaux = [k for k in ecoute if k not in se]
+    if nouveaux and se:
+        msgs.append("🆕 <b>Nouveau(x) port(s) en écoute sur {}</b>\n{}\nNormal si vous venez d'installer un service ; sinon, vérifiez.".format(
+            e(hote), e("\n".join("• {} ({})".format(k, ecoute[k]) for k in sorted(nouveaux)[:10]))))
+    for k in ecoute:
+        se[k] = maintenant
+    for k in [k for k, t in se.items() if maintenant - t > 30 * 86400]:
+        del se[k]
+
+    # Sauvegardes planifiées en échec
+    ss_ = st.setdefault("sauvegardes", {})
+    for svc, res in unites_sauvegarde().items():
+        if res and res != "success" and ss_.get(svc, "success") == "success":
+            msgs.append("🔴 <b>Sauvegarde en échec : {}</b>\nRésultat : {}. Journal : journalctl -u {}".format(e(svc), e(res), e(svc)))
+        elif res == "success" and ss_.get(svc) not in (None, "success"):
+            msgs.append("✅ Sauvegarde {} de nouveau réussie".format(e(svc)))
+        ss_[svc] = res
+
+    # Nouveau rapport d'audit
+    try:
+        noms = sorted(n for n in os.listdir(rapports) if re.match(r"^rapport-.+-\d{8}-\d{4}\.json$", n))
+    except OSError:
+        noms = []
+    if noms and noms[-1] != st.get("rapport"):
+        nouveau = lire_json(os.path.join(rapports, noms[-1]), {})
+        ancien = lire_json(os.path.join(rapports, st["rapport"]), {}) if st.get("rapport") in noms else \
+            (lire_json(os.path.join(rapports, noms[-2]), {}) if len(noms) > 1 else {})
+        if st.get("rapport") is not None and nouveau:
+            msgs.append(resume_rapport(nouveau, ancien))
+        st["rapport"] = noms[-1]
+
+    if actif and premier:
+        pb = [d for d in mes["disques"] if d.get("etat") in ("attention", "critique")]
+        txt = ["✅ <b>Alertes Audite-moi activées sur {}</b>".format(e(hote)),
+               "Vous serez prévenu si un pool se dégrade ou se remplit, si un disque faiblit, si une sauvegarde échoue, si un nouveau port s'ouvre, et après chaque audit."]
+        if pb:
+            txt.append("\nÀ surveiller dès maintenant :\n" + e("\n".join("• {} : {}".format(d["nom"], " ; ".join(d.get("raisons", []))) for d in pb)))
+        for p in mes["pools"]:
+            if p.get("taille") and p["utilise"] / p["taille"] >= 0.8:
+                txt.append("• Pool {} rempli à {:.0f} %".format(e(p["nom"]), 100.0 * p["utilise"] / p["taille"]))
+        msgs = ["\n".join(txt)]
+    envoye = False
+    if actif and msgs:
+        envoye = envoyer_telegram(conf, "\n\n".join(msgs))
+        if envoye:
+            st["dernier_envoi"] = maintenant
+    st["actif"] = actif
+    st["maj"] = maintenant
+    if actif and msgs and not envoye:
+        st["erreur"] = maintenant
+    elif envoye:
+        st.pop("erreur", None)
+    ecrire_json(chemin_etat, st, groupe)
+    return msgs
+
+
+def trouver_chat(jeton):
+    """Après avoir écrit au bot : identifiant de la conversation la plus récente."""
+    with urllib.request.urlopen("https://api.telegram.org/bot{}/getUpdates".format(jeton), timeout=20) as r:
+        d = json.load(r)
+    for u in reversed(d.get("result", [])):
+        m = u.get("message") or u.get("channel_post") or {}
+        if m.get("chat", {}).get("id"):
+            return m["chat"]["id"], m["chat"].get("first_name") or m["chat"].get("title") or ""
+    return None, ""
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Relevé des disques et des pools pour l'interface d'Audite-moi")
+    ap = argparse.ArgumentParser(description="Relevé des disques et des pools, observation des connexions et alertes d'Audite-moi")
     ap.add_argument("--sortie", default="/var/lib/audite-moi/etat/mesures.json")
     ap.add_argument("--demande", default="/var/lib/audite-moi/demande/mesurer")
     ap.add_argument("--groupe", default="audite-moi")
+    ap.add_argument("--conf", default="/etc/audite-moi/audit.conf")
+    ap.add_argument("--rapports", default="/var/lib/audite-moi/rapports")
+    ap.add_argument("--test-telegram", action="store_true", help="envoie un message de test sur Telegram")
+    ap.add_argument("--trouver-chat", action="store_true", help="lit le jeton du bot sur l'entrée standard et affiche l'identifiant de conversation")
+    ap.add_argument("--notifier", action="store_true", help="envoie sur Telegram le texte lu sur l'entrée standard (si les alertes sont configurées)")
     a = ap.parse_args()
+    if a.trouver_chat:
+        ident, nom = trouver_chat(sys.stdin.readline().strip())
+        if ident is None:
+            sys.exit(1)
+        print("{}\t{}".format(ident, nom))
+        return
+    conf = lire_conf(a.conf)
+    if a.notifier:
+        texte = sys.stdin.read(3500).strip()
+        if texte and oui(conf.get("ALERTES", "oui")):
+            envoyer_telegram(conf, texte)
+        return
+    if a.test_telegram:
+        ok = envoyer_telegram(conf, "✅ <b>Audite-moi</b> : les alertes Telegram fonctionnent sur {}.".format(html.escape(socket.gethostname())))
+        print("Message envoyé." if ok else "Échec de l'envoi : vérifiez TELEGRAM_TOKEN et TELEGRAM_CHAT_ID dans {}.".format(a.conf))
+        sys.exit(0 if ok else 1)
     try:
         os.remove(a.demande)   # sinon audite-moi-mesures.path relancerait la mesure en boucle
     except OSError:
         pass
     maintenant = int(time.time())
-    try:
-        precedent = json.load(open(a.sortie, encoding="utf-8"))
-    except (OSError, ValueError):
-        precedent = {}
+    etat = os.path.dirname(os.path.abspath(a.sortie))
+    precedent = lire_json(a.sortie, {})
     p, membres = pools()
     res = {"horodatage": maintenant, "pools": p, "volumes": volumes(), "disques": disques(membres, precedent, maintenant)}
     for pool in res["pools"]:
@@ -287,15 +722,13 @@ def main():
         pool["type"] = types.pop() if len(types) == 1 else ("mixte" if types else "")
         pool["disques_critiques"] = etats.count("critique")
         pool["disques_attention"] = etats.count("attention")
-    tmp = a.sortie + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(res, f, ensure_ascii=False, indent=1)
-    try:
-        os.chown(tmp, 0, grp.getgrnam(a.groupe).gr_gid)
-    except (KeyError, OSError):
-        pass
-    os.replace(tmp, a.sortie)
+    hist = os.path.join(etat, "historique.jsonl")
+    historique(hist, res, maintenant)
+    tendances(hist, res, maintenant)
+    ecrire_json(a.sortie, res, a.groupe, indent=1)
+    ecoute = ecoutes()
+    trafic(os.path.join(etat, "trafic.json"), ips_hote(), ecoute, maintenant, a.groupe)
+    alertes(conf, res, ecoute, os.path.join(etat, "alertes.json"), a.rapports, maintenant, a.groupe)
 
 
 if __name__ == "__main__":

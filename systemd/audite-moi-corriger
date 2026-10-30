@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""Audite-moi — corrections en un clic (exécuté en root par audite-moi-corriger.service).
+
+L'interface web (sans droits) dépose une demande dans /var/lib/audite-moi/demande/corriger :
+  {"id": "...", "type": "zfs-scrub", "cible": "stockage"}     appliquer une correction
+  {"id": "...", "annuler": "<id d'une correction passée>"}     annuler une correction
+
+Sécurité : seuls les types de la LISTE FERMÉE ci-dessous existent ; la correction doit
+avoir été PROPOSÉE PAR LE DERNIER AUDIT (écrit par root) ; chaque cible est vérifiée
+(format strict ET existence réelle sur le système) ; la commande est construite ici,
+jamais reprise de la demande ; aucune commande ne passe par un shell. Chaque
+correction est journalisée avec de quoi l'annuler.
+"""
+import argparse
+import datetime
+import grp
+import html
+import json
+import os
+import re
+import shlex
+import stat
+import subprocess
+import sys
+import time
+
+NOM_CONTENEUR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+NOM_POOL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$")
+FICHIER_PROTEGEABLE = re.compile(r"(^|/)(\.env|[^/]*\.env|(docker-)?compose[^/]*\.ya?ml)$")
+GARDE = 200
+
+
+class Refus(Exception):
+    """Demande invalide : rien n'a été exécuté."""
+
+
+def lancer(argv, timeout=120):
+    p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    sortie = (p.stdout + p.stderr).strip()
+    return p.returncode, sortie[-2000:]
+
+
+def lire(argv):
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=60).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+# ------------------------------------------------------------- vérifications --
+def pool_existant(nom):
+    if not NOM_POOL.match(nom or "") or nom not in lire(["zpool", "list", "-H", "-o", "name"]).splitlines():
+        raise Refus("pool inconnu : {}".format(nom))
+    return nom
+
+
+def conteneur_existant(nom):
+    if not NOM_CONTENEUR.match(nom or "") or nom not in lire(["docker", "ps", "-a", "--format", "{{.Names}}"]).splitlines():
+        raise Refus("conteneur inconnu : {}".format(nom))
+    return nom
+
+
+def occ(conteneur):
+    """Commande occ de Nextcloud (image officielle ou linuxserver)."""
+    nom = conteneur_existant(conteneur)
+    image = lire(["docker", "inspect", "-f", "{{.Config.Image}}", nom])
+    if not re.search(r"nextcloud", image):
+        raise Refus("{} n'est pas un conteneur Nextcloud".format(nom))
+    base = ["docker", "exec", "-u", "www-data", nom, "php", "/var/www/html/occ", "--no-interaction"]
+    if subprocess.run(base + ["status"], capture_output=True, timeout=60).returncode == 0:
+        return base
+    return ["docker", "exec", nom, "occ", "--no-interaction"]
+
+
+def regles_ufw():
+    return [l.strip() for l in lire(["ufw", "show", "added"]).splitlines() if re.match(r"^ufw (allow|limit) ", l.strip())]
+
+
+# ------------------------------------------------- les corrections autorisées --
+# Chaque fonction renvoie (libellé, [commandes], [commandes d'annulation]).
+def ufw_supprimer(cible):
+    if cible not in regles_ufw():   # uniquement une règle qui existe telle quelle
+        raise Refus("cette règle UFW n'existe pas (ou plus)")
+    mots = shlex.split(cible)[1:]
+    sans_comm = mots[:mots.index("comment")] if "comment" in mots else mots
+    return ("Supprimer la règle UFW « {} »".format(" ".join(sans_comm)),
+            [["ufw", "--force", "delete"] + sans_comm], [["ufw"] + mots])
+
+
+def docker_restart(cible):
+    nom = conteneur_existant(cible)
+    avant = lire(["docker", "inspect", "-f", "{{.HostConfig.RestartPolicy.Name}}", nom]) or "no"
+    if not re.match(r"^[a-z-]+$", avant):
+        avant = "no"
+    return ("Redémarrage automatique de {}".format(nom), [["docker", "update", "--restart", "unless-stopped", nom]],
+            [["docker", "update", "--restart", avant, nom]])
+
+
+def chmod_600(cible):
+    if not cible.startswith("/") or ".." in cible.split("/") or not FICHIER_PROTEGEABLE.search(cible):
+        raise Refus("fichier non autorisé : seuls les fichiers .env et compose peuvent être protégés")
+    st = os.lstat(cible)
+    if not stat.S_ISREG(st.st_mode):
+        raise Refus("{} n'est pas un fichier ordinaire".format(cible))
+    avant = "{:o}".format(stat.S_IMODE(st.st_mode))
+    return ("Protéger {} (droits 600)".format(cible), [["chmod", "600", "--", cible]], [["chmod", avant, "--", cible]])
+
+
+def zfs_scrub(cible):
+    p = pool_existant(cible)
+    return ("Scrub du pool {}".format(p), [["zpool", "scrub", p]], [["zpool", "scrub", "-s", p]])
+
+
+def zfs_autotrim(cible):
+    p = pool_existant(cible)
+    avant = lire(["zpool", "get", "-H", "-o", "value", "autotrim", p]) or "off"
+    avant = avant if avant in ("on", "off") else "off"
+    return ("TRIM automatique du pool {}".format(p), [["zpool", "set", "autotrim=on", p]], [["zpool", "set", "autotrim=" + avant, p]])
+
+
+def smartd_activer(cible):
+    unite = "smartmontools" if lire(["systemctl", "list-unit-files", "smartmontools.service", "--no-legend"]) else "smartd"
+    return ("Activer la surveillance smartd", [["systemctl", "enable", "--now", unite]], [["systemctl", "disable", "--now", unite]])
+
+
+def nc_debug_off(cible):
+    o = occ(cible)
+    return ("Désactiver le mode debug de Nextcloud", [o + ["config:system:set", "debug", "--value=false", "--type=boolean"]],
+            [o + ["config:system:set", "debug", "--value=true", "--type=boolean"]])
+
+
+def nc_2fa_imposer(cible):
+    o = occ(cible)   # le fournisseur TOTP doit être actif : chacun pourra configurer sa double authentification à la connexion
+    return ("Imposer la double authentification sur Nextcloud", [o + ["app:enable", "twofactor_totp"], o + ["twofactorauth:enforce", "--on"]],
+            [o + ["twofactorauth:enforce", "--off"]])
+
+
+def nc_liens_mdp(cible):
+    o = occ(cible)
+    avant = lire(o + ["config:app:get", "core", "shareapi_enforce_links_password"])
+    annul = [o + ["config:app:set", "core", "shareapi_enforce_links_password", "--value=" + avant]] if avant in ("yes", "no") \
+        else [o + ["config:app:delete", "core", "shareapi_enforce_links_password"]]
+    return ("Imposer un mot de passe sur les liens de partage Nextcloud", [o + ["config:app:set", "core", "shareapi_enforce_links_password", "--value=yes"]], annul)
+
+
+ACTIONS = {
+    "ufw-supprimer": ufw_supprimer, "docker-restart": docker_restart, "chmod-600": chmod_600, "zfs-scrub": zfs_scrub,
+    "zfs-autotrim": zfs_autotrim, "smartd-activer": smartd_activer, "nc-debug-off": nc_debug_off,
+    "nc-2fa-imposer": nc_2fa_imposer, "nc-liens-mdp": nc_liens_mdp,
+}
+
+
+# ---------------------------------------------------------------- journal --
+def charger(chemin):
+    try:
+        with open(chemin, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def ecrire(chemin, journal, groupe):
+    tmp = chemin + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(journal[-GARDE:], f, ensure_ascii=False, indent=1)
+    try:
+        os.chown(tmp, 0, grp.getgrnam(groupe).gr_gid)
+    except (KeyError, OSError):
+        pass
+    os.replace(tmp, chemin)
+
+
+def executer(commandes):
+    sorties = []
+    for c in commandes:
+        rc, s = lancer(c)
+        sorties.append("$ {}\n{}".format(" ".join(shlex.quote(x) for x in c), s).strip())
+        if rc != 0:
+            return False, "\n".join(sorties)
+    return True, "\n".join(sorties)
+
+
+def proposee(typ, cible, dossier):
+    """La correction figure-t-elle dans le dernier rapport d'audit (écrit par root) ?"""
+    try:
+        noms = [n for n in os.listdir(dossier) if re.match(r"^rapport-[A-Za-z0-9._-]+-\d{8}-\d{4}\.json$", n)]
+    except OSError:
+        noms = []
+    if not noms:
+        raise Refus("aucun rapport d'audit : lancez d'abord un audit")
+    dernier = max(noms, key=lambda n: (n[-18:-5], n))
+    try:
+        with open(os.path.join(dossier, dernier), encoding="utf-8") as f:
+            r = json.load(f)
+    except (OSError, ValueError):
+        raise Refus("dernier rapport illisible")
+    for c in r.get("constats", []):
+        for a in c.get("actions") or []:
+            if a.get("type") == typ and a.get("cible") == cible:
+                return True
+    raise Refus("cette correction n'est pas proposée par le dernier audit ({})".format(dernier))
+
+
+def traiter(dem, journal, rapports):
+    maintenant = int(time.time())
+    ident = str(dem.get("id", ""))[:40]
+    if not re.match(r"^[A-Za-z0-9_-]{8,40}$", ident):
+        raise Refus("identifiant de demande invalide")
+    if dem.get("annuler"):
+        ent = next((e for e in journal if e.get("id") == dem["annuler"]), None)
+        if not ent or not ent.get("ok") or ent.get("annule") or not ent.get("annulation"):
+            raise Refus("cette correction ne peut pas être annulée")
+        ok, sortie = executer(ent["annulation"])
+        if ok:
+            ent["annule"] = maintenant
+        return {"id": ident, "date": maintenant, "type": "annulation", "cible": ent["id"], "libelle": "Annulation : " + ent["libelle"],
+                "commandes": [" ".join(shlex.quote(x) for x in c) for c in ent["annulation"]], "ok": ok, "sortie": sortie, "par": dem.get("par", "")}
+    typ, cible = dem.get("type"), dem.get("cible", "")
+    if typ not in ACTIONS or not isinstance(cible, str) or len(cible) > 500 or "\n" in cible or "\x00" in cible:
+        raise Refus("correction inconnue")
+    proposee(typ, cible, rapports)
+    libelle, cmds, annul = ACTIONS[typ](cible)
+    ok, sortie = executer(cmds)
+    return {"id": ident, "date": maintenant, "type": typ, "cible": cible, "libelle": libelle,
+            "commandes": [" ".join(shlex.quote(x) for x in c) for c in cmds], "annulation": annul if ok else None,
+            "ok": ok, "sortie": sortie, "par": dem.get("par", "")}
+
+
+def notifier(ent, conf):
+    """Prévient sur Telegram (si configuré) : une correction faite depuis l'interface ne passe jamais inaperçue."""
+    if ent.get("type") == "refus" and not ent.get("id"):
+        return
+    ico = "🛠" if ent.get("ok") else "⚠️"
+    etat = "appliquée" if ent.get("ok") else ("refusée" if ent.get("type") == "refus" else "en échec")
+    texte = "{} <b>Correction {} depuis l'interface</b>\n{}{}".format(
+        ico, etat, html.escape(ent.get("libelle", "")), "\nDemandée depuis {}".format(html.escape(str(ent["par"])[:60])) if ent.get("par") else "")
+    if not ent.get("ok") and ent.get("sortie"):
+        texte += "\n<code>{}</code>".format(html.escape(ent["sortie"][-300:]))
+    outil = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audite-moi-mesures")
+    try:
+        subprocess.run([sys.executable, outil, "--notifier", "--conf", conf], input=texte, text=True, timeout=40,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Corrections en un clic d'Audite-moi")
+    ap.add_argument("--demande", default="/var/lib/audite-moi/demande/corriger")
+    ap.add_argument("--journal", default="/var/lib/audite-moi/etat/corrections.json")
+    ap.add_argument("--groupe", default="audite-moi")
+    ap.add_argument("--rapports", default="/var/lib/audite-moi/rapports")
+    ap.add_argument("--conf", default="/etc/audite-moi/audit.conf")
+    a = ap.parse_args()
+    try:
+        with open(a.demande, encoding="utf-8") as f:
+            brut = f.read(8192)
+    except OSError:
+        return
+    finally:
+        try:
+            os.remove(a.demande)   # sinon audite-moi-corriger.path relancerait en boucle
+        except OSError:
+            pass
+    journal = charger(a.journal)
+    dem = None
+    try:
+        dem = json.loads(brut)
+        if not isinstance(dem, dict):
+            raise Refus("demande illisible")
+        ent = traiter(dem, journal, a.rapports)
+    except Refus as exc:
+        ent = {"id": str((dem if isinstance(dem, dict) else {}).get("id", ""))[:40],
+               "date": int(time.time()), "type": "refus", "libelle": "Demande refusée", "ok": False, "sortie": str(exc)}
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        ent = {"id": "", "date": int(time.time()), "type": "erreur", "libelle": "Erreur", "ok": False, "sortie": str(exc)[:500]}
+    journal.append(ent)
+    ecrire(a.journal, journal, a.groupe)
+    notifier(ent, a.conf)
+    print("{} : {} — {}".format(datetime.datetime.fromtimestamp(ent["date"]).isoformat(), ent["libelle"], "réussi" if ent["ok"] else "échec"),
+          file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

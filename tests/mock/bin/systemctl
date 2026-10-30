@@ -6,7 +6,20 @@ case "$args" in
   "is-active --quiet "*) u=${args#is-active --quiet }; [[ $ACTIVE == *" ${u%.service} "* ]] ;;
   "is-active "*) u=${args#is-active }; [[ $ACTIVE == *" ${u%.service} "* ]] && echo active || { echo inactive; exit 3; } ;;
   "--failed --no-legend --plain") echo "sauvegarde-nuit.service loaded failed failed Sauvegarde nocturne" ;;
-  "list-timers --all --no-legend") echo "Mon 2026-11-02 00:00:00 CET 3 days left Mon 2026-10-26 00:00:00 CET 3 days ago fstrim.timer fstrim.service" ;;
+  "list-timers --all --no-legend")
+    echo "Mon 2026-11-02 00:00:00 CET 3 days left Mon 2026-10-26 00:00:00 CET 3 days ago fstrim.timer fstrim.service"
+    echo "Fri 2026-10-30 03:00:00 CET 12h left Thu 2026-10-29 03:00:00 CET 5h ago restic-cloud.timer restic-cloud.service"
+    echo "Fri 2026-10-30 04:00:00 CET 13h left Thu 2026-10-29 04:00:00 CET 30h ago syncoid-usb.timer syncoid-usb.service" ;;
+  "show -p Unit --value restic-cloud.timer") echo restic-cloud.service ;;
+  "show -p Unit --value syncoid-usb.timer") echo syncoid-usb.service ;;
+  "show -p Result --value restic-cloud.service") echo success ;;
+  "show -p ExecMainStatus --value restic-cloud.service") echo 0 ;;
+  "show -p ExecMainExitTimestamp --value restic-cloud.service") date -d '-5 hours' '+%a %Y-%m-%d %H:%M:%S %Z' ;;
+  "show -p ExecStart --value restic-cloud.service") echo "{ path=/usr/bin/restic ; argv[]=/usr/bin/restic -r b2:nas-sauvegardes:photos backup /stockage/photos ; ignore_errors=no }" ;;
+  "show -p Result --value syncoid-usb.service") echo exit-code ;;
+  "show -p ExecMainStatus --value syncoid-usb.service") echo 1 ;;
+  "show -p ExecMainExitTimestamp --value syncoid-usb.service") date -d '-30 hours' '+%a %Y-%m-%d %H:%M:%S %Z' ;;
+  "show -p ExecStart --value syncoid-usb.service") echo "{ path=/usr/sbin/syncoid ; argv[]=/usr/sbin/syncoid -r stockage/photos usb/photos ; }" ;;
   "list-unit-files --type=service --no-legend cloudflared*") ;;
   "cat docker") printf '[Service]\nExecStart=/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock\n' ;;
   *) exit 0 ;;

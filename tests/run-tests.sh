@@ -46,8 +46,16 @@ OPNSENSE_URL=https://192.168.1.1/
 OPNSENSE_KEY=clef-api
 OPNSENSE_SECRET="secret+/="
 SCAN_RESEAU=oui
+SAUVEGARDES="photos-usb:zfs:stockage/photos:26 cle-usb:fichier:/chemin/introuvable:48"
 EOC
 chmod 644 "$TMP/audit.conf"
+maintenant=$(date +%s)
+jq -n --argjson n "$maintenant" '{debut: ($n - 864000), releves: 1400, ports: {"tcp/22": {vu: ($n - 3600)}, "tcp/445": {vu: $n},
+  "tcp/8096": {vu: $n, publiques: 2, exemples_publics: ["81.56.12.34", "90.1.2.3"]}, "tcp/9443": {vu: ($n - 3456000)}}}' > "$TMP/trafic.json"
+printf '{"parefeu|Docker contourne UFW : # port(s) publié(s) sur toutes les interfaces": {"raison": "voulu : accès local", "date": 1}}\n' > "$TMP/acceptes.json"
+echo '{"pools": [{"nom": "rapide", "tendance": {"octets_par_jour": 5368709120, "jours_observes": 30, "jours_avant_90": 10, "jours_avant_plein": 28}},
+  {"nom": "stockage", "tendance": {"octets_par_jour": 21474836480, "jours_observes": 30, "jours_avant_90": 400, "jours_avant_plein": 510}}]}' > "$TMP/mesures-audit.json"
+export AUDITE_MOI_TRAFIC=$TMP/trafic.json AUDITE_MOI_ACCEPTES=$TMP/acceptes.json AUDITE_MOI_MESURES=$TMP/mesures-audit.json
 mkdir -p "$OUT" && printf '00:0d:b9:11:22:33\t192.168.1.1\trouteur.maison\tPC Engines\n' > "$OUT/.inventaire-reseau"
 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT" --config "$TMP/audit.conf" --no-color --keep 5 > "$TMP/sortie.txt" 2> "$TMP/erreurs.txt"
 rc=$?
@@ -103,7 +111,7 @@ expect WARN "Partages Samba accessibles sans mot de passe"
 expect WARN "sharenfs=on"
 expect WARN "La box redirige des ports vers ce serveur (UPnP)"
 expect WARN "Service(s) systemd en échec"
-expect WARN "Aucun outil de sauvegarde détecté"
+expect OK   "Sauvegardes planifiées détectées"
 expect OK   "Onduleur eaton en ligne"
 expect INFO "Indice de durcissement Lynis : 64/100"
 expect WARN "Image exposée nextcloud:29-apache"
@@ -127,12 +135,36 @@ expect WARN "Stash a détecté un accès depuis Internet"
 expect WARN "audit.conf est lisible par d'autres comptes"
 expect WARN "OPNsense 25.7.3 : mises à jour disponibles"
 expect CRIT "Port 2222/tcp ouvert sur Internet → 192.168.1.10:22 (ce NAS) (SSH)"
-expect WARN "Port 32400/tcp ouvert sur Internet"
+expect WARN "Redirection de port inutile : 32400/tcp → 192.168.1.10:32400 (rien n'écoute)"
 expect CRIT "Le routeur lui-même est accessible depuis Internet (port 443)"
 expect INFO "Port VPN ouvert sur le WAN : udp 51820"
 expect WARN "UPnP activé sur le routeur"
 expect WARN "SSH d'OPNsense : connexion root autorisée"
 jq -e '.constats[] | select(.titre | contains("8080/tcp"))' "$J" >/dev/null && ko "une redirection désactivée est signalée" || ok "redirection désactivée ignorée"
+# Tendances
+expect CRIT "Pool rapide rempli à 90 % dans environ 10 jours"
+expect INFO "Pool stockage : +20.0Gio par jour"
+# Ports, règles orphelines, trafic observé
+expect WARN "3 règle(s) UFW ouvrent des ports où rien n'écoute"
+jq -e '.constats[] | select(.titre | startswith("3 règle(s) UFW")) | .actions | length == 3 and (map(.cible) | index("ufw allow 51413/tcp") != null)' "$J" >/dev/null \
+  && ok "corrections proposées pour chaque règle orpheline" || ko "actions de suppression des règles UFW"
+expect WARN "Connexions directes depuis Internet sur ce serveur"
+expect INFO "port(s) en écoute sans utilisation observée"
+jq -e '.constats[] | select(.titre | contains("sans utilisation observée")) | .detail | (contains("tcp/5432") and contains("tcp/9443") and (contains("tcp/22 ") | not))' "$J" >/dev/null \
+  && ok "ports inutilisés : 5432 et 9443 signalés, pas 22" || ko "liste des ports inutilisés"
+# Sauvegardes vérifiées
+expect WARN "Sauvegarde « syncoid-usb » : dernière exécution en échec"
+expect WARN "Sauvegarde « cle-usb » : aucune trace trouvée"
+expect OK   "Copie hors du serveur détectée : restic-cloud"
+jq -e '.constats[] | select(.titre | contains("photos-usb"))' "$J" >/dev/null && ko "photos-usb (à jour) ne devrait pas être signalée" || ok "sauvegarde à jour non signalée"
+# Constats acceptés et corrections proposées
+jq -e '.constats[] | select(.titre | startswith("Docker contourne UFW")) | .accepte == "voulu : accès local" and .niveau == "WARN"' "$J" >/dev/null \
+  && ok "constat accepté marqué (niveau d'origine conservé)" || ko "constat accepté"
+jq -e '[.constats[] | select(.niveau == "WARN" and (.accepte | not))] | length == '"$(jq '.compteurs.WARN' "$J")" "$J" >/dev/null \
+  && ok "un constat accepté ne compte plus dans les avertissements" || ko "compteurs avec constat accepté"
+jq -e '[.constats[].actions[]?.type] | (index("zfs-scrub") and index("zfs-autotrim") and index("nc-debug-off") and index("nc-2fa-imposer"))' "$J" >/dev/null \
+  && ok "corrections en un clic proposées (scrub, TRIM, Nextcloud)" || ko "corrections proposées"
+jq -e '[.constats[] | select(.cle | test("[0-9]"))] | length == 0' "$J" >/dev/null && ok "identifiants de constats sans chiffres" || ko "identifiants de constats"
 # Réseau local
 expect INFO "Réseaux trop grands ignorés : 10.30.0.0/16"
 expect INFO "4 appareil(s) trouvé(s) sur 192.168.1.0/24 192.168.20.0/24"
@@ -167,8 +199,9 @@ n=$(ls "$OUT"/rapport-*-[0-9]*.html | wc -l)
 [[ $n == 3 ]] && ok "seuls les 3 rapports les plus récents sont conservés" || ko "$n rapports conservés au lieu de 3"
 
 echo "▶ Relevé des disques et des pools (page Matériel)"
-M=$TMP/mesures.json; touch "$TMP/dem-mesurer"
-releve() { PATH="$ROOT/tests/mock/bin:$PATH" python3 "$ROOT/systemd/audite-moi-mesures" --sortie "$M" --demande "$TMP/dem-mesurer" --groupe root; }
+E=$TMP/etat; mkdir -p "$E" "$TMP/rap"; M=$E/mesures.json; touch "$TMP/dem-mesurer"
+export AUDITE_MOI_CONNTRACK=$ROOT/tests/fixtures/conntrack AUDITE_MOI_TELEGRAM_FICHIER=$TMP/telegram.txt
+releve() { PATH="$ROOT/tests/mock/bin:$PATH" python3 "$ROOT/systemd/audite-moi-mesures" --sortie "$M" --demande "$TMP/dem-mesurer" --groupe root --conf /dev/null --rapports "$TMP/rap"; }
 verifie() {   # verifie "description" 'expression jq'
   if jq -e "$2" "$M" >/dev/null 2>&1; then ok "$1"; else ko "$1"; fi
 }
@@ -185,6 +218,49 @@ jq '(.disques[] | select(.nom == "sdd") | .crc_hausse) = 1000' "$M" > "$M.t" && 
 releve; verifie "erreurs CRC anciennes et stables : simple note" '.disques[] | select(.nom == "sdd" and (.note | test("stables")) and (.raisons | length) == 2)'
 AUDITE_MOI_VEILLE=sdc releve
 verifie "disque en veille : pas réveillé, dernières valeurs gardées" '.disques[] | select(.nom == "sdc" and .veille == true and .temperature == 38 and .etat == "veille")'
+
+echo "▶ Observation des connexions et alertes Telegram"
+verifie_f() { if jq -e "$3" "$2" >/dev/null 2>&1; then ok "$1"; else ko "$1"; fi; }
+verifie_f "connexions entrantes relevées (ss + conntrack, Docker compris)" "$E/trafic.json" '.ports | has("tcp/22") and has("tcp/9443") and has("udp/51820") and (has("tcp/443") | not)'
+verifie_f "sources publiques repérées" "$E/trafic.json" '.ports["tcp/8096"].exemples_publics == ["81.56.12.34"] and (.ports["tcp/445"].publiques // 0) == 0'
+grep -q "Alertes Audite-moi activées" "$TMP/telegram.txt" && ok "message d'activation des alertes" || ko "message d'activation des alertes"
+[[ $(grep -c '^----$' "$TMP/telegram.txt") == 1 ]] && ok "un seul message lors des relevés suivants sans changement" || ko "messages en trop : $(grep -c '^----$' "$TMP/telegram.txt")"
+cp "$J" "$TMP/rap/rapport-nas-demo-20261023-0700.json"; releve
+jq '.constats += [{"section": "ssh", "niveau": "CRIT", "titre": "Nouveau problème <b>", "detail": ""}]' "$J" > "$TMP/rap/rapport-nas-demo-20261030-0700.json"
+jq '.disques.sdd.crc = 1 | .disques.zzz = {"etat": "ok", "vu": 1} | .ecoutes |= del(.["tcp/9443"]) | .pools.rapide.seuil = 0' "$E/alertes.json" > "$E/a.json" && mv "$E/a.json" "$E/alertes.json"
+: > "$TMP/telegram.txt"; releve
+for m in "Pool rapide rempli à 86 %" "Erreurs CRC en hausse sur sdd" "Disque zzz introuvable" "tcp/9443" "de nas-demo terminé" "Nouveau problème &lt;b&gt;"; do
+  grep -qF "$m" "$TMP/telegram.txt" && ok "alerte : $m" || ko "alerte absente : $m"
+done
+
+echo "▶ Corrections en un clic"
+C=$TMP/corrections.json; export AUDITE_MOI_TRACE=$TMP/trace
+mkdir -p "$TMP/rap-corr"
+jq -n --arg env "$TMP/.env" '{constats: [{actions: [{type: "ufw-supprimer", cible: "ufw allow 51413/tcp"}, {type: "ufw-supprimer", cible: "ufw allow 1/tcp"},
+  {type: "zfs-scrub", cible: "stockage; reboot"}, {type: "shell", cible: "id"}, {type: "chmod-600", cible: $env}, {type: "chmod-600", cible: "/etc/shadow"},
+  {type: "zfs-scrub", cible: "stockage"}]}]}' > "$TMP/rap-corr/rapport-nas-demo-20261030-0800.json"
+echo '{"constats": [{"actions": [{"type": "zfs-scrub", "cible": "rapide"}]}]}' > "$TMP/rap-corr/rapport-nas-demo-20261023-0800.json"
+corrige() { printf '%s' "$1" > "$TMP/corriger"; PATH="$ROOT/tests/mock/bin:$PATH" python3 "$ROOT/systemd/audite-moi-corriger" --demande "$TMP/corriger" --journal "$C" --groupe root --rapports "$TMP/rap-corr" 2>/dev/null; }
+corrige '{"id": "test-0001", "type": "ufw-supprimer", "cible": "ufw allow 51413/tcp"}'
+corrige '{"id": "test-0002", "type": "ufw-supprimer", "cible": "ufw allow 1/tcp"}'
+corrige '{"id": "test-0003", "type": "zfs-scrub", "cible": "stockage; reboot"}'
+corrige '{"id": "test-0004", "type": "shell", "cible": "id"}'
+printf 'MDP=1\n' > "$TMP/.env"; chmod 644 "$TMP/.env"
+corrige '{"id": "test-0005", "type": "chmod-600", "cible": "'"$TMP"'/.env"}'; m1=$(stat -c %a "$TMP/.env")
+corrige '{"id": "test-0006", "annuler": "test-0005"}'; m2=$(stat -c %a "$TMP/.env")
+corrige '{"id": "test-0007", "type": "chmod-600", "cible": "/etc/shadow"}'
+corrige '{"id": "test-0008", "type": "zfs-scrub", "cible": "stockage"}'
+corrige '{"id": "test-0009", "type": "zfs-scrub", "cible": "rapide"}'
+[[ -e $TMP/corriger ]] && ko "demande de correction non effacée" || ok "demande de correction effacée"
+grep -q '^ufw --force delete allow 51413/tcp$' "$AUDITE_MOI_TRACE" && ok "règle UFW orpheline supprimée" || ko "suppression de la règle UFW"
+verifie_f "règle inexistante, pool piégé, type inconnu, fichier système : refusés" "$C" '[.[] | select(.type == "refus")] | length == 5'
+verifie_f "correction absente du dernier audit : refusée" "$C" '.[] | select(.id == "test-0009") | .type == "refus" and (.sortie | contains("dernier audit"))'
+grep -q '^scrub rapide$' "$AUDITE_MOI_TRACE" && ko "scrub de rapide lancé sans proposition" || ok "rien exécuté pour une correction non proposée"
+[[ $m1 == 600 && $m2 == 644 ]] && ok "chmod 600 puis annulation (retour à 644)" || ko "chmod/annulation : $m1 → $m2"
+grep -q '^scrub stockage$' "$AUDITE_MOI_TRACE" && ok "scrub lancé" || ko "scrub"
+verifie_f "journal : commande et annulation enregistrées" "$C" '.[] | select(.id == "test-0008") | .ok and .annulation == [["zpool", "scrub", "-s", "stockage"]]'
+grep -q "Correction appliquée depuis l'interface" "$TMP/telegram.txt" && grep -q "Correction refusée" "$TMP/telegram.txt" \
+  && ok "chaque correction (et chaque refus) est signalée sur Telegram" || ko "notification Telegram des corrections"
 
 echo "▶ Interface web"
 if python3 "$ROOT/tests/test_web.py" > "$TMP/web.txt" 2>&1; then ok "tests de l'interface web ($(grep -oE 'Ran [0-9]+ tests' "$TMP/web.txt"))"

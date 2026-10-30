@@ -10,7 +10,7 @@
 # =============================================================================
 set -euo pipefail
 
-PORT=8765 ECOUTE=0.0.0.0 TLS=1 WEB=1 MINUTEUR=1 NOUVEAU_MDP=0 MINIMAL=0 OUVRIR=0 OPN=0
+PORT=8765 ECOUTE=0.0.0.0 TLS=1 WEB=1 MINUTEUR=1 NOUVEAU_MDP=0 MINIMAL=0 OUVRIR=0 OPN=0 TG=0
 usage() {
   cat <<'EOF'
 Installation d'Audite-moi
@@ -26,6 +26,7 @@ Installation d'Audite-moi
   --minimal              n'installe que les dépendances indispensables
   --ouvrir-pare-feu      autorise l'interface dans UFW depuis tous les réseaux privés, sans poser la question
   --configurer-opnsense  enregistre l'adresse et la clé API du routeur OPNsense (voir le README)
+  --configurer-telegram  active les alertes sur Telegram (création du bot guidée)
   -h, --help             cette aide
 EOF
 }
@@ -40,6 +41,7 @@ while (($#)); do
     --minimal) MINIMAL=1; shift ;;
     --ouvrir-pare-feu) OUVRIR=1; shift ;;
     --configurer-opnsense) OPN=1; shift ;;
+    --configurer-telegram) TG=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Option inconnue : $1" >&2; usage >&2; exit 1 ;;
   esac
@@ -58,7 +60,7 @@ etape() { printf '\n\e[1m▶ %s\e[0m\n' "$*"; }
 etape "Dépendances"
 paquets=(jq python3 smartmontools curl)
 ((TLS && WEB)) && paquets+=(openssl)
-((MINIMAL)) || paquets+=(lynis vainfo pciutils nmap)
+((MINIMAL)) || paquets+=(lynis vainfo pciutils nmap conntrack)
 manque=()
 for p in "${paquets[@]}"; do dpkg -s "$p" >/dev/null 2>&1 || manque+=("$p"); done
 if ((${#manque[@]})); then
@@ -75,6 +77,7 @@ install -m 755 "$SRC/audite-moi.sh" /usr/local/sbin/audite-moi
 install -d -m 755 "$LIB"
 install -m 755 "$SRC/systemd/audite-moi-run" "$LIB/audite-moi-run"
 install -m 755 "$SRC/systemd/audite-moi-mesures" "$LIB/audite-moi-mesures"
+install -m 755 "$SRC/systemd/audite-moi-corriger" "$LIB/audite-moi-corriger"
 install -m 755 "$SRC/web/audite-moi-web.py" "$LIB/audite-moi-web.py"
 echo "/usr/local/sbin/audite-moi, $LIB/"
 
@@ -85,8 +88,8 @@ if ! getent passwd audite-moi >/dev/null; then
 fi
 install -d -o root -g audite-moi -m 750 "$VAR" "$ETC"
 install -d -o root -g audite-moi -m 2750 "$VAR/rapports" "$VAR/etat"
-install -d -o root -g audite-moi -m 2770 "$VAR/demande"
-echo "$VAR/{rapports,etat,demande}"
+install -d -o root -g audite-moi -m 2770 "$VAR/demande" "$VAR/reglages"
+echo "$VAR/{rapports,etat,demande,reglages}"
 
 etape "Réglages des contrôles réseau"
 CONF=$ETC/audit.conf
@@ -116,6 +119,24 @@ EOC
   echo "Modèle créé : $CONF"
 fi
 chown root:root "$CONF"; chmod 600 "$CONF"
+# réglages ajoutés par les versions récentes (sans toucher à ceux déjà présents)
+grep -q '^SAUVEGARDES=' "$CONF" || cat >> "$CONF" <<'EOC'
+
+# Preuves de sauvegarde à vérifier, « nom:type:cible:heures » séparés par des espaces (voir le README) :
+#   type zfs = dernier snapshot du dataset, fichier = fichier le plus récent du dossier, unite = service systemd réussi
+#   ex. SAUVEGARDES="photos-usb:zfs:usb/photos:26 cloud:unite:restic-cloud.service:26"
+SAUVEGARDES=""
+EOC
+grep -q '^TELEGRAM_TOKEN=' "$CONF" || cat >> "$CONF" <<'EOC'
+
+# Alertes Telegram — sudo ./install.sh --configurer-telegram
+TELEGRAM_TOKEN=""
+TELEGRAM_CHAT_ID=""
+# oui / non : pools, disques, sauvegardes, nouveaux ports, résumé de chaque audit
+ALERTES=oui
+# Adresse de l'interface ajoutée aux messages (lien cliquable depuis le réseau local)
+INTERFACE_URL=""
+EOC
 
 conf_set() {   # conf_set CLÉ valeur : remplace (ou ajoute) la ligne dans audit.conf
   CLE=$1 VAL=$2 python3 - "$CONF" <<'PY'
@@ -132,6 +153,36 @@ with os.fdopen(fd, "w", encoding="utf-8") as f: f.write("\n".join(lignes) + "\n"
 os.replace(tmp, p)
 PY
 }
+
+if ((TG)); then
+  [[ -t 0 ]] || { echo "--configurer-telegram demande un terminal interactif." >&2; exit 1; }
+  cat <<'EOT'
+
+Alertes Telegram : 3 étapes.
+  1. Dans Telegram, ouvrez une conversation avec @BotFather, envoyez /newbot,
+     choisissez un nom (ex. « NAS maison ») puis un identifiant finissant par « bot ».
+  2. BotFather répond avec un jeton du type 123456789:AA…  : copiez-le ci-dessous.
+  3. Ouvrez la conversation avec votre nouveau bot et envoyez-lui un message (ex. « bonjour »).
+EOT
+  read -r -s -p "Jeton du bot (non affiché) : " jeton; echo
+  if ! [[ $jeton =~ ^[0-9]{5,}:[A-Za-z0-9_-]{30,}$ ]]; then echo "Ce jeton n'a pas le bon format : rien n'a été enregistré." >&2; exit 1; fi
+  chat=""
+  for essai in 1 2 3; do
+    read -r -p "Envoyez maintenant un message à votre bot dans Telegram, puis appuyez sur Entrée… " _
+    if r=$(printf '%s\n' "$jeton" | python3 "$LIB/audite-moi-mesures" --trouver-chat 2>/dev/null); then
+      chat=${r%%$'\t'*}; echo "✔ Conversation trouvée : ${r#*$'\t'} ($chat)"; break
+    fi
+    echo "Aucun message reçu par le bot pour l'instant (essai $essai/3)."
+  done
+  [[ $chat =~ ^-?[0-9]+$ ]] || { echo "Impossible de trouver la conversation : vérifiez le jeton et réessayez." >&2; exit 1; }
+  ip_nas=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^(10|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.' | grep -vE '^172\.(1[7-9]|2[0-9]|3[01])\.0\.1$' | head -n 1 || true)
+  schema_tg=https; ((TLS)) || schema_tg=http
+  conf_set TELEGRAM_TOKEN "$jeton"; conf_set TELEGRAM_CHAT_ID "$chat"; conf_set ALERTES oui
+  [[ -n $ip_nas ]] && conf_set INTERFACE_URL "$schema_tg://$ip_nas:$PORT/"
+  unset jeton
+  python3 "$LIB/audite-moi-mesures" --test-telegram --conf "$CONF" || exit 1
+  echo "Alertes activées : vous recevrez un premier message récapitulatif au prochain relevé (10 minutes au plus)."
+fi
 
 if ((OPN)); then
   [[ -t 0 ]] || { echo "--configurer-opnsense demande un terminal interactif." >&2; exit 1; }
@@ -215,7 +266,8 @@ fi
 etape "Services systemd"
 install -m 644 "$SRC/systemd/audite-moi.service" "$SRC/systemd/audite-moi.path" "$SRC/systemd/audite-moi.timer" /etc/systemd/system/
 ((WEB)) && install -m 644 "$SRC/systemd/audite-moi-web.service" "$SRC/systemd/audite-moi-mesures.service" \
-  "$SRC/systemd/audite-moi-mesures.timer" "$SRC/systemd/audite-moi-mesures.path" /etc/systemd/system/
+  "$SRC/systemd/audite-moi-mesures.timer" "$SRC/systemd/audite-moi-mesures.path" \
+  "$SRC/systemd/audite-moi-corriger.service" "$SRC/systemd/audite-moi-corriger.path" /etc/systemd/system/
 if ((SYSTEMD)); then
   systemctl daemon-reload
   systemctl enable --now audite-moi.path >/dev/null
@@ -223,9 +275,9 @@ if ((SYSTEMD)); then
   else systemctl disable --now audite-moi.timer >/dev/null 2>&1 || true; fi
   if ((WEB)); then
     # relevé des disques pour la page « Matériel » : toutes les 10 min et à la demande
-    systemctl enable --now audite-moi-mesures.timer audite-moi-mesures.path >/dev/null
+    systemctl enable --now audite-moi-mesures.timer audite-moi-mesures.path audite-moi-corriger.path >/dev/null
     systemctl start --no-block audite-moi-mesures.service
-    echo "Relevé des disques (page Matériel) : toutes les 10 minutes"
+    echo "Relevé des disques, des connexions et alertes : toutes les 10 minutes ; corrections en un clic actives"
     systemctl enable audite-moi-web.service >/dev/null
     systemctl restart audite-moi-web.service
     sleep 1

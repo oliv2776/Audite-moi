@@ -1,5 +1,22 @@
 #!/usr/bin/env bash
-cat <<EOT
+# Faux ufw
+case "$*" in
+  "show added") cat <<'EOT'
+Added user rules (see 'ufw status' for running firewall):
+ufw allow 22/tcp
+ufw allow from 192.168.1.0/24 to any port 445 proto tcp
+ufw allow 8080/tcp
+ufw allow 6881:6889/udp
+ufw allow OpenSSH
+ufw allow 3000
+ufw allow from 192.168.1.0/24 to any port 9000 comment 'ancien Portainer'
+ufw allow 51413/tcp
+ufw deny 23
+EOT
+    ;;
+  "--force delete "*|"allow "*) echo "ufw $*" >> "${AUDITE_MOI_TRACE:-/dev/null}"; echo "Rule deleted" ;;
+  "app info OpenSSH") printf 'Profile: OpenSSH\nTitle: Secure shell server, an rshd replacement\nDescription: OpenSSH is a free implementation of the Secure Shell protocol.\n\nPort:\n  22/tcp\n' ;;
+  *) cat <<EOT
 Status: active
 Logging: on (low)
 Default: deny (incoming), allow (outgoing), deny (routed)
@@ -10,3 +27,5 @@ To                         Action      From
 22/tcp                     ALLOW IN    192.168.1.0/24
 445/tcp                    ALLOW IN    192.168.1.0/24
 EOT
+  ;;
+esac

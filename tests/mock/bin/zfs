@@ -2,6 +2,7 @@
 # Faux zfs
 args="$*"; now=$(date +%s)
 case "$args" in
+  "list -H -p -t snapshot -o creation -s creation -d 1 stockage/photos") echo $((now - 7200)) ;;
   version) printf 'zfs-2.2.2-0ubuntu9.4\nzfs-kmod-2.2.2-0ubuntu9.4\n' ;;
   "get -H -o value org.debian:periodic-trim rapide") echo "-" ;;
   "list -H -p -t snapshot -o name,creation")

@@ -6,7 +6,8 @@ case "$args" in
   "list -H -p -o size,alloc,free,frag,cap,health,dedupratio rapide") printf '996432412672\t826538905600\t169893507072\t31\t83\tONLINE\t1.00\n' ;;
   "list -H -p -o size,alloc,free,frag,cap,health,dedupratio stockage") printf '23991808753664\t13434601062400\t10557207691264\t9\t56\tONLINE\t1.00\n' ;;
   "status -x") echo "all pools are healthy" ;;
-  "get -H -o value autotrim rapide") echo off ;;
+  "scrub rapide"|"scrub stockage"|"scrub -s stockage"|"set autotrim=on rapide"|"set autotrim=off rapide") echo "$args" >> "${AUDITE_MOI_TRACE:-/dev/null}" ;;
+  "get -H -o value autotrim "*) echo off ;;
   status*rapide)
     if [[ $args == *-LP* ]]; then d1=/dev/sda1 d2=/dev/sdb1; else d1=ata-Samsung_SSD_870_EVO_1TB_S6PTNM0R100001-part1 d2=ata-Samsung_SSD_870_EVO_1TB_S6PTNM0R100002-part1; fi
     cat <<EOT

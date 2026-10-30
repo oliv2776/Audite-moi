@@ -17,7 +17,9 @@ Chaque audit produit un rapport classé par priorité (**critique**, **attention
 - **ZFS** : état des pools, remplissage, erreurs, dernier scrub et sa planification, TRIM des pools SSD, ZED et ses notifications, ARC, chiffrement, modules prêts pour le prochain noyau.
 - **Docker** : conteneurs arrêtés en erreur, en boucle de redémarrage, *unhealthy*, tués par manque de mémoire, consommation, espace récupérable, rotation des journaux.
 - **GPU et transcodage** : correspondance `/dev/dri/renderD*` ↔ GPU, pilotes (i915/xe, amdgpu, nvidia), encodage VA-API, firmware GuC/HuC, température / charge / mémoire vidéo de la carte AMD, accès réel de chaque conteneur à chaque GPU.
-- **Réseau** et **sauvegardes** : vitesse des liens, DNS, IPv6 publique, snapshots par pool, outils de sauvegarde (règle 3-2-1).
+- **Réseau** : vitesse des liens, DNS, IPv6 publique.
+- **Sauvegardes** : snapshots par pool, outils de sauvegarde (règle 3-2-1), **date de la dernière sauvegarde réussie** de chaque tâche planifiée (restic, borg, kopia, syncoid, rclone…), échecs, **copie hors du serveur** ou non ; vos propres preuves de sauvegarde (`SAUVEGARDES`, voir plus bas).
+- **Tendances** : rythme de remplissage de chaque pool et date prévue des 90 % (à partir des relevés horaires).
 
 **Sécurité**
 - **Tunnels Cloudflare** : connexion du tunnel (point de contrôle `/ready`), version de cloudflared, services d'origine injoignables, noms d'hôte publiés et conteneurs ciblés, Cloudflare Access, services aussi joignables sans passer par le tunnel.
@@ -28,6 +30,7 @@ Chaque audit produit un rapport classé par priorité (**critique**, **attention
 - **Mises à jour** : correctifs de sécurité en attente, mises à jour automatiques, fin de support d'Ubuntu.
 - **Comptes et SSH** : UID 0, mots de passe vides, sudo sans mot de passe, groupe docker, clés SSH, configuration de sshd, tentatives de connexion depuis Internet, fail2ban / CrowdSec.
 - **Pare-feu** : UFW, ports Docker qui **contournent UFW**, bases de données exposées, Samba (SMB1, partages invités), NFS, redirections UPnP de la box.
+- **Ports ouverts pour rien** : règles UFW qui ouvrent un port où **aucun service n'écoute**, redirections OPNsense vers un port vide, et — après 7 jours d'observation des connexions reçues — ports en écoute que **personne n'utilise** et ports qui reçoivent des connexions **directes depuis Internet** (hors tunnels).
 - **Sécurité Docker** : conteneurs privilégiés, socket Docker monté, réseau *host*, capacités dangereuses, montages sensibles, secrets en clair, âge des images (plus strict pour les services exposés sur Internet).
 - **Fichiers, noyau, journaux** : droits des fichiers sensibles, binaires SUID hors paquets, intégrité des binaires critiques (`dpkg --verify`), paramètres sysctl, AppArmor, vulnérabilités du processeur, processus suspects (mineurs, exécution depuis `/tmp`).
 - **Analyses complémentaires** si installées : [Lynis](https://cisofy.com/lynis/), [Trivy](https://trivy.dev) (vulnérabilités des images), rkhunter.
@@ -47,8 +50,10 @@ L'installateur :
 2. copie le script dans `/usr/local/sbin/audite-moi` ;
 3. crée l'utilisateur système `audite-moi` (sans shell ni droits root) qui fait tourner l'interface web ;
 4. vous demande un mot de passe et crée un certificat HTTPS auto-signé ;
-5. crée `/etc/audite-moi/audit.conf`, les réglages des contrôles réseau (lisible par root uniquement) ;
-6. active l'interface web, un audit complet automatique **chaque lundi vers 7 h 30**, et lance un premier audit.
+5. crée `/etc/audite-moi/audit.conf`, les réglages des contrôles réseau, des sauvegardes et des alertes (lisible par root uniquement) ;
+6. active l'interface web, un audit complet automatique **chaque lundi vers 7 h 30**, le relevé des disques et des connexions toutes les 10 minutes, et lance un premier audit.
+
+Pour recevoir les **alertes sur Telegram** : `sudo ./install.sh --configurer-telegram` (voir plus bas).
 
 Ouvrez ensuite **`https://<ip-du-nas>:8765/`**. Le navigateur affichera un avertissement la première fois (certificat auto-signé) : acceptez-le.
 
@@ -61,6 +66,9 @@ Options utiles : `--port 9000`, `--ecoute 192.168.1.10`, `--sans-web` (script + 
 - une barre de navigation toujours visible : **Tableau de bord**, **Constats**, **Historique**, **Rapport complet**, et les boutons **▶ Lancer un audit** (complet, quelques minutes) / **Audit rapide** (sans Lynis, Trivy, scan du réseau local ni recherche des fichiers SUID), avec le déroulement affiché en direct ;
 - les notes **Santé** / **Sécurité** et les compteurs (critiques, avertissements, OK, infos) sont **cliquables** : un clic n'affiche que les constats correspondants (ex. Sécurité + Critiques), un second clic annule ;
 - la liste des **constats** se filtre aussi par catégorie, niveau, section ou mot-clé (ex. « ssh », « jellyfin ») ; par défaut elle montre ce qu'il faut corriger, du plus urgent au moins urgent, avec la correction à appliquer ;
+- **ce qui a changé** depuis l'audit précédent : nombre de problèmes nouveaux (marqués « Nouveau », filtre dédié) et résolus (liste) ;
+- **« C'est voulu… »** : un constat que vous assumez (avec votre raison) ne compte plus dans la note ni dans les alertes ; il reste visible, marqué « Accepté », et l'on peut revenir en arrière ;
+- **corrections en un clic** pour certains problèmes (voir plus bas), avec le journal des corrections et leur annulation ;
 - la page **Matériel** (voir ci-dessous) ;
 - **évolution des notes** et **historique** : un clic sur une date affiche cet ancien audit dans le tableau de bord ;
 - le **rapport complet** (avec un bouton « ← Tableau de bord » et les mêmes filtres cliquables), sa version texte et le JSON.
@@ -73,9 +81,10 @@ Un tableau de bord de l'état du serveur, mis à jour en direct :
 
 - **Stockage** : pour chaque pool ZFS, l'espace **réellement utilisable** restant (parité déduite), le remplissage (orange au-delà de 80 %, seuil où ZFS ralentit ; rouge au-delà de 90 %), les principaux jeux de données et l'état de chaque disque membre ; les autres volumes (`/`, `/boot`…).
 - **Disques** : état SMART de chaque disque (OK, à surveiller, critique) avec la raison en clair (secteurs réalloués ou en attente, erreurs CRC **en hausse**, température, usure des SSD/NVMe, erreurs ZFS), sa température et son âge. Les erreurs CRC anciennes et stables ne sont plus signalées comme un problème.
+- **Tendances** sur 7 jours à 1 an : remplissage de chaque pool et température maximale des disques, avec la date prévue des 90 %.
 - **Processeur** (charge totale et par cœur, température, fréquence), **mémoire** (applications, cache ZFS, cache système, swap) et **GPU** (occupation, mémoire vidéo, température, puissance, fréquence ; Intel : occupation estimée), avec l'historique des 3 dernières minutes, pratique pour suivre un transcodage.
 
-Processeur, mémoire et GPU sont lus en direct par l'interface (sans droits particuliers). Les disques sont relevés en root par `audite-moi-mesures.timer` toutes les 10 minutes, ou tout de suite avec le bouton **Actualiser** ; les disques en veille ne sont **jamais réveillés** (leurs dernières valeurs restent affichées).
+Processeur, mémoire et GPU sont lus en direct par l'interface (sans droits particuliers). Les disques sont relevés en root par `audite-moi-mesures.timer` toutes les 10 minutes (un point par heure est gardé deux ans pour les tendances), ou tout de suite avec le bouton **Actualiser** ; les disques en veille ne sont **jamais réveillés** (leurs dernières valeurs restent affichées).
 
 ![Page Matériel](docs/materiel.png)
 
@@ -122,12 +131,66 @@ Le privilège de sauvegarde permet de lire **toute** la configuration du routeur
 
 Le scan part du NAS car c'est lui qui a les outils (nmap, rapports, historique) et qu'il peut se comparer d'une semaine à l'autre : il signale les nouveaux appareils. Mais il ne voit que ce que **le NAS** a le droit de joindre : si OPNsense isole un VLAN (objets connectés, invités) du réseau du NAS, ce VLAN apparaîtra vide, ce qui est justement le signe que l'isolation fonctionne. La vue complète des règles entre sous-réseaux, elle, vient de l'audit de la configuration d'OPNsense. Les deux se complètent ; il n'est pas utile d'installer nmap sur le routeur.
 
+## Alertes Telegram
+
+```bash
+sudo ./install.sh --configurer-telegram
+```
+
+L'installateur vous guide : créez un bot avec **@BotFather** dans Telegram (`/newbot`), collez le jeton, envoyez un message à votre bot ; la conversation est trouvée automatiquement et un message de test est envoyé. Le jeton reste dans `audit.conf` (root seulement).
+
+Vous êtes ensuite prévenu, en quelques minutes :
+- **pool** dégradé ou de nouveau en ligne, rempli à 80 / 90 / 95 %, ou plein dans moins de 30 jours au rythme actuel ;
+- **disque** qui passe « à surveiller » ou « critique », erreurs CRC en hausse, disque disparu ;
+- **sauvegarde** planifiée en échec ;
+- **nouveau port en écoute** sur le serveur ;
+- **après chaque audit** : notes, nouveaux problèmes, problèmes résolus, nouveaux appareils sur le réseau ;
+- **chaque correction** faite depuis l'interface (même refusée) : une action inattendue ne passe pas inaperçue.
+
+Un même problème n'est signalé qu'une fois (puis quand il est réglé). Les constats acceptés (« c'est voulu ») ne déclenchent pas d'alerte. `ALERTES=non` dans `audit.conf` coupe tout.
+
+## Corrections en un clic
+
+Certains constats ont un bouton **Corriger** :
+
+| Correction | Commande | Annulation |
+|---|---|---|
+| Supprimer une règle UFW orpheline | `ufw delete …` | la règle est recréée |
+| Redémarrage automatique d'un conteneur | `docker update --restart unless-stopped` | politique d'origine |
+| Protéger un `.env` / `compose.yml` contenant des secrets | `chmod 600` | droits d'origine |
+| Lancer un scrub | `zpool scrub` | `zpool scrub -s` |
+| TRIM automatique d'un pool SSD | `zpool set autotrim=on` | valeur d'origine |
+| Activer smartd | `systemctl enable --now smartmontools` | `disable --now` |
+| Nextcloud : couper le mode debug, imposer un mot de passe sur les liens, imposer la double authentification | `occ …` | réglage d'origine |
+
+![Correction en un clic](docs/correction.png)
+
+**Garde-fous** : la commande exacte est affichée avant confirmation, **votre mot de passe est redemandé**, et seule une correction **proposée par le dernier audit** (écrit par root) peut être demandée. L'interface web, sans droits, ne fait que déposer une demande ; `audite-moi-corriger` (root) n'exécute que les corrections de sa **liste fermée**, revérifie la cible (règle UFW existante, pool ou conteneur réel, fichier `.env`/compose ordinaire), construit lui-même la commande, sans shell. Chaque correction est journalisée avec sa sortie et peut être **annulée** ; elle est signalée sur Telegram. L'audit suivant confirme que le problème a disparu.
+
+Ne sont **pas** automatisés, volontairement : SSH, la politique par défaut du pare-feu (risque de vous enfermer dehors), le routeur (clé API en lecture seule), les fichiers docker-compose et les mises à jour de conteneurs.
+
+## Vérifier les sauvegardes
+
+L'audit trouve seul les tâches planifiées par systemd (restic, borg, kopia, syncoid, rclone, rsnapshot… ou tout minuteur contenant « backup » / « sauvegarde ») : date de la dernière réussite, échec, et présence d'une destination distante (`b2:`, `s3:`, `sftp:`, `rclone:`, `user@hôte:`…).
+
+Pour une sauvegarde qu'il ne voit pas (dans un conteneur, lancée par une autre machine…), indiquez ce qui prouve qu'elle a réussi dans `audit.conf`, au format `nom:type:cible:heures` :
+
+```
+SAUVEGARDES="photos-usb:zfs:usb/photos:26 cloud:unite:restic-cloud.service:26 duplicati:fichier:/mnt/backup/duplicati:48"
+```
+
+- `zfs` : date du dernier snapshot du dataset (réplication syncoid / zfs send reçue) ;
+- `fichier` : fichier le plus récent du dossier (ou date du fichier) ;
+- `unite` : dernière exécution réussie d'un service systemd ;
+- `heures` : délai maximal avant alerte (26 h pour une sauvegarde quotidienne).
+
 ## Sécurité de l'interface web
 
 Le rapport décrit précisément les faiblesses de votre serveur : l'interface est conçue pour rester privée.
 
 - Le serveur web (Python, bibliothèque standard uniquement) tourne sous l'utilisateur `audite-moi`, sans droits root et dans un service systemd durci. Il ne peut **pas** exécuter de commande : il dépose seulement une demande que `audite-moi.path` transmet à `audite-moi.service`.
 - Mot de passe haché (PBKDF2-SHA256, 600 000 itérations), session en cookie `HttpOnly` / `SameSite=Strict`, protection CSRF, blocage après 5 échecs en 15 minutes, HTTPS par défaut, en-têtes de sécurité stricts (CSP…).
+- Les constats acceptés sont enregistrés dans `/var/lib/audite-moi/reglages` (seul dossier, avec celui des demandes, où l'interface peut écrire).
 - **Ne l'exposez pas sur Internet.** Si UFW est actif, l'installateur propose de l'ouvrir uniquement aux réseaux privés (tous vos sous-réseaux, pas Internet). Pour un accès à distance, passez par un VPN, ou par votre tunnel Cloudflare **derrière Cloudflare Access** (avec `noTLSVerify: true` vers l'origine, le certificat étant auto-signé).
 
 ## GPU : Intel + AMD dans un même conteneur
@@ -154,6 +217,7 @@ services:
 | radeontop / intel-gpu-tools | charge instantanée du GPU | `sudo apt install radeontop intel-gpu-tools` |
 | miniupnpc | redirections UPnP de la box | `sudo apt install miniupnpc` |
 | nmap | scan du réseau local | `sudo apt install nmap` |
+| conntrack | connexions reçues par les conteneurs Docker (si `/proc/net/nf_conntrack` est absent) | `sudo apt install conntrack` |
 
 ## Dépannage
 
@@ -169,6 +233,10 @@ sudo ufw allow from 192.168.0.0/16 to any port 8765 proto tcp comment Audite-moi
 `sudo ./install.sh --ouvrir-pare-feu` ouvre automatiquement le port à tous les réseaux privés (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) : tous les PC de la maison, quel que soit leur sous-réseau, mais pas Internet. Pensez aussi à bien taper **https://** (et non http://).
 
 **« La connexion a échoué »** (refus immédiat) : le service ne tourne pas, voir `sudo journalctl -u audite-moi-web -n 30`.
+
+**Pas d'alerte Telegram / « échec d'envoi » sur le tableau de bord** : `sudo python3 /usr/local/lib/audite-moi/audite-moi-mesures --test-telegram` envoie un message de test ; le journal du relevé : `journalctl -u audite-moi-mesures -n 30`.
+
+**Une correction reste « en cours »** : `systemctl status audite-moi-corriger.path audite-moi-corriger.service` et `journalctl -u audite-moi-corriger -n 30`.
 
 ## Désinstallation
 
@@ -191,7 +259,8 @@ sudo tests/run-tests.sh --reel   # + une exécution réelle (lecture seule) sur 
 ```
 audite-moi.sh            le script d'audit (bash)
 web/audite-moi-web.py    l'interface web (Python 3, sans dépendance)
-systemd/                 services : audit (.service/.path/.timer), relevé des disques (audite-moi-mesures) et interface web
+systemd/                 services : audit (.service/.path/.timer), relevé des disques, des connexions et alertes
+                         (audite-moi-mesures), corrections (audite-moi-corriger) et interface web
 install.sh, uninstall.sh
 tests/                   simulations, données d'exemple et tests
 ```

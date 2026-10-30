@@ -16,4 +16,7 @@ args=(-o "$BASE/rapports" --group audite-moi --no-color --keep "${AUDITE_MOI_GAR
 printf '{"debut": %s, "mode": "%s"}\n' "$(date +%s)" "$mode" > "$ETAT/en-cours"
 trap 'rm -f "$ETAT/en-cours"' EXIT
 /usr/local/sbin/audite-moi "${args[@]}" 2>&1 | tee "$ETAT/journal.log"
-exit "${PIPESTATUS[0]}"
+rc=${PIPESTATUS[0]}
+# relevé immédiat : résumé de l'audit sur Telegram (si configuré) sans attendre le prochain passage
+systemctl start --no-block audite-moi-mesures.service 2>/dev/null || true
+exit "$rc"

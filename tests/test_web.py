@@ -26,7 +26,8 @@ def rapport(dossier, nom, t, sante, secu):
          "compteurs": {"CRIT": 1, "WARN": 1, "OK": 3, "INFO": 2},
          "fichiers": {"html": nom + ".html", "txt": nom + ".txt", "json": nom + ".json"},
          "sections": {"ssh": {"titre": "SSH", "categorie": "secu"}},
-         "constats": [{"section": "ssh", "niveau": "CRIT", "titre": "Titre <script>alert(1)</script>", "detail": "d", "correctif": "Faites `ceci`"},
+         "constats": [{"section": "ssh", "niveau": "CRIT", "titre": "Titre <script>alert(1)</script>", "detail": "d", "correctif": "Faites `ceci`",
+                       "actions": [{"type": "zfs-scrub", "cible": "stockage", "libelle": "Lancer un scrub", "apercu": "sudo zpool scrub stockage"}]},
                       {"section": "ssh", "niveau": "WARN", "titre": "Un avertissement", "detail": "", "correctif": ""}]}
     with open(os.path.join(dossier, nom + ".json"), "w", encoding="utf-8") as f:
         json.dump(d, f)
@@ -76,7 +77,7 @@ class TestInterface(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         base = cls.tmp.name
-        for d in ("rapports", "demande", "etat"):
+        for d in ("rapports", "demande", "etat", "reglages"):
             os.mkdir(os.path.join(base, d))
         with open(os.path.join(base, "secret.txt"), "w") as f:
             f.write("ne doit pas sortir")
@@ -91,7 +92,7 @@ class TestInterface(unittest.TestCase):
                                     "modele": "Disque <i>test</i>", "raisons": ["3 erreur(s) CRC"]}]}, f)
         conf = dict(web.DEFAUTS, ecoute="127.0.0.1", port=0, mot_de_passe=web.hacher(MDP, iterations=1000),
                     rapports=os.path.join(base, "rapports"), demandes=os.path.join(base, "demande"), etat=os.path.join(base, "etat"),
-                    racine_proc=cls.proc, racine_sys=cls.sys, pci_ids=os.path.join(ICI, "fixtures", "pci.ids"))
+                    racine_proc=cls.proc, racine_sys=cls.sys, reglages=os.path.join(base, "reglages"), pci_ids=os.path.join(ICI, "fixtures", "pci.ids"))
         cls.srv = web.Serveur(("127.0.0.1", 0), web.Gestionnaire)
         cls.srv.app = web.Application(conf)
         cls.port = cls.srv.server_address[1]
@@ -248,6 +249,28 @@ class TestInterface(unittest.TestCase):
         self.assertIsNotNone(d["direct"]["cpu"]["pourcent"])
         self.assertIn("demande", d)
 
+    def test_tendances(self):
+        h = os.path.join(self.tmp.name, "etat", "historique.jsonl")
+        t = int(time.time())
+        with open(h, "w") as f:
+            for i in range(3):
+                f.write(json.dumps({"t": t - (3 - i) * 3600, "pools": {"stockage<b>": [500 + i * 100, 1000]},
+                                    "disques": {"sda": [40 + i, 0, 0], "sdz": [30, 0, 0]}}) + "\n")
+            f.write("pas du json\n")
+            f.write(json.dumps({"t": t - 400 * 86400, "pools": {"vieux": [1, 2]}}) + "\n")
+        r, _ = self.req("GET", "/tendances.json")
+        self.assertEqual(r.status, 401)
+        cookie = self.connexion()
+        _, txt = self.req("GET", "/tendances.json?jours=7", cookie=cookie)
+        d = json.loads(txt)
+        self.assertEqual(d["jours"], 7)
+        self.assertEqual([v for _, v in d["remplissage"]["stockage<b>"]], [50.0, 60.0, 70.0])
+        self.assertNotIn("vieux", d["remplissage"])
+        self.assertEqual([v for _, v in d["temperatures"]["stockage<b>"]], [40, 41, 42])
+        self.assertEqual(d["temperatures"]["autres disques"][0][1], 30)
+        _, txt = self.req("GET", "/tendances.json?jours=abc", cookie=cookie)
+        self.assertEqual(json.loads(txt)["jours"], 30)
+
     def test_mesurer_csrf(self):
         cookie = self.connexion()
         r, _ = self.req("POST", "/mesurer", {"csrf": "faux"}, cookie=cookie)
@@ -259,6 +282,65 @@ class TestInterface(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.tmp.name, "demande", "mesurer")))
         _, t = self.req("GET", "/materiel.json", cookie=cookie)
         self.assertTrue(json.loads(t)["demande"])
+
+    def csrf_de(self, cookie):
+        _, t = self.req("GET", "/", cookie=cookie)
+        return re.search(r'name="csrf" value="([^"]+)"', t).group(1), t
+
+    def test_nouveaux_et_resolus(self):
+        cookie = self.connexion()
+        _, t = self.req("GET", "/", cookie=cookie)
+        self.assertIn("Rien de nouveau depuis l’audit du", t)        # deux rapports aux constats identiques
+
+    def test_accepter(self):
+        cookie = self.connexion()
+        csrf, t = self.csrf_de(cookie)
+        cle = "ssh|Un avertissement"
+        self.assertIn('data-cle="{}"'.format(cle), t)
+        r, _ = self.req("POST", "/accepter", {"csrf": csrf, "cle": "inexistant", "raison": "x"}, cookie=cookie)
+        self.assertIn("corr-invalide", r.getheader("Location"))
+        r, _ = self.req("POST", "/accepter", {"csrf": csrf, "cle": cle, "raison": "  voulu   ici "}, cookie=cookie)
+        self.assertIn("m=accepte", r.getheader("Location"))
+        acc = json.load(open(os.path.join(self.tmp.name, "reglages", "acceptes.json")))
+        self.assertEqual(acc[cle]["raison"], "voulu ici")
+        _, t = self.req("GET", "/", cookie=cookie)
+        self.assertIn('data-niv="ACC"', t)
+        self.assertIn('<div class="v">0</div><div class="l">avertissements', t)   # le constat accepté ne compte plus
+        self.req("POST", "/accepter", {"csrf": csrf, "cle": cle, "retirer": "1"}, cookie=cookie)
+        self.assertNotIn(cle, json.load(open(os.path.join(self.tmp.name, "reglages", "acceptes.json"))))
+
+    def test_corriger(self):
+        cookie = self.connexion()
+        csrf, t = self.csrf_de(cookie)
+        dem = os.path.join(self.tmp.name, "demande", "corriger")
+        m = re.search(r'data-dlg="corriger" data-cle="([^"]+)" data-i="0" data-rapport="([^"]+)"', t)
+        self.assertIsNotNone(m)
+        cle, rap = web.html.unescape(m.group(1)), m.group(2)
+        self.assertEqual(rap, "rapport-nas-test-20260108-1000.json")
+        base = {"csrf": csrf, "cle": cle, "i": "0", "rapport": rap}
+        r, _ = self.req("POST", "/corriger", dict(base, mot_de_passe="faux"), cookie=cookie)
+        self.assertIn("m=mdp", r.getheader("Location"))
+        self.assertFalse(os.path.exists(dem))
+        for mauvais in ({"i": "-1"}, {"i": "5"}, {"rapport": "rapport-nas-test-20260101-1000.json"}, {"cle": "ssh|autre"}):
+            r, _ = self.req("POST", "/corriger", dict(base, mot_de_passe=MDP, **mauvais), cookie=cookie)
+            self.assertIn("corr-invalide", r.getheader("Location"), mauvais)
+            self.assertFalse(os.path.exists(dem))
+        r, _ = self.req("POST", "/corriger", dict(base, mot_de_passe=MDP), cookie=cookie)
+        self.assertIn("m=correction", r.getheader("Location"))
+        d = json.load(open(dem))
+        self.assertEqual((d["type"], d["cible"]), ("zfs-scrub", "stockage"))   # repris du rapport, jamais du formulaire
+        r, _ = self.req("POST", "/corriger", dict(base, mot_de_passe=MDP), cookie=cookie)
+        self.assertIn("corr-occupe", r.getheader("Location"))
+        os.remove(dem)
+        with open(os.path.join(self.tmp.name, "etat", "corrections.json"), "w") as f:
+            json.dump([{"id": d["id"], "date": int(time.time()), "type": "zfs-scrub", "cible": "stockage", "libelle": "Scrub", "ok": True,
+                        "annulation": [["zpool", "scrub", "-s", "stockage"]]}], f)
+        _, t = self.req("GET", "/", cookie=cookie)
+        self.assertIn("corrigé le", t)
+        r, _ = self.req("POST", "/annuler", {"csrf": csrf, "id": d["id"], "mot_de_passe": MDP}, cookie=cookie)
+        self.assertIn("m=correction", r.getheader("Location"))
+        self.assertEqual(json.load(open(dem))["annuler"], d["id"])
+        os.remove(dem)
 
     def test_deconnexion(self):
         ck = self.connexion()
