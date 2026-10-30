@@ -1,0 +1,29 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Installer jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+      - name: Vérifier la syntaxe
+        run: |
+          bash -n audite-moi.sh install.sh tests/run-tests.sh
+          python3 -m py_compile web/audite-moi-web.py systemd/audite-moi-corriger tests/test_web.py tests/test_corriger.py
+      - name: Exécuter la suite simulée
+        run: sudo -E bash tests/run-tests.sh

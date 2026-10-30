@@ -212,7 +212,8 @@ SAUVEGARDES="photos-usb:zfs:usb/photos:26 cloud:unite:restic-cloud.service:26 du
 Le rapport décrit précisément les faiblesses de votre serveur : l'interface est conçue pour rester privée.
 
 - Le serveur web (Python, bibliothèque standard uniquement) tourne sous l'utilisateur `audite-moi`, sans droits root et dans un service systemd durci. Il ne peut **pas** exécuter de commande : il dépose seulement une demande que `audite-moi.path` transmet à `audite-moi.service`.
-- Mot de passe haché (PBKDF2-SHA256, 600 000 itérations), session en cookie `HttpOnly` / `SameSite=Strict`, protection CSRF, blocage après 5 échecs en 15 minutes, HTTPS par défaut, en-têtes de sécurité stricts (CSP…).
+- Mot de passe haché (PBKDF2-SHA256, 600 000 itérations), session en cookie `HttpOnly` / `SameSite=Strict`, protection CSRF, blocage persistant par adresse IP après 5 échecs en 15 minutes, maximum 256 sessions actives et 64 connexions simultanées, HTTPS par défaut, en-têtes de sécurité stricts (CSP…).
+Les compteurs anti-brute-force sont conservés dans `/var/lib/audite-moi/reglages/tentatives-connexion.json` (fichier privé créé en mode `0600`) : un redémarrage du service ne réinitialise donc pas la fenêtre de blocage de 15 minutes.
 - Les constats acceptés et les seuils sont enregistrés dans `/var/lib/audite-moi/reglages` (seul dossier, avec celui des demandes, où l'interface peut écrire).
 - **Ne l'exposez pas sur Internet.** Si UFW est actif, l'installateur propose de l'ouvrir uniquement aux réseaux privés (tous vos sous-réseaux, pas Internet). Pour un accès à distance, passez par un VPN, ou par votre tunnel Cloudflare **derrière Cloudflare Access** (avec `noTLSVerify: true` vers l'origine, le certificat étant auto-signé).
 

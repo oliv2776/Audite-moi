@@ -174,6 +174,8 @@ class TestInterface(unittest.TestCase):
         self.assertEqual(r.status, 403)
         r, _ = self.req("POST", "/lancer", {"mode": "rapide", "csrf": csrf}, cookie=ck, entetes={"Origin": "https://pirate.example"})
         self.assertEqual(r.status, 403)
+        r, _ = self.req("POST", "/lancer", {"mode": "rapide", "csrf": csrf}, cookie=ck, entetes={"Origin": "http://[adresse-invalide"})
+        self.assertEqual(r.status, 403)
         r, _ = self.req("POST", "/lancer", {"mode": "rapide", "csrf": csrf}, cookie=ck)
         self.assertEqual(r.status, 303)
         f = os.path.join(self.tmp.name, "demande", "lancer")
@@ -188,11 +190,69 @@ class TestInterface(unittest.TestCase):
     def test_limite_tentatives(self):
         web_ip = "127.0.0.1"
         app = self.srv.app
+        chemin = app._fichier_echecs()
+        app._echecs.clear()
+        try:
+            os.unlink(chemin)
+        except FileNotFoundError:
+            pass
         for _ in range(5):
             app.echec(web_ip)
+        self.assertTrue(app.bloque(web_ip))
+        # Un nouveau processus recharge les échecs depuis le fichier privé.
+        redemarre = web.Application(app.conf)
+        self.assertTrue(redemarre.bloque(web_ip))
         r, _ = self.req("POST", "/connexion", {"mot_de_passe": MDP})
         self.assertEqual(r.status, 429)
         app._echecs.clear()
+        try:
+            os.unlink(chemin)
+        except FileNotFoundError:
+            pass
+
+    def test_sessions_bornees(self):
+        app = self.srv.app
+        limite = app.MAX_SESSIONS
+        app._sessions.clear()
+        app.MAX_SESSIONS = 2
+        try:
+            a, _, c = app.nouvelle_session(), app.nouvelle_session(), app.nouvelle_session()
+            self.assertEqual(len(app._sessions), 2)
+            self.assertIsNone(app.session_valide(a))
+            self.assertIsNotNone(app.session_valide(c))
+        finally:
+            app.MAX_SESSIONS = limite
+            app._sessions.clear()
+
+    def test_formulaire_longueur_invalide(self):
+        r, _ = self.req("POST", "/connexion", None, entetes={"Content-Length": "-1"})
+        self.assertEqual(r.status, 400)
+        r, _ = self.req("POST", "/connexion", {"mot_de_passe": "x" * 5000})
+        self.assertEqual(r.status, 413)
+
+    def test_formulaire_trop_de_champs(self):
+        corps = {"k{}".format(i): "v" for i in range(65)}
+        r, _ = self.req("POST", "/connexion", corps)
+        self.assertEqual(r.status, 400)
+
+    def test_limite_connexions_simultanees(self):
+        class ServeurSature(web.Serveur):
+            MAX_THREADS = 0
+
+        srv = ServeurSature(("127.0.0.1", 0), web.Gestionnaire)
+        fil = threading.Thread(target=srv.serve_forever, daemon=True)
+        fil.start()
+        try:
+            c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+            c.request("GET", "/")
+            r = c.getresponse()
+            self.assertEqual(r.status, 503)
+            self.assertEqual(r.read(), b"")
+            c.close()
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            fil.join(timeout=2)
 
     def test_navigation(self):
         ck = self.connexion()
