@@ -108,6 +108,14 @@ expect WARN "Conteneur sauvegarde-photos arrêté en erreur"
 expect WARN "Conteneur(s) proche(s) de leur limite mémoire"
 expect CRIT "SSH exposé à Internet avec authentification par mot de passe"
 expect WARN "mise(s) à jour de sécurité en attente"
+# Un échec de apt list ne doit pas être assimilé à une liste vide.
+OUT_APT=$TMP/rapports-apt-indisponible
+AUDITE_MOI_APT_LIST_ECHEC=1 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_APT" --config "$TMP/audit.conf" --no-color --quick >/dev/null 2>&1
+JA=$(ls "$OUT_APT"/rapport-*.json 2>/dev/null | head -n 1)
+jq -e '.constats[] | select(.niveau == "INFO" and .titre == "Inventaire des mises à jour APT indisponible")' "$JA" >/dev/null \
+  && ok "apt list en erreur : inventaire signalé indisponible" || ko "apt list en erreur : état indéterminé attendu"
+jq -e '.constats[] | select(.titre == "Tous les paquets sont à jour")' "$JA" >/dev/null \
+  && ko "apt list en erreur ne doit pas annoncer que tout est à jour" || ok "pas de fausse conclusion sur les mises à jour APT"
 expect WARN "Partages Samba accessibles sans mot de passe"
 expect WARN "sharenfs=on"
 expect WARN "La box redirige des ports vers ce serveur (UPnP)"

@@ -2549,19 +2549,25 @@ check_maj() {
     ((d > 7)) && warn "Liste des paquets non rafraîchie depuis $d jours" "Les mises à jour en attente ci-dessous sont peut-être sous-estimées." \
       "Relancez l'audit avec \`--apt-update\` ; vérifiez que \`apt-daily.timer\` est actif"
   fi
-  local up nall nsec secpk
-  up=$(tmo 120 apt list --upgradable 2>/dev/null | grep '/')
-  nall=$(nlines "$up"); nsec=$(grep -c -- '-security' <<< "$up")
-  secpk=$(grep -- '-security' <<< "$up" | cut -d/ -f1 | head -n 25 | tr '\n' ' ')
-  if ((nsec > 0)); then
-    warn "$nsec mise(s) à jour de sécurité en attente" "Paquets : $secpk" "\`sudo apt update && sudo apt full-upgrade\`"
+  local up nall nsec secpk apt_raw apt_rc
+  apt_raw=$(tmo 120 apt list --upgradable 2>/dev/null)
+  apt_rc=$?
+  if ((apt_rc != 0)); then
+    info "Inventaire des mises à jour APT indisponible" "La commande apt list --upgradable a échoué (code $apt_rc) ; impossible de déterminer si des mises à jour sont en attente."
+  else
+    up=$(grep '/' <<< "$apt_raw" || true)
+    nall=$(nlines "$up"); nsec=$(grep -c -- '-security' <<< "$up")
+    secpk=$(grep -- '-security' <<< "$up" | cut -d/ -f1 | head -n 25 | tr '\n' ' ')
+    if ((nsec > 0)); then
+      warn "$nsec mise(s) à jour de sécurité en attente" "Paquets : $secpk" "\`sudo apt update && sudo apt full-upgrade\`"
+    fi
+    if ((nall > nsec)); then
+      info "$((nall - nsec)) autre(s) mise(s) à jour disponible(s)" "" "\`sudo apt update && sudo apt full-upgrade\`"
+    elif ((nall == 0)); then
+      ok "Tous les paquets sont à jour"
+    fi
+    raw "Paquets pouvant être mis à jour" "$up"
   fi
-  if ((nall > nsec)); then
-    info "$((nall - nsec)) autre(s) mise(s) à jour disponible(s)" "" "\`sudo apt update && sudo apt full-upgrade\`"
-  elif ((nall == 0)); then
-    ok "Tous les paquets sont à jour"
-  fi
-  raw "Paquets pouvant être mis à jour" "$up"
   local held; held=$(apt-mark showhold 2>/dev/null | tr '\n' ' ')
   [[ -n $held ]] && info "Paquets bloqués (non mis à jour) : $held" "" "\`sudo apt-mark unhold <paquet>\` si le blocage n'est plus utile"
 
