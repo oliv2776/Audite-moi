@@ -1402,6 +1402,7 @@ check_reseau() {
       info "Inventaire IPv6 indisponible" "La commande ip n'a pas pu lire les adresses IPv6 ; leur présence n'est pas déterminable."
     fi
   fi
+}
 
 # Vérifie que les sauvegardes tournent vraiment : dernière exécution réussie et copie hors du serveur
 sauvegardes_verif() {
