@@ -210,12 +210,17 @@ class TestInterface(unittest.TestCase):
 
     def test_sessions_bornees(self):
         app = self.srv.app
+        limite = app.MAX_SESSIONS
         app._sessions.clear()
         app.MAX_SESSIONS = 2
-        a, b, c = app.nouvelle_session(), app.nouvelle_session(), app.nouvelle_session()
-        self.assertEqual(len(app._sessions), 2)
-        self.assertIsNone(app.session_valide(a))
-        self.assertIsNotNone(app.session_valide(c))
+        try:
+            a, _, c = app.nouvelle_session(), app.nouvelle_session(), app.nouvelle_session()
+            self.assertEqual(len(app._sessions), 2)
+            self.assertIsNone(app.session_valide(a))
+            self.assertIsNotNone(app.session_valide(c))
+        finally:
+            app.MAX_SESSIONS = limite
+            app._sessions.clear()
 
     def test_formulaire_longueur_invalide(self):
         r, _ = self.req("POST", "/connexion", None, entetes={"Content-Length": "-1"})
@@ -224,11 +229,9 @@ class TestInterface(unittest.TestCase):
         self.assertEqual(r.status, 413)
 
     def test_formulaire_trop_de_champs(self):
-        corps = "&".join("k{}=v".format(i) for i in range(65))
-        r, _ = self.req("POST", "/connexion", None, entetes={
-            "Content-Length": str(len(corps)), "Content-Type": "application/x-www-form-urlencoded"
-        })
-        self.assertIn(r.status, (400, 413))
+        corps = {"k{}".format(i): "v" for i in range(65)}
+        r, _ = self.req("POST", "/connexion", corps)
+        self.assertEqual(r.status, 400)
 
     def test_navigation(self):
         ck = self.connexion()
