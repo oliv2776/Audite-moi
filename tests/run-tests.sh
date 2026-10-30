@@ -332,6 +332,19 @@ else
   ko "inventaire valide vide : absence de pool non signalée"
 fi
 
+echo "▶ Contrôle de sauvegarde ZFS indisponible"
+OUT_BACKUP=$TMP/rapports-backup-zfs-indisponible
+mkdir -p "$OUT_BACKUP"
+AUDITE_MOI_ZFS_ECHEC=1 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_BACKUP" --config "$TMP/audit.conf" --no-color --quick > "$TMP/backup-zfs-indisponible.txt" 2>&1 || true
+JB=$(ls "$OUT_BACKUP"/rapport-*.json 2>/dev/null | head -n 1)
+if [[ -n $JB ]] \
+   && jq -e '.constats[] | select(.titre == "Contrôle de sauvegarde « photos-usb » : vérification impossible")' "$JB" >/dev/null \
+   && ! jq -e '.constats[] | select(.titre == "Sauvegarde « photos-usb » : aucune trace trouvée")' "$JB" >/dev/null; then
+  ok "échec de zfs list : pas de fausse alerte de sauvegarde absente"
+else
+  ko "échec de zfs list : contrôle de sauvegarde non distingué"
+fi
+
 [[ -n ${GARDER:-} ]] && { cp -r "$OUT" "$GARDER"; echo "Rapports copiés dans $GARDER"; }
 echo
 if ((fail)); then echo "Des tests ont échoué."; exit 1; fi
