@@ -28,7 +28,25 @@ import urllib.request
 SYS_BLOCK = os.environ.get("AUDITE_MOI_SYS_BLOCK", "/sys/block")
 FS_LOCAUX = {"ext2", "ext3", "ext4", "xfs", "btrfs", "vfat", "f2fs", "exfat"}
 ID_DOCKER = re.compile(r"/[0-9a-f]{64}(-init)?$")
-SEPT_JOURS = 7 * 86400
+SEUILS = {}
+
+
+def charger_seuils():
+    """Seuils par défaut (seuils.json livré avec Audite-moi) et valeurs choisies dans l'interface."""
+    ici = os.path.dirname(os.path.abspath(__file__))
+    defs = [os.environ.get("AUDITE_MOI_SEUILS_DEF", ""), os.path.join(ici, "seuils.json"), os.path.join(ici, "..", "seuils.json"),
+            "/usr/local/lib/audite-moi/seuils.json"]
+    d = next((lire_json(f, {}) for f in defs if f and os.path.isfile(f)), {})
+    o = lire_json(os.environ.get("AUDITE_MOI_SEUILS", "/var/lib/audite-moi/reglages/seuils.json"), {})
+    for g in d.get("groupes", []):
+        for x in g.get("seuils", []):
+            v = o.get(x["cle"])
+            ok = isinstance(v, int) and not isinstance(v, bool) and x["min"] <= v <= x["max"]
+            SEUILS[x["cle"]] = v if ok else x["defaut"]
+
+
+def S(cle, defaut):
+    return SEUILS.get(cle, defaut)
 CONNTRACK = os.environ.get("AUDITE_MOI_CONNTRACK", "/proc/net/nf_conntrack")
 
 
@@ -221,27 +239,31 @@ def lire_disque(nom, info, membre, avant, maintenant):
             crit.append("Réserve de cellules épuisée ({} %)".format(nv["available_spare"]))
         if nv.get("media_errors"):
             att.append("{} erreur(s) de support".format(nv["media_errors"]))
-    for cle, txt, liste in (("en_attente", "secteur(s) en attente de réallocation", crit), ("irrecuperables", "secteur(s) irrécupérable(s)", crit),
-                            ("realloues", "secteur(s) réalloué(s)", att), ("non_corrigees", "erreur(s) non corrigée(s)", att)):
+    for cle, txt, seuil in (("en_attente", "secteur(s) en attente de réallocation", S("disque_en_attente_critique", 10)),
+                            ("irrecuperables", "secteur(s) irrécupérable(s)", S("disque_en_attente_critique", 10)),
+                            ("realloues", "secteur(s) réalloué(s)", S("disque_realloues_critique", 100)), ("non_corrigees", "erreur(s) non corrigée(s)", None)):
         if r.get(cle):
-            liste.append("{} {}".format(r[cle], txt))
+            (crit if seuil and r[cle] >= seuil else att).append("{} {}".format(r[cle], txt))
     if crc:
-        if hausse and maintenant - hausse < SEPT_JOURS:
+        fenetre = S("disque_crc_fenetre_jours", 7)
+        if hausse and maintenant - hausse < fenetre * 86400:
             att.append("{} erreur(s) CRC, en hausse : câble SATA ou connecteur à vérifier".format(crc))
         else:
-            r["note"] = "{} erreur(s) CRC anciennes, stables depuis plus de 7 jours".format(crc)
+            r["note"] = "{} erreur(s) CRC anciennes, stables depuis plus de {} jours".format(crc, fenetre)
     t = r.get("temperature")
     if isinstance(t, int):
-        lim = {"HDD": (50, 60), "SSD": (70, 80), "NVMe": (70, 80)}[typ]
+        k = {"HDD": "hdd", "SSD": "ssd", "NVMe": "nvme"}[typ]
+        lim = (S("disque_temp_{}_attention".format(k), {"hdd": 50, "ssd": 60, "nvme": 70}[k]),
+               S("disque_temp_{}_critique".format(k), {"hdd": 60, "ssd": 70, "nvme": 80}[k]))
         if t >= lim[1]:
             crit.append("Température très élevée ({} °C)".format(t))
         elif t >= lim[0]:
             att.append("Température élevée ({} °C)".format(t))
     u = r.get("usure")
     if isinstance(u, int):
-        if u >= 95:
+        if u >= S("disque_usure_critique", 90):
             crit.append("Usure {} % : fin de vie".format(u))
-        elif u >= 80:
+        elif u >= S("disque_usure_attention", 80):
             att.append("Usure {} %".format(u))
     e = membre.get("erreurs") or [0, 0, 0]
     if any(e):
@@ -452,7 +474,8 @@ def tendances(chemin, mes, maintenant):
         tend = {"octets_par_jour": int(pente), "jours_observes": round((s[-1][0] - s[0][0]) / 86400, 1)}
         u, t = pool.get("utilise"), pool.get("taille")
         if pente > 0 and u is not None and t:
-            for seuil, cle in ((0.9, "jours_avant_90"), (1.0, "jours_avant_plein")):
+            tend["seuil_critique"] = S("pool_critique", 90)
+            for seuil, cle in ((S("pool_critique", 90) / 100.0, "jours_avant_critique"), (1.0, "jours_avant_plein")):
                 reste = seuil * t - u
                 tend[cle] = max(0, int(reste / pente)) if reste > 0 else 0
         pool["tendance"] = tend
@@ -570,18 +593,19 @@ def alertes(conf, mes, ecoute, chemin_etat, rapports, maintenant, groupe):
         a["etat"] = etat
         if p.get("taille"):
             pct = 100.0 * p["utilise"] / p["taille"]
-            seuil = max([s for s in (80, 90, 95) if pct >= s] or [0])
+            paliers = sorted({S("pool_attention", 80), S("pool_critique", 90), 95, 98})
+            seuil = max([s for s in paliers if pct >= s] or [0])
             if seuil > a.get("seuil", 0):
-                msgs.append("{} <b>Pool {} rempli à {:.0f} %</b> ({} libres)".format("🔴" if seuil >= 90 else "🟠", e(p["nom"]), pct, oct_(p["libre"])))
+                msgs.append("{} <b>Pool {} rempli à {:.0f} %</b> ({} libres)".format("🔴" if seuil >= S("pool_critique", 90) else "🟠", e(p["nom"]), pct, oct_(p["libre"])))
                 a["seuil"] = seuil
             elif pct < a.get("seuil", 0) - 3:
                 a["seuil"] = seuil
         j = (p.get("tendance") or {}).get("jours_avant_plein")
-        if j is not None and j < 30 and not a.get("bientot"):
+        if j is not None and j < S("alerte_pool_plein_jours", 30) and not a.get("bientot"):
             msgs.append("🟠 <b>Pool {} plein dans environ {} jours</b> au rythme actuel (+{} par jour)".format(
                 e(p["nom"]), j, oct_(p["tendance"]["octets_par_jour"])))
             a["bientot"] = True
-        elif j is None or j > 60:
+        elif j is None or j > 2 * S("alerte_pool_plein_jours", 30):
             a["bientot"] = False
 
     # Disques : changement d'état, erreurs CRC en hausse, disque disparu
@@ -651,7 +675,7 @@ def alertes(conf, mes, ecoute, chemin_etat, rapports, maintenant, groupe):
         if pb:
             txt.append("\nÀ surveiller dès maintenant :\n" + e("\n".join("• {} : {}".format(d["nom"], " ; ".join(d.get("raisons", []))) for d in pb)))
         for p in mes["pools"]:
-            if p.get("taille") and p["utilise"] / p["taille"] >= 0.8:
+            if p.get("taille") and p["utilise"] / p["taille"] >= S("pool_attention", 80) / 100.0:
                 txt.append("• Pool {} rempli à {:.0f} %".format(e(p["nom"]), 100.0 * p["utilise"] / p["taille"]))
         msgs = ["\n".join(txt)]
     envoye = False
@@ -698,6 +722,7 @@ def main():
         print("{}\t{}".format(ident, nom))
         return
     conf = lire_conf(a.conf)
+    charger_seuils()
     if a.notifier:
         texte = sys.stdin.read(3500).strip()
         if texte and oui(conf.get("ALERTES", "oui")):

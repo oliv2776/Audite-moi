@@ -35,6 +35,7 @@ CONF_FILE=/etc/audite-moi/audit.conf
 ACCEPTES_FILE=${AUDITE_MOI_ACCEPTES:-/var/lib/audite-moi/reglages/acceptes.json}
 TRAFIC_FILE=${AUDITE_MOI_TRAFIC:-/var/lib/audite-moi/etat/trafic.json}
 MESURES_FILE=${AUDITE_MOI_MESURES:-/var/lib/audite-moi/etat/mesures.json}
+SEUILS_FILE=${AUDITE_MOI_SEUILS:-/var/lib/audite-moi/reglages/seuils.json}   # seuils modifiés dans l'interface
 OUTDIR="" OUTGROUP="" KEEP=0 QUICK=0 NO_WAKE=0 APT_UPDATE=0 INSTALL_DEPS=0 USE_COLOR=1
 
 usage() {
@@ -150,8 +151,37 @@ sanitize() {
     -e 's/((pass(word|wd)?|secret|token|api[_-]?key|private[_-]?key)[A-Za-z0-9_]*["'\'']?[[:space:]]*[=:][[:space:]]*["'\'']?)[^[:space:]"'\'',;}]+/\1***/Ig'
 }
 
+# ------------------------------------------------------------------ seuils --
+# Valeurs par défaut et bornes : seuils.json (livré avec le script) ; valeurs choisies dans
+# l'interface : $SEUILS_FILE. Une valeur hors bornes est ignorée. Sans fichier, les valeurs
+# par défaut écrites dans le script (${SEUIL[clé]:-défaut}) s'appliquent.
+declare -A SEUIL=() SEUIL_DEF=() SEUIL_LIB=()
+charger_seuils() {
+  local def=${AUDITE_MOI_SEUILS_DEF:-} d o k v df lib
+  if [[ -z $def ]]; then
+    for d in "$(dirname "$(readlink -f "$0")")/seuils.json" /usr/local/lib/audite-moi/seuils.json; do [[ -f $d ]] && { def=$d; break; }; done
+  fi
+  [[ -f $def ]] || return 0
+  o=$(jq -c 'if type == "object" then . else {} end' "$SEUILS_FILE" 2>/dev/null) || o='{}'
+  [[ -n $o ]] || o='{}'
+  while IFS=$US read -r k v df lib; do
+    [[ -n $k ]] || continue
+    SEUIL[$k]=$v; SEUIL_DEF[$k]=$df; SEUIL_LIB[$k]=$lib
+  done < <(jq -r --argjson o "$o" '[.groupes[].seuils[]] | .[] | .cle as $k
+      | (($o[$k] // null) | if type == "number" and . == floor then . else null end) as $u
+      | (if $u != null and $u >= .min and $u <= .max then $u else .defaut end) as $v
+      | "\($k)\u001f\($v)\u001f\(.defaut)\u001f\(.libelle) (\(.unite))"' "$def" 2>/dev/null)
+}
+seuils_modifies() {   # « libellé : valeur (défaut : x) », un par ligne
+  local k
+  for k in "${!SEUIL[@]}"; do
+    [[ ${SEUIL[$k]} != "${SEUIL_DEF[$k]}" ]] && printf '%s : %s (par défaut : %s)\n' "${SEUIL_LIB[$k]}" "${SEUIL[$k]}" "${SEUIL_DEF[$k]}"
+  done | sort
+}
+
 # ---------------------------------------------------------------- résultats --
 declare -a R_SEC=() R_LVL=() R_TTL=() R_MSG=() R_FIX=()   # constats
+declare -a R_REF=() R_REFH=() R_REFT=()   # références (JSON, HTML, texte)
 declare -a R_ACT=() R_ACC=() R_LV0=()   # corrections proposées (JSON), raison d'acceptation, niveau d'origine
 declare -a T_SEC=() T_TTL=() T_FILE=()                    # tableaux
 declare -a X_SEC=() X_TTL=() X_FILE=()                    # données brutes
@@ -190,7 +220,7 @@ section() {
 
 add() {   # add NIVEAU "titre" ["détail"] ["correctif"]   (le texte entre `…` est affiché comme du code)
   local lvl=$1 ttl=$2 msg=${3:-} fix=${4:-} c tag first
-  R_SEC+=("$CUR"); R_LVL+=("$lvl"); R_TTL+=("$ttl"); R_MSG+=("$msg"); R_FIX+=("$fix"); R_ACT+=(""); R_ACC+=(""); R_LV0+=("$lvl")
+  R_SEC+=("$CUR"); R_LVL+=("$lvl"); R_TTL+=("$ttl"); R_MSG+=("$msg"); R_FIX+=("$fix"); R_ACT+=(""); R_ACC+=(""); R_LV0+=("$lvl"); R_REF+=(""); R_REFH+=(""); R_REFT+=("")
   case $lvl in
     CRIT) c=$C_R tag="CRIT" ;; WARN) c=$C_Y tag="WARN" ;; OK) c=$C_G tag=" OK " ;; *) c=$C_B tag="INFO" ;;
   esac
@@ -214,6 +244,25 @@ cle_constat() {   # identifiant stable d'un constat : section|titre, chiffres re
   printf '%s' "$k"
 }
 # Constats acceptés depuis l'interface (« c'est voulu ») : ils ne comptent plus dans la note
+# Références (CIS, ANSSI, OWASP, documentation officielle) associées aux constats : references.json
+appliquer_references() {
+  local f=${AUDITE_MOI_REFERENCES:-} d i j h t
+  if [[ -z $f ]]; then
+    for d in "$(dirname "$(readlink -f "$0")")/references.json" /usr/local/lib/audite-moi/references.json; do [[ -f $d ]] && { f=$d; break; }; done
+  fi
+  [[ -f $f ]] || return 0
+  while IFS=$US read -r i j h t; do
+    isint "$i" || continue
+    R_REF[i]=$j; R_REFH[i]=$h; R_REFT[i]=$t
+  done < <(for i in "${!R_TTL[@]}"; do printf '%s%s%s%s%s%s' "$i" "$US" "${R_SEC[i]}" "$US" "${R_TTL[i]}" "$RS"; done \
+    | jq -Rrs --slurpfile r "$f" '($r[0]) as $R | split("\u001e")[] | select(length > 0) | split("\u001f") as [$i, $s, $t]
+        | [$R.regles[] | .motif as $m | select(.section == $s and ($t | test($m; "i"))) | .refs[]] | unique as $k
+        | select($k | length > 0) | [$k[] | $R.sources[.] | select(. != null)] as $refs
+        | [$i, ($refs | tojson),
+           ($refs | map("<a href=\"\(.url | @html)\" title=\"\(.titre | @html)\" rel=\"noopener noreferrer\" target=\"_blank\">\(.source | @html) \(.id | @html)</a>") | join(" · ")),
+           ($refs | map("\(.source) \(.id) — \(.titre)") | join(" ; "))] | join("\u001f")' 2>/dev/null)
+}
+
 appliquer_acceptes() {
   [[ -f $ACCEPTES_FILE ]] || return 0
   local -A ACC=()
@@ -420,7 +469,7 @@ check_systeme() {
   while read -r fs typ size used avail pct mnt; do
     pct=${pct%\%}
     isint "$pct" && isint "$avail" || continue
-    lvl=OK; ((pct >= 85)) && lvl=WARN; ((pct >= 95)) && lvl=CRIT
+    lvl=OK; ((pct >= ${SEUIL[espace_attention]:-85})) && lvl=WARN; ((pct >= ${SEUIL[espace_critique]:-95})) && lvl=CRIT
     if [[ $lvl != OK ]]; then
       nbad=$((nbad + 1))
       add "$lvl" "Espace disque : $mnt rempli à $pct %" "$fs ($typ) — reste $(hbytes $((avail * 1024)))." \
@@ -475,7 +524,7 @@ check_materiel() {
   fi
   if have vmstat; then
     local wa; wa=$(vmstat 1 2 2>/dev/null | tail -n 1 | awk '{print $16}')
-    isint "$wa" && ((wa >= 20)) && warn "Attente d'entrées/sorties élevée ($wa %)" "Le processeur attend souvent les disques." "\`sudo iotop -o\` ou \`zpool iostat -v 2\`"
+    isint "$wa" && ((wa >= ${SEUIL[iowait_attention]:-20})) && warn "Attente d'entrées/sorties élevée ($wa %)" "Le processeur attend souvent les disques." "\`sudo iotop -o\` ou \`zpool iostat -v 2\`"
   fi
 
   # Mémoire (le cache ARC de ZFS apparaît comme « utilisé » mais se libère à la demande)
@@ -491,9 +540,9 @@ check_materiel() {
     local msg="Utilisée : $(hbytes $((mt - ma))) sur $(hbytes "$mt")"
     ((ARC_SIZE > 0)) && msg+=" (dont cache ZFS ARC : $(hbytes "$ARC_SIZE"), libérable à la demande)"
     msg+="${NL}Pression mémoire réelle (hors cache libérable) : $pct %"
-    if ((pct >= 95)); then
+    if ((pct >= ${SEUIL[memoire_critique]:-95})); then
       crit "Mémoire saturée ($pct %)" "$msg" "Repérez les conteneurs gourmands (\`docker stats\`), limitez l'ARC (\`zfs_arc_max\`) ou ajoutez de la RAM"
-    elif ((pct >= 90)); then
+    elif ((pct >= ${SEUIL[memoire_attention]:-90})); then
       warn "Mémoire presque saturée ($pct %)" "$msg" "Repérez les conteneurs gourmands (\`docker stats\`) et fixez-leur une limite mémoire"
     else
       ok "Mémoire : pression de $pct %" "$msg"
@@ -501,7 +550,7 @@ check_materiel() {
   fi
   if isint "$st" && ((st > 0)); then
     local sp=$(( (st - sf) * 100 / st ))
-    if ((sp >= 80)); then
+    if ((sp >= ${SEUIL[swap_attention]:-80})); then
       warn "Swap utilisé à $sp %" "$(hbytes $((st - sf))) sur $(hbytes "$st") : le serveur manque de mémoire." "Identifiez les processus gourmands : \`sudo smem -rs swap\` ou \`top\` (tri par mémoire)"
     else
       info "Swap utilisé à $sp %" "$(hbytes $((st - sf))) sur $(hbytes "$st")"
@@ -540,9 +589,9 @@ check_materiel() {
       v=$(cat "$z/temp" 2>/dev/null); isint "$v" && ((v / 1000 > cpu)) && cpu=$((v / 1000))
     done
   fi
-  if ((cpu >= 90)); then
+  if ((cpu >= ${SEUIL[cpu_temp_critique]:-90})); then
     crit "Processeur très chaud : $cpu °C" "Risque de bridage et d'usure prématurée." "Vérifiez ventilateurs, poussière et pâte thermique ; un transcodage logiciel prolongé chauffe beaucoup le CPU"
-  elif ((cpu >= 80)); then
+  elif ((cpu >= ${SEUIL[cpu_temp_attention]:-80})); then
     warn "Processeur chaud : $cpu °C" "Normal pendant un transcodage intensif, anormal au repos." "Vérifiez la ventilation du boîtier"
   elif ((cpu >= 0)); then
     ok "Température du processeur : $cpu °C"
@@ -698,19 +747,19 @@ check_disques() {
       ((ex & 128)) && { lvl=$(worst "$lvl" WARN); iss+=("erreurs dans le journal des auto-tests"); }
     fi
     if isint "$realloc" && ((realloc > 0)); then
-      if ((realloc >= 100)); then lvl=CRIT; else lvl=$(worst "$lvl" WARN); fi; iss+=("$realloc secteur(s) réalloué(s)")
+      if ((realloc >= ${SEUIL[disque_realloues_critique]:-100})); then lvl=CRIT; else lvl=$(worst "$lvl" WARN); fi; iss+=("$realloc secteur(s) réalloué(s)")
     fi
     if isint "$pend" && ((pend > 0)); then
-      if ((pend >= 10)); then lvl=CRIT; else lvl=$(worst "$lvl" WARN); fi; iss+=("$pend secteur(s) illisible(s) en attente")
+      if ((pend >= ${SEUIL[disque_en_attente_critique]:-10})); then lvl=CRIT; else lvl=$(worst "$lvl" WARN); fi; iss+=("$pend secteur(s) illisible(s) en attente")
     fi
     if isint "$offu" && ((offu > 0)); then
-      if ((offu >= 10)); then lvl=CRIT; else lvl=$(worst "$lvl" WARN); fi; iss+=("$offu secteur(s) irrécupérable(s)")
+      if ((offu >= ${SEUIL[disque_en_attente_critique]:-10})); then lvl=CRIT; else lvl=$(worst "$lvl" WARN); fi; iss+=("$offu secteur(s) irrécupérable(s)")
     fi
     if isint "$repu" && ((repu > 0)); then lvl=$(worst "$lvl" WARN); iss+=("$repu erreur(s) non corrigée(s) signalée(s)"); fi
     if isint "$crc" && ((crc > 0)); then lvl=$(worst "$lvl" WARN); iss+=("$crc erreur(s) CRC de liaison"); cablefix=1; fi
     if isint "$grown" && ((grown > 0)); then lvl=$(worst "$lvl" WARN); iss+=("$grown défaut(s) acquis"); fi
-    local tw=50 tc=60
-    case $kind in SSD) tw=60 tc=70 ;; NVMe) tw=70 tc=80 ;; esac
+    local tw=${SEUIL[disque_temp_hdd_attention]:-50} tc=${SEUIL[disque_temp_hdd_critique]:-60}
+    case $kind in SSD) tw=${SEUIL[disque_temp_ssd_attention]:-60} tc=${SEUIL[disque_temp_ssd_critique]:-70} ;; NVMe) tw=${SEUIL[disque_temp_nvme_attention]:-70} tc=${SEUIL[disque_temp_nvme_critique]:-80} ;; esac
     if isint "$temp"; then
       if ((temp >= tc)); then lvl=CRIT; iss+=("température $temp °C")
       elif ((temp >= tw)); then lvl=$(worst "$lvl" WARN); iss+=("température élevée ($temp °C)"); fi
@@ -718,13 +767,13 @@ check_disques() {
     local wear_disp=""
     if isint "$wear"; then
       wear_disp="$wear % restant"
-      if ((wear <= 10)); then lvl=CRIT; iss+=("usure : ~$wear % de durée de vie restante")
-      elif ((wear <= 20)); then lvl=$(worst "$lvl" WARN); iss+=("usure : ~$wear % de durée de vie restante"); fi
+      if ((100 - wear >= ${SEUIL[disque_usure_critique]:-90})); then lvl=CRIT; iss+=("usure : ~$wear % de durée de vie restante")
+      elif ((100 - wear >= ${SEUIL[disque_usure_attention]:-80})); then lvl=$(worst "$lvl" WARN); iss+=("usure : ~$wear % de durée de vie restante"); fi
     fi
     if isint "$nvused"; then
       wear_disp="$nvused % utilisé"
-      if ((nvused >= 90)); then lvl=CRIT; iss+=("usure NVMe : $nvused % de l'endurance consommée")
-      elif ((nvused >= 80)); then lvl=$(worst "$lvl" WARN); iss+=("usure NVMe : $nvused % de l'endurance consommée"); fi
+      if ((nvused >= ${SEUIL[disque_usure_critique]:-90})); then lvl=CRIT; iss+=("usure NVMe : $nvused % de l'endurance consommée")
+      elif ((nvused >= ${SEUIL[disque_usure_attention]:-80})); then lvl=$(worst "$lvl" WARN); iss+=("usure NVMe : $nvused % de l'endurance consommée"); fi
     fi
     if isint "$nvcw" && ((nvcw != 0)); then lvl=CRIT; iss+=("avertissement critique NVMe ($(printf '0x%02x' "$nvcw"))"); fi
     if isint "$nvspare" && isint "$nvthr" && ((nvspare < nvthr)); then lvl=CRIT; iss+=("réserve NVMe épuisée ($nvspare % < $nvthr %)"); fi
@@ -740,7 +789,7 @@ check_disques() {
       st_disp="${ststr:-?}"
       [[ -n $age ]] && st_disp+=", il y a $((age / 24)) j"
       [[ $stpass == false ]] && { lvl=CRIT; iss+=("dernier auto-test en échec ($ststr)"); }
-      [[ -n $age ]] && ((age > 24 * 35)) && oldtest+=("$dev ($((age / 24)) j)")
+      [[ -n $age ]] && ((age > 24 * ${SEUIL[disque_autotest_max_jours]:-35})) && oldtest+=("$dev ($((age / 24)) j)")
     else
       notest+=("$dev")
     fi
@@ -826,7 +875,7 @@ check_zfs() {
         crit "Pool $p : état ${health:-inconnu}" "${bad}${stx:+$NL$stx}" "${act:-\`zpool status -v $p\`}" ;;
     esac
     local caplvl=OK
-    if isint "$cap"; then ((cap >= 80)) && caplvl=WARN; ((cap >= 90)) && caplvl=CRIT; fi
+    if isint "$cap"; then ((cap >= ${SEUIL[pool_attention]:-80})) && caplvl=WARN; ((cap >= ${SEUIL[pool_critique]:-90})) && caplvl=CRIT; fi
     local capmsg="$(hbytes "$alloc") utilisés sur $(hbytes "$size") — libre : $(hbytes "$free"), fragmentation de l'espace libre : ${frag} %"
     case $caplvl in
       OK)   [[ $health == ONLINE ]] && ok "Pool $p ($media) : en ligne, rempli à $cap %" "$capmsg" ;;
@@ -866,7 +915,7 @@ check_zfs() {
         nerr=$(grep -oE 'with [0-9]+ errors' <<< "$scan" | grep -oE '[0-9]+')
         if [[ -z $d ]]; then
           info "Pool $p : dernier scrub" "$scan"
-        elif ((d > 40)); then
+        elif ((d > ${SEUIL[scrub_max_jours]:-40})); then
           warn "Pool $p : dernier scrub il y a $d jours" "Un scrub mensuel détecte et corrige la corruption silencieuse avant qu'elle ne devienne irréparable." \
             "\`sudo zpool scrub $p\`, puis vérifiez la planification des scrubs"
           action zfs-scrub "$p" "Lancer un scrub de $p" "sudo zpool scrub $p"
@@ -970,14 +1019,14 @@ zfs_tendances() {
     isint "$opj" || continue
     if ((opj <= 0)); then
       ok "Pool $p : occupation stable ou en baisse (sur $obs jours)"
-    elif isint "$j90" && ((j90 <= 60)); then
-      add "$( ((j90 <= 14)) && echo CRIT || echo WARN)" "Pool $p rempli à 90 % dans environ $j90 jours"         "Au rythme des $obs derniers jours (+$(hbytes "$opj") par jour)$(isint "$jp" && echo ", il sera plein dans environ $jp jours"). Au-delà de 80-90 %, ZFS ralentit nettement."         "Libérez de la place (snapshots anciens : \`zfs list -t snapshot -o name,used -s used\`, fichiers en double, corbeilles) ou prévoyez des disques"
+    elif isint "$j90" && ((j90 <= ${SEUIL[pool_prevision_attention_jours]:-60})); then
+      add "$( ((j90 <= ${SEUIL[pool_prevision_critique_jours]:-14})) && echo CRIT || echo WARN)" "Pool $p rempli à ${SEUIL[pool_critique]:-90} % dans environ $j90 jours"         "Au rythme des $obs derniers jours (+$(hbytes "$opj") par jour)$(isint "$jp" && echo ", il sera plein dans environ $jp jours"). Au-delà de 80-90 %, ZFS ralentit nettement."         "Libérez de la place (snapshots anciens : \`zfs list -t snapshot -o name,used -s used\`, fichiers en double, corbeilles) ou prévoyez des disques"
     elif isint "$j90"; then
-      info "Pool $p : +$(hbytes "$opj") par jour" "90 % atteints dans environ $(( j90 / 30 )) mois au rythme des $obs derniers jours."
+      info "Pool $p : +$(hbytes "$opj") par jour" "${SEUIL[pool_critique]:-90} % atteints dans environ $(( j90 / 30 )) mois au rythme des $obs derniers jours."
     elif isint "$jp"; then
-      info "Pool $p : +$(hbytes "$opj") par jour" "Déjà au-delà de 90 % ; plein dans environ $jp jours."
+      info "Pool $p : +$(hbytes "$opj") par jour" "Déjà au-delà de ${SEUIL[pool_critique]:-90} % ; plein dans environ $jp jours."
     fi
-  done < <(jq -r '.pools[]? | select(.tendance) | [.nom, (.tendance.octets_par_jour | tostring), ((.tendance.jours_avant_90 // "") | tostring),
+  done < <(jq -r '.pools[]? | select(.tendance) | [.nom, (.tendance.octets_par_jour | tostring), ((.tendance.jours_avant_critique // .tendance.jours_avant_90 // "") | tostring),
            ((.tendance.jours_avant_plein // "") | tostring), (.tendance.jours_observes | tostring)] | join("\u001f")' "$MESURES_FILE" 2>/dev/null)
 }
 
@@ -1186,7 +1235,7 @@ check_gpu() {
       isint "$vu" && isint "$vt" && ((vt > 0)) && msg+=", mémoire vidéo : $(hbytes "$vu") / $(hbytes "$vt")"
       [[ -n $pw ]] && msg+=", consommation : $pw"
       tlvl=OK
-      ((tedge >= 85)) && tlvl=WARN; ((tedge >= 95)) && tlvl=CRIT
+      ((tedge >= ${SEUIL[gpu_temp_attention]:-85})) && tlvl=WARN; ((tedge >= ${SEUIL[gpu_temp_critique]:-95})) && tlvl=CRIT
       case $tlvl in
         OK)   ok "GPU AMD opérationnel" "$msg" ;;
         WARN) warn "GPU AMD chaud ($tedge °C)" "$msg" "Vérifiez la ventilation du boîtier et l'encrassement du radiateur de la carte" ;;
@@ -1209,7 +1258,7 @@ check_gpu() {
         local idx gname gdrv pst temp util mu mt2 pwr encs pers
         while IFS=',' read -r idx gname gdrv pst temp util mu mt2 pwr encs pers; do
           temp=${temp// /}; local lv=OK
-          isint "$temp" && ((temp >= 80)) && lv=WARN; isint "$temp" && ((temp >= 90)) && lv=CRIT
+          isint "$temp" && ((temp >= ${SEUIL[gpu_temp_attention]:-85})) && lv=WARN; isint "$temp" && ((temp >= ${SEUIL[gpu_temp_critique]:-95})) && lv=CRIT
           add "$lv" "GPU NVIDIA$idx :${gname}" "Pilote${gdrv}, $temp °C, charge${util} %, mémoire vidéo${mu} /${mt2} Mio,${pwr} W, état${pst}, sessions NVENC actives :${encs}, mode persistance :${pers}"
         done <<< "$q"
         rawcmd "nvidia-smi" nvidia-smi
@@ -1344,7 +1393,7 @@ sauvegardes_verif() {
     elif [[ -z $age ]]; then
       info "Sauvegarde « ${svc%.service} » : jamais exécutée depuis le démarrage" "Le minuteur $u existe mais le service n'a pas encore tourné."
       lignes+=("${svc%.service}$TAB@INFO pas encore exécutée$TAB")
-    elif ((age > 8 * 24)); then
+    elif ((age > ${SEUIL[sauvegarde_max_jours]:-8} * 24)); then
       warn "Sauvegarde « ${svc%.service} » : dernière réussite il y a $((age / 24)) jours" "La tâche ne semble plus s'exécuter." "\`systemctl status $u\` et \`journalctl -u $svc -n 50\`"
       lignes+=("${svc%.service}$TAB@WARN il y a $((age / 24)) j$TAB")
     else
@@ -1358,7 +1407,7 @@ sauvegardes_verif() {
   # 2) contrôles déclarés dans audit.conf : SAUVEGARDES="nom:type:cible:heures …"
   for n in $(cfg SAUVEGARDES); do
     IFS=: read -r nom typ cible h <<< "$n"
-    isint "${h:-}" || h=26
+    isint "${h:-}" || h=${SEUIL[sauvegarde_defaut_heures]:-26}
     local der=""
     case $typ in
       fichier) [[ -e $cible ]] && der=$(find "$cible" -maxdepth 3 -type f -printf '%T@\n' 2>/dev/null | sort -n | tail -n 1); der=${der%.*} ;;
@@ -1407,7 +1456,7 @@ check_sauvegardes() {
         fi
       else
         age=$(( (NOW - last) / 3600 ))
-        if ((age > 48)); then
+        if ((age > ${SEUIL[snapshot_max_heures]:-48})); then
           warn "Pool $p : dernier snapshot il y a $((age / 24)) jours" "$n snapshots au total : la création automatique semble arrêtée." \
             "Vérifiez l'outil de snapshots (\`systemctl list-timers | grep -Ei 'sanoid|snap'\`, cron zfs-auto-snapshot)"
         else
@@ -1524,10 +1573,10 @@ cf_analyse() {   # cf_analyse nom méta récent pid type(docker|host) référenc
   local warned=0
   if [[ $ver =~ ^([0-9]{4})\.([0-9]+)\. ]]; then
     local age=$(( ($(date +%Y) * 12 + 10#$(date +%m)) - (BASH_REMATCH[1] * 12 + 10#${BASH_REMATCH[2]}) ))
-    if ((age >= 12)); then
+    if ((age >= ${SEUIL[cloudflared_max_mois]:-12})); then
       warned=1
       warn "cloudflared « $name » obsolète (version $ver, ~$age mois)" "Cloudflare ne prend en charge que les versions de cloudflared publiées depuis moins d'un an." "$upd"
-    elif ((age >= 6)); then
+    elif ((age >= ${SEUIL[cloudflared_max_mois]:-12} / 2)); then
       info "cloudflared « $name » : version $ver (~$age mois)" "Une version plus récente est probablement disponible." "$upd"
     else
       ok "cloudflared « $name » récent (version $ver)"
@@ -2488,7 +2537,7 @@ check_maj() {
             crit "Ubuntu $OS_VER n'est plus maintenue depuis $((-dleft)) jours" "Plus aucun correctif de sécurité gratuit pour les paquets de base." \
               "Mettez à niveau (\`sudo do-release-upgrade\`) ou activez Ubuntu Pro (gratuit jusqu'à 5 machines) : \`sudo pro attach\`"
           fi
-        elif ((dleft < 180)); then
+        elif ((dleft < ${SEUIL[ubuntu_fin_support_jours]:-180})); then
           warn "Fin du support d'Ubuntu $OS_VER dans $dleft jours" "Après cette date, plus de correctifs de sécurité gratuits." "Planifiez la mise à niveau (\`sudo do-release-upgrade\`) ou Ubuntu Pro"
         else
           ok "Ubuntu $OS_VER maintenue jusqu'au $(date -d "$eol" +%d/%m/%Y)"
@@ -2837,8 +2886,8 @@ trafic_analyse() {
   local debut jours
   debut=$(jq -r '.debut // 0' "$TRAFIC_FILE" 2>/dev/null); isint "$debut" || return 0
   jours=$(( (NOW - debut) / 86400 ))
-  if ((jours < 7)); then
-    info "Observation des connexions en cours ($jours jour(s) sur 7)" "Au bout de 7 jours, l'audit signalera les ports en écoute que personne n'utilise et ceux qui reçoivent des connexions directes depuis Internet."
+  if ((jours < ${SEUIL[ports_observation_jours]:-7})); then
+    info "Observation des connexions en cours ($jours jour(s) sur ${SEUIL[ports_observation_jours]:-7})" "Au bout de ${SEUIL[ports_observation_jours]:-7} jours, l'audit signalera les ports en écoute que personne n'utilise et ceux qui reçoivent des connexions directes depuis Internet."
     return 0
   fi
   local -A VU=() PUB=() EX=()
@@ -2852,7 +2901,7 @@ trafic_analyse() {
     v=${VU[$k]:-0}
     if ((v == 0)); then
       inutiles+=("$k — $who : aucune connexion en $jours jours")
-    elif (( (NOW - v) / 86400 >= 30 )); then
+    elif (( (NOW - v) / 86400 >= ${SEUIL[port_inutilise_jours]:-30} )); then
       inutiles+=("$k — $who : dernière connexion il y a $(( (NOW - v) / 86400 )) jours")
     fi
     if (( ${PUB[$k]:-0} > 0 )); then
@@ -3107,12 +3156,12 @@ check_dockersec() {
     local age=${IMG_AGE[$imgid]:-} agec="?"
     if isint "$age"; then
       agec="$age j"
-      if ((isexp && age > 180)); then
+      if ((isexp && age > ${SEUIL[image_exposee_max_jours]:-180})); then
         agec="@WARN $age j"
         local maj="Dans le dossier du projet : \`docker compose pull && docker compose up -d\` ; un outil comme diun peut vous prévenir des nouvelles versions"
         [[ $img == *nextcloud-releases/aio-* ]] && maj="Conteneur géré par Nextcloud AIO : mettez à jour depuis son interface (port 8080 de l'hôte) → « Arrêter les conteneurs », puis « Démarrer et mettre à jour ». Si rien ne se met à jour, mettez d'abord à jour le conteneur maître (nextcloud-aio-mastercontainer)"
         warn "Image de $n construite il y a $age jours$where" "Service exposé : ses failles connues restent ouvertes tant que l'image n'est pas mise à jour (vérifiez qu'une version plus récente existe)." "$maj"
-      elif ((age > 365)); then
+      elif ((age > ${SEUIL[image_max_jours]:-365})); then
         agec="@INFO $age j"; oldimg+=("$n ($age j)")
       fi
     fi
@@ -3553,6 +3602,7 @@ table.findings td:first-child{width:96px;padding-top:11px}
 .ttl{font-weight:600}
 .msg{color:var(--muted);font-size:14px;margin-top:2px;overflow-wrap:anywhere}
 .fix{margin-top:6px;font-size:13.5px;padding:6px 10px;border-left:3px solid var(--info);background:var(--soft);border-radius:0 6px 6px 0;overflow-wrap:anywhere}
+.refs{margin-top:5px;font-size:12.5px;color:var(--muted)}.refs a{color:inherit;text-decoration:underline;text-underline-offset:2px}
 .fix::before{content:"À faire : ";font-weight:650}
 code{font-family:var(--mono);font-size:12.5px;background:var(--soft);padding:1px 5px;border-radius:4px}
 .fix code{background:var(--card)}
@@ -3689,6 +3739,7 @@ EOF
       if [[ -n ${R_ACC[i]} ]]; then fmt_to "Accepté (${LVL_FR[${R_LV0[i]}]} à l'origine) : ${R_ACC[i]}"; r+="<div class=\"msg\"><b>$REPLY</b></div>"; fi
       if [[ -n ${R_MSG[i]} ]]; then fmt_to "${R_MSG[i]}"; r+="<div class=\"msg\">$REPLY</div>"; fi
       if [[ -n ${R_FIX[i]} ]]; then fmt_to "${R_FIX[i]}"; r+="<div class=\"fix\">$REPLY</div>"; fi
+      [[ -n ${R_REFH[i]} ]] && r+="<div class=\"refs\">Références : ${R_REFH[i]}</div>"
       r+="</td></tr>"
       case $lvl in CRIT) rowsC+=$r ;; WARN) rowsW+=$r ;; *) rowsR+=$r ;; esac
     done
@@ -3709,6 +3760,8 @@ EOF
   # Vérifications manuelles
   local hlist="" h
   for r in "${INGRESS[@]}"; do h=${r%%"$US"*}; [[ $h != "*" ]] && hlist+="<code>$(esc "$h")</code> "; done
+  local smod; smod=$(seuils_modifies)
+  [[ -n $smod ]] && smod="<section class=\"card\" id=\"seuils\"><h2>Seuils personnalisés <span class=\"cat\">modifiés dans l’interface</span></h2><ul class=\"manual\">$(while IFS= read -r l; do printf '<li>%s</li>' "$(esc "$l")"; done <<< "$smod")</ul></section>"
   cat <<EOF
 <section class="card" id="manuel"><h2>Vérifications manuelles <span class="cat">Hors de portée du script</span></h2>
 <ul class="manual">
@@ -3719,6 +3772,7 @@ EOF
 <li><b>Mises à jour applicatives</b> : les images Docker des services exposés sont mises à jour au moins une fois par mois.</li>
 <li><b>Micrologiciels</b> : BIOS/UEFI, SSD et carte graphique à jour ; interface d’administration matérielle (IPMI/BMC) éventuelle non exposée.</li>
 </ul></section>
+$smod
 <footer>Généré par Audite-moi $VERSION en $dur s · note = 100 × 0,75<sup>critiques</sup> × 0,96<sup>avertissements</sup> pour chaque catégorie · rapport confidentiel : il décrit les faiblesses de votre serveur.</footer>
 </div>
 <script>
@@ -3767,6 +3821,8 @@ render_txt() {
   printf '%s\n' "======================================================================"
   printf ' Santé : %s (%s/100)    Sécurité : %s (%s/100)\n' "$(grade "$hs")" "$hs" "$(grade "$ss")" "$ss"
   printf ' %d critique(s), %d avertissement(s), %d OK, %d info(s)\n' "$nC" "$nW" "$nO" "$nI"
+  local smod; smod=$(seuils_modifies)
+  [[ -n $smod ]] && printf '\n Seuils personnalisés :\n%s\n' "$(sed 's/^/   • /' <<< "$smod")"
   printf '\nPLAN D’ACTION\n-------------\n'
   for lvl in CRIT WARN; do
     for i in "${!R_LVL[@]}"; do
@@ -3784,6 +3840,7 @@ render_txt() {
       [[ -n ${R_ACC[i]} ]] && printf '      (accepté : %s)\n' "${R_ACC[i]}"
       [[ -n ${R_MSG[i]} ]] && printf '      %s\n' "${R_MSG[i]//$NL/$NL      }"
       [[ -n ${R_FIX[i]} ]] && printf '      → %s\n' "${R_FIX[i]//$NL/$NL        }"
+      [[ -n ${R_REFT[i]} ]] && printf '      Réf. : %s\n' "${R_REFT[i]}"
     done
     for i in "${!T_SEC[@]}"; do
       [[ ${T_SEC[i]} == "$s" ]] || continue
@@ -3801,13 +3858,13 @@ render_json() {
   local secs; secs=$(for s in "${SEC_ORDER[@]}"; do printf '%s%s%s%s%s%s%s\n' "$s" "$US" "${SEC_TITLE[$s]}" "$US" "${SEC_SHORT[$s]}" "$US" "${SEC_CAT[$s]}"; done \
     | jq -Rn '[inputs | split("\u001f") | {key: .[0], value: {titre: .[1], court: .[2], categorie: .[3]}}] | from_entries')
   for i in "${!R_LVL[@]}"; do
-    printf '%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s' "${R_SEC[i]}" "$US" "${R_LV0[i]}" "$US" "${R_TTL[i]}" "$US" "${R_MSG[i]}" "$US" "${R_FIX[i]}" "$US" \
-      "$(cle_constat "${R_SEC[i]}" "${R_TTL[i]}")" "$US" "${R_ACC[i]}" "$US" "${R_ACT[i]}" "$RS"
+    printf '%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s' "${R_SEC[i]}" "$US" "${R_LV0[i]}" "$US" "${R_TTL[i]}" "$US" "${R_MSG[i]}" "$US" "${R_FIX[i]}" "$US" \
+      "$(cle_constat "${R_SEC[i]}" "${R_TTL[i]}")" "$US" "${R_ACC[i]}" "$US" "${R_ACT[i]}" "$US" "${R_REF[i]}" "$RS"
   done | jq -Rs --arg hote "$HOST" --arg date "$DATE_HUMAN" --argjson horodatage "$START" --arg version "$VERSION" \
       --arg os "$OS_PRETTY" --arg noyau "$KERNEL" --argjson duree "$dur" --arg mode "$( ((QUICK)) && echo rapide || echo complet)" \
       --argjson hs "$hs" --argjson ss "$ss" --arg hg "$(grade "$hs")" --arg sg "$(grade "$ss")" \
-      --argjson c "$nC" --argjson w "$nW" --argjson o "$nO" --argjson n "$nI" --arg base "$base" --argjson secs "$secs" '
-    {version: $version, hote: $hote, date: $date, horodatage: $horodatage, os: $os, noyau: $noyau, duree_s: $duree, mode: $mode,
+      --argjson c "$nC" --argjson w "$nW" --argjson o "$nO" --argjson n "$nI" --arg base "$base" --argjson secs "$secs" --arg smod "$(seuils_modifies)" '
+    {version: $version, seuils_modifies: ($smod | split("\n") | map(select(length > 0))), hote: $hote, date: $date, horodatage: $horodatage, os: $os, noyau: $noyau, duree_s: $duree, mode: $mode,
      notes: {sante: {score: $hs, lettre: $hg}, securite: {score: $ss, lettre: $sg}},
      compteurs: {CRIT: $c, WARN: $w, OK: $o, INFO: $n},
      fichiers: {html: ($base + ".html"), txt: ($base + ".txt"), json: ($base + ".json")},
@@ -3815,7 +3872,8 @@ render_json() {
      constats: (split("\u001e") | map(select(length > 0) | split("\u001f")
        | {section: .[0], niveau: .[1], titre: .[2], detail: .[3], correctif: .[4], cle: .[5]}
          + (if (.[6] // "") != "" then {accepte: .[6]} else {} end)
-         + (if (.[7] // "") != "" then {actions: (.[7] | fromjson)} else {} end)))}'
+         + (if (.[7] // "") != "" then {actions: (.[7] | fromjson)} else {} end)
+         + (if (.[8] // "") != "" then {references: (.[8] | fromjson)} else {} end)))}'
 }
 
 prune_reports() {
@@ -3831,6 +3889,7 @@ prune_reports() {
 main() {
   check_deps
   charger_conf
+  charger_seuils
   setup_output
   printf '%sAudite-moi %s%s — audit de %s (%s)\n' "$C_BOLD" "$VERSION" "$C_0" "$HOST" "$OS_PRETTY"
   ((QUICK)) && note "Mode rapide : analyses longues désactivées."
@@ -3859,6 +3918,7 @@ main() {
   check_journaux
   check_outils
   appliquer_acceptes
+  appliquer_references
 
   local nC nW nO nI hs ss dur
   nC=$(count_lvl CRIT); nW=$(count_lvl WARN); nO=$(count_lvl OK); nI=$(count_lvl INFO)

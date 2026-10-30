@@ -37,6 +37,21 @@ Chaque audit produit un rapport classé par priorité (**critique**, **attention
 
 Le script est en **lecture seule** : il ne modifie rien sur le serveur. Les secrets (jetons, mots de passe) sont masqués dans les rapports.
 
+## D'où viennent les contrôles
+
+Les contrôles reprennent des référentiels reconnus, adaptés à un NAS domestique. Chaque constat concerné affiche ses **références**, avec un lien :
+
+| Référentiel | Utilisé pour |
+|---|---|
+| [CIS Ubuntu Linux 24.04 Benchmark](https://www.cisecurity.org/benchmark/ubuntu_linux) (numérotation v1.0.0) | SSH, sudo, comptes, pare-feu UFW, services, sysctl, AppArmor, droits des fichiers, auditd, mises à jour |
+| [CIS Docker Benchmark](https://www.cisecurity.org/benchmark/docker) v1.7.0 | conteneurs privilégiés, socket Docker, capacités, montages sensibles, réseau *host*, ports publiés, API Docker |
+| [ANSSI-BP-028 v2.0](https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf) et [recommandations (Open)SSH](https://cyber.gouv.fr/sites/default/files/2014/01/NT_OpenSSH.pdf) | durcissement Linux (R8, R9, R12, R31, R39, R45, R50, R54, R56, R61, R62, R73, R79, R80…), SSH (R17, R21, R22, R28…) |
+| [OWASP](https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html) | sécurité Docker, fichiers sensibles exposés (WSTG-CONF-04), HSTS |
+| Statistiques SMART de [Backblaze](https://www.backblaze.com/blog/hard-drive-smart-stats/) | attributs qui annoncent une panne (5, 187, 188, 197, 198) |
+| Documentation officielle | Nextcloud (double authentification, proxy de confiance, durcissement), Cloudflare (Access, proxy, versions de cloudflared), Stash, Oracle/TrueNAS (remplissage ZFS), Ubuntu, Microsoft (SMB1), US-CERT (règle 3-2-1) |
+
+La correspondance est dans [`references.json`](references.json). **Ce n'est pas un audit de conformité** : un « A » ne signifie pas « conforme CIS ». La note et la gravité de chaque constat relèvent d'un choix pour un NAS domestique, et les seuils sont réglables (voir *Réglages*).
+
 ## Installation
 
 ```bash
@@ -63,7 +78,7 @@ Options utiles : `--port 9000`, `--ecoute 192.168.1.10`, `--sans-web` (script + 
 
 ### Interface web
 
-- une barre de navigation toujours visible : **Tableau de bord**, **Constats**, **Historique**, **Rapport complet**, et les boutons **▶ Lancer un audit** (complet, quelques minutes) / **Audit rapide** (sans Lynis, Trivy, scan du réseau local ni recherche des fichiers SUID), avec le déroulement affiché en direct ;
+- une barre de navigation toujours visible : **Tableau de bord**, **Matériel**, **Constats**, **Historique**, **Rapport**, **Réglages**, et les boutons **▶ Lancer un audit** (complet, quelques minutes) / **Audit rapide** (sans Lynis, Trivy, scan du réseau local ni recherche des fichiers SUID), avec le déroulement affiché en direct ;
 - les notes **Santé** / **Sécurité** et les compteurs (critiques, avertissements, OK, infos) sont **cliquables** : un clic n'affiche que les constats correspondants (ex. Sécurité + Critiques), un second clic annule ;
 - la liste des **constats** se filtre aussi par catégorie, niveau, section ou mot-clé (ex. « ssh », « jellyfin ») ; par défaut elle montre ce qu'il faut corriger, du plus urgent au moins urgent, avec la correction à appliquer ;
 - **ce qui a changé** depuis l'audit précédent : nombre de problèmes nouveaux (marqués « Nouveau », filtre dédié) et résolus (liste) ;
@@ -131,6 +146,14 @@ Le privilège de sauvegarde permet de lire **toute** la configuration du routeur
 
 Le scan part du NAS car c'est lui qui a les outils (nmap, rapports, historique) et qu'il peut se comparer d'une semaine à l'autre : il signale les nouveaux appareils. Mais il ne voit que ce que **le NAS** a le droit de joindre : si OPNsense isole un VLAN (objets connectés, invités) du réseau du NAS, ce VLAN apparaîtra vide, ce qui est justement le signe que l'isolation fonctionne. La vue complète des règles entre sous-réseaux, elle, vient de l'audit de la configuration d'OPNsense. Les deux se complètent ; il n'est pas utile d'installer nmap sur le routeur.
 
+## Réglages des seuils
+
+La page **Réglages** de l'interface permet de changer les seuils à partir desquels un constat passe en « attention » ou en « critique » : températures des disques (par type), usure des SSD, secteurs défectueux, remplissage des pools et des volumes, délai entre deux scrubs, âge des snapshots et des sauvegardes, température du processeur et du GPU, pression mémoire, âge des images Docker, durée d'observation des ports, prévision de remplissage, alertes Telegram…
+
+Chaque seuil a des bornes (une valeur absurde est refusée) et un bouton pour revenir à la valeur par défaut ; un seuil « critique » doit rester au-dessus du seuil « attention ». Les valeurs s'appliquent au prochain audit et au prochain relevé des disques ; les seuils modifiés sont rappelés dans chaque rapport. Les valeurs par défaut et les bornes sont dans [`seuils.json`](seuils.json), vos choix dans `/var/lib/audite-moi/reglages/seuils.json`.
+
+![Réglages](docs/reglages.png)
+
 ## Alertes Telegram
 
 ```bash
@@ -190,7 +213,7 @@ Le rapport décrit précisément les faiblesses de votre serveur : l'interface e
 
 - Le serveur web (Python, bibliothèque standard uniquement) tourne sous l'utilisateur `audite-moi`, sans droits root et dans un service systemd durci. Il ne peut **pas** exécuter de commande : il dépose seulement une demande que `audite-moi.path` transmet à `audite-moi.service`.
 - Mot de passe haché (PBKDF2-SHA256, 600 000 itérations), session en cookie `HttpOnly` / `SameSite=Strict`, protection CSRF, blocage après 5 échecs en 15 minutes, HTTPS par défaut, en-têtes de sécurité stricts (CSP…).
-- Les constats acceptés sont enregistrés dans `/var/lib/audite-moi/reglages` (seul dossier, avec celui des demandes, où l'interface peut écrire).
+- Les constats acceptés et les seuils sont enregistrés dans `/var/lib/audite-moi/reglages` (seul dossier, avec celui des demandes, où l'interface peut écrire).
 - **Ne l'exposez pas sur Internet.** Si UFW est actif, l'installateur propose de l'ouvrir uniquement aux réseaux privés (tous vos sous-réseaux, pas Internet). Pour un accès à distance, passez par un VPN, ou par votre tunnel Cloudflare **derrière Cloudflare Access** (avec `noTLSVerify: true` vers l'origine, le certificat étant auto-signé).
 
 ## GPU : Intel + AMD dans un même conteneur
@@ -258,6 +281,8 @@ sudo tests/run-tests.sh --reel   # + une exécution réelle (lecture seule) sur 
 
 ```
 audite-moi.sh            le script d'audit (bash)
+seuils.json              seuils par défaut et bornes (modifiables dans l'interface)
+references.json          référentiels associés aux constats (CIS, ANSSI, OWASP…)
 web/audite-moi-web.py    l'interface web (Python 3, sans dépendance)
 systemd/                 services : audit (.service/.path/.timer), relevé des disques, des connexions et alertes
                          (audite-moi-mesures), corrections (audite-moi-corriger) et interface web

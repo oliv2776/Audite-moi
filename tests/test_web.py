@@ -271,6 +271,34 @@ class TestInterface(unittest.TestCase):
         _, txt = self.req("GET", "/tendances.json?jours=abc", cookie=cookie)
         self.assertEqual(json.loads(txt)["jours"], 30)
 
+    def test_reglages(self):
+        cookie = self.connexion()
+        r, t = self.req("GET", "/reglages", cookie=cookie)
+        self.assertEqual(r.status, 200)
+        self.assertIn('name="pool_attention"', t)
+        self.assertNotIn(' style="', t)
+        csrf = re.search(r'name="csrf" value="([^"]+)"', t).group(1)
+        f = os.path.join(self.tmp.name, "reglages", "seuils.json")
+        r, t = self.req("POST", "/reglages", {"csrf": csrf, "pool_attention": "85", "pool_critique": "84"}, cookie=cookie)
+        self.assertEqual(r.status, 400)
+        self.assertIn("Doit être supérieur à 85", t)
+        self.assertFalse(os.path.exists(f))
+        r, _ = self.req("POST", "/reglages", {"csrf": csrf, "scrub_max_jours": "9999"}, cookie=cookie)
+        self.assertEqual(r.status, 400)
+        r, _ = self.req("POST", "/reglages", {"csrf": csrf, "scrub_max_jours": "abc"}, cookie=cookie)
+        self.assertEqual(r.status, 400)
+        r, _ = self.req("POST", "/reglages", {"csrf": "faux", "pool_attention": "85"}, cookie=cookie)
+        self.assertEqual(r.status, 403)
+        r, _ = self.req("POST", "/reglages", {"csrf": csrf, "pool_attention": "85", "pool_critique": "95", "disque_temp_hdd_attention": "50", "inconnu": "3"}, cookie=cookie)
+        self.assertEqual(r.status, 303)
+        self.assertEqual(json.load(open(f)), {"pool_attention": 85, "pool_critique": 95})      # seulement ce qui diffère du défaut
+        _, t = self.req("GET", "/materiel.json", cookie=cookie)
+        self.assertEqual(json.loads(t)["seuils"]["pool_critique"], 95)
+        _, t = self.req("GET", "/reglages", cookie=cookie)
+        self.assertIn("2 seuil(s) personnalisé(s)", t)
+        self.req("POST", "/reglages", {"csrf": csrf}, cookie=cookie)                           # champs vides : valeurs par défaut
+        self.assertEqual(json.load(open(f)), {})
+
     def test_mesurer_csrf(self):
         cookie = self.connexion()
         r, _ = self.req("POST", "/mesurer", {"csrf": "faux"}, cookie=cookie)

@@ -553,12 +553,12 @@ CSS = """
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif}
 a{color:var(--accent)}
 .topbar{position:sticky;top:0;z-index:20;background:var(--card);border-bottom:1px solid var(--line)}
-.topbar .in{max-width:1180px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.topbar .in{max-width:1180px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .brand{display:flex;align-items:center;gap:10px;font-weight:750;font-size:17px;color:var(--ink);text-decoration:none}
 .logo{width:28px;height:28px;border-radius:8px;background:var(--accent);display:grid;place-items:center;color:#fff;font-size:14px}
 .host{color:var(--muted);font-weight:500;font-size:14px}
-.nav{display:flex;gap:4px;flex-wrap:wrap}
-.nav a{color:var(--muted);text-decoration:none;font-size:14px;font-weight:600;padding:6px 8px;border-radius:8px}
+.nav{display:flex;gap:2px;flex-wrap:wrap}
+.nav a{color:var(--muted);text-decoration:none;font-size:14px;font-weight:600;padding:6px 7px;border-radius:8px}
 .nav a:hover{background:var(--soft);color:var(--ink)}.nav a.on{background:var(--sel);color:var(--accent)}
 .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-left:auto}
 .wrap{max-width:1180px;margin:0 auto;padding:20px 20px 60px}
@@ -608,6 +608,7 @@ ol.items li:first-child{border-top:0}
 .ttl{font-weight:600}
 .fix{margin-top:5px;font-size:13.5px;padding:6px 10px;border-left:3px solid var(--info);background:var(--soft);border-radius:0 6px 6px 0;overflow-wrap:anywhere}
 .fix::before{content:"À faire : ";font-weight:650}
+.refs{margin-top:5px;font-size:12.5px;color:var(--muted)}.refs a{color:inherit;text-underline-offset:2px}.refs a:hover{color:var(--accent)}
 details.d{margin-top:4px}details.d summary{cursor:pointer;color:var(--muted);font-size:13px}
 .det{color:var(--muted);font-size:13.5px;white-space:pre-wrap;overflow-wrap:anywhere}
 .msgd{color:var(--muted);font-size:13.5px;overflow-wrap:anywhere;margin-top:2px}
@@ -665,6 +666,19 @@ dialog h3{margin:0 0 8px;font-size:17px}
 .dlg-l{display:block;font-size:13.5px;font-weight:600;margin:10px 0 0}.dlg-l span{font-weight:400;color:var(--muted)}
 .dlg-l input{display:block;width:100%;font:inherit;font-weight:400;padding:9px 11px;border-radius:9px;border:1px solid var(--line);background:var(--soft);color:var(--ink);margin-top:5px}
 .dlg-b{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+/* page Réglages */
+.sl{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 18px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.sl:first-of-type{border-top:0}
+.sl label b{font-weight:600}.sl .aide{display:block;color:var(--muted);font-size:12.5px;margin-top:2px;max-width:640px}
+.sv{display:flex;align-items:center;gap:8px;justify-content:flex-end}
+.sv input{width:96px;font:inherit;font-variant-numeric:tabular-nums;text-align:right;padding:6px 9px;border-radius:9px;border:1px solid var(--line);background:var(--soft);color:var(--ink)}
+.sv .u{color:var(--muted);font-size:13px;min-width:62px}
+.sv .lienbtn{font-size:12px;min-width:76px;text-align:left}
+.sl.modifie input{border-color:var(--accent);background:var(--sel);font-weight:700}
+.sl.err input{border-color:var(--crit);background:var(--crit-bg)}
+.errm{grid-column:1/-1;color:var(--crit);font-size:13px;font-weight:600;text-align:right}
+.barre-bas{position:sticky;bottom:0;display:flex;justify-content:flex-end;gap:10px;padding:12px 0;background:var(--bg);border-top:1px solid var(--line);margin-bottom:10px}
+@media (max-width:620px){.sl{grid-template-columns:1fr}.sv{justify-content:flex-start}.errm{text-align:left}}
 /* page Matériel */
 .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
 a.stat{display:block;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;color:inherit;text-decoration:none;transition:border-color .15s;min-width:0}
@@ -805,7 +819,8 @@ def barre(csrf, occupe, actif, der=None):
     hote = der.get("hote", "") if der else socket.gethostname()
     liens = [("/", "Tableau de bord", "tdb"), ("/materiel", "Matériel", "materiel"), ("/#constats", "Constats", "constats"), ("/#historique", "Historique", "historique")]
     if der:
-        liens.append(("/rapports/" + der["fichiers"]["html"], "Rapport complet", "rapport"))
+        liens.append(("/rapports/" + der["fichiers"]["html"], "Rapport", "rapport"))
+    liens.append(("/reglages", "Réglages", "reglages"))
     nav = "".join('<a href="{}"{}>{}</a>'.format(esc(h), ' class="on"' if k == actif else "", t) for h, t, k in liens)
     return """<header class="topbar"><div class="in"><a class="brand" href="/"><span class="logo">✓</span>Audite-moi <span class="host">{h}</span></a>
 <nav class="nav">{nav}</nav><div class="actions">
@@ -996,6 +1011,11 @@ def tableau_bord(donnees, csrf, nonce, message, choix=""):
                 else:
                     msg += '<div class="msgd">{}</div>'.format(fmt(d))
             fx = '<div class="fix">{}</div>'.format(fmt(x["correctif"])) if x.get("correctif") and not x.get("accepte") else ""
+            refs = [r for r in (x.get("references") or []) if isinstance(r, dict) and str(r.get("url", "")).startswith("https://")]
+            if refs:
+                fx += '<div class="refs">Références : {}</div>'.format(" · ".join(
+                    '<a href="{u}" title="{t}" target="_blank" rel="noopener noreferrer">{s} {i}</a>'.format(
+                        u=esc(r["url"]), t=esc(r.get("titre", "")), s=esc(r.get("source", "")), i=esc(r.get("id", ""))) for r in refs))
             acts = []
             if est_dernier and not x.get("accepte"):
                 for i, a in enumerate(x.get("actions") or []):
@@ -1131,6 +1151,7 @@ function h(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{
 function oct(b){if(b==null)return '—';var u=['o','Ko','Mo','Go','To','Po'],i=0;while(Math.abs(b)>=1024&&i<5){b/=1024;i++;}return nf(b,(b>=100||i===0)?0:1)+' '+u[i];}
 function pc(v){return v==null?'—':nf(v,0)+' %';}
 function niv(p,w,c){return p>=c?'crit':p>=w?'warn':'';}
+function SE(k,d){var v=(D.seuils||{})[k];return typeof v==='number'?v:d;}
 function meter(p,cls,lab){p=Math.max(0,Math.min(100,p||0));return '<div class="meter '+(cls||'')+'" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+Math.round(p)+'" aria-label="'+h(lab)+'"><i data-w="'+p.toFixed(1)+'"></i></div>';}
 function largeurs(r){Array.prototype.forEach.call(r.querySelectorAll('[data-w]'),function(e){e.style.width=e.getAttribute('data-w')+'%';});}
 var ET={ok:['OK','✓','OK'],attention:['WARN','!','Attention'],critique:['CRIT','✕','Critique'],veille:['INFO','–','En veille'],inconnu:['INFO','?','Inconnu']};
@@ -1224,7 +1245,7 @@ function stockage(){
   var ds={};(r.disques||[]).forEach(function(d){ds[d.nom]=d;});
   var tot=0,lib=0,nC=0,nW=0;(r.disques||[]).forEach(function(d){if(d.etat==='critique')nC++;else if(d.etat==='attention')nW++;});
   P.innerHTML=(r.pools||[]).map(function(p){
-    var t=p.taille||p.brut||0,u=p.utilise!=null?p.utilise:p.alloue,l=p.libre!=null?p.libre:t-u,pct=t?100*u/t:0,lv=niv(pct,80,90);tot+=t;lib+=l;
+    var t=p.taille||p.brut||0,u=p.utilise!=null?p.utilise:p.alloue,l=p.libre!=null?p.libre:t-u,pct=t?100*u/t:0,lv=niv(pct,SE('pool_attention',80),SE('pool_critique',90));tot+=t;lib+=l;
     var e=p.etat&&p.etat!=='ONLINE'?'critique':p.disques_critiques?'critique':p.disques_attention?'attention':'ok';
     var bd=p.etat&&p.etat!=='ONLINE'?'<span class="badge b-CRIT">'+h(p.etat)+'</span>':'<span class="badge b-'+ET[e][0]+'" title="État du pool et de ses disques">'+{ok:'Sain',attention:'À surveiller',critique:'Critique'}[e]+'</span>';
     var tag=[p.type,{mirror:'miroir',simple:'sans redondance'}[p.disposition]||(p.disposition||'').toUpperCase()].filter(Boolean).join(' · ');
@@ -1233,11 +1254,11 @@ function stockage(){
     return '<div class="bloc"><div class="bh"><b>'+h(p.nom)+'</b>'+(tag?'<span class="tag">'+h(tag)+'</span>':'')+bd+'</div>'+
       '<div class="big">'+oct(l)+'<small> libres sur '+oct(t)+'</small></div>'+meter(pct,lv,'Remplissage du pool '+p.nom)+
       '<div class="sub"><b>'+pc(pct)+'</b> utilisés ('+oct(u)+')'+(p.frag!=null?' · fragmentation '+p.frag+' %':'')+'</div>'+
-      (lv?'<div class="sub">'+(lv==='crit'?'Pool presque plein : libérez de la place ou agrandissez-le.':'Au-delà de 80 %, ZFS ralentit : prévoyez de la place.')+'</div>':'')+
+      (lv?'<div class="sub">'+(lv==='crit'?'Pool presque plein : libérez de la place ou agrandissez-le.':'Au-delà de '+SE('pool_attention',80)+' %, ZFS ralentit : prévoyez de la place.')+'</div>':'')+
       (jeux?'<ul class="lignes" aria-label="Principaux jeux de données">'+jeux+'</ul>':'')+'<div class="membres">'+mb+'</div></div>';}).join('')||'<p class="empty">Aucun pool ZFS.</p>';
   var vols=r.volumes||[];
   V.innerHTML=vols.length?'<h3 class="lbl">Autres volumes</h3><ul class="lignes vol">'+vols.map(function(v){var pct=v.taille?100*v.utilise/v.taille:0;if(!(r.pools||[]).length){tot+=v.taille;lib+=v.libre;}
-    return '<li><span title="'+h(v.source)+'">'+h(v.point)+' <span class="tag">'+h(v.type)+'</span></span>'+meter(pct,niv(pct,85,95)+' fin','Remplissage de '+v.point)+'<span class="num">'+oct(v.libre)+' libres sur '+oct(v.taille)+'</span></li>';}).join('')+'</ul>':'';
+    return '<li><span title="'+h(v.source)+'">'+h(v.point)+' <span class="tag">'+h(v.type)+'</span></span>'+meter(pct,niv(pct,SE('espace_attention',85),SE('espace_critique',95))+' fin','Remplissage de '+v.point)+'<span class="num">'+oct(v.libre)+' libres sur '+oct(v.taille)+'</span></li>';}).join('')+'</ul>':'';
   largeurs(P);largeurs(V);
   var dl=(r.disques||[]).slice().sort(function(a,b){return (a.pool||'~').localeCompare(b.pool||'~')||(RANG[a.etat]-RANG[b.etat])||a.nom.localeCompare(b.nom);});
   T.innerHTML=dl.length?'<table><thead><tr><th>Disque</th><th>Type</th><th>Capacité</th><th>Pool</th><th class="num">Temp.</th><th class="num">En service</th><th class="num">Usure</th><th>État</th></tr></thead><tbody>'+
@@ -1294,13 +1315,14 @@ function multi(el,leg,series,o){
 var TJ=30,TD=null;
 function tendances(){if(!TD)return;
   var R=TD.remplissage||{},T=TD.temperatures||{};
-  multi($('t-rempl'),$('t-leg1'),Object.keys(R).sort().map(function(k){return {nom:k,pts:R[k]};}),{min:0,max:100,unite:'%',dec:1,nom:'Remplissage des pools',seuils:[[80,'80 % : ZFS ralentit au-delà']]});
+  multi($('t-rempl'),$('t-leg1'),Object.keys(R).sort().map(function(k){return {nom:k,pts:R[k]};}),{min:0,max:100,unite:'%',dec:1,nom:'Remplissage des pools',seuils:[[SE('pool_attention',80),SE('pool_attention',80)+' % : ZFS ralentit au-delà']]});
   multi($('t-temp'),$('t-leg2'),Object.keys(T).sort().map(function(k){return {nom:k,pts:T[k]};}),{min:20,max:50,unite:'°C',dec:0,nom:'Température maximale des disques'});
   var P=TD.previsions||{},pl=Object.keys(P).sort();
   $('t-prev').innerHTML=pl.length?pl.map(function(k){var p=P[k],t;
     if(p.octets_par_jour<=0)t='stable ou en baisse sur '+nf(p.jours_observes,0)+' jours';
     else{t='+'+oct(p.octets_par_jour)+' par jour (sur '+nf(p.jours_observes,0)+' jours)';
-      if(p.jours_avant_90!=null)t+=p.jours_avant_90<=0?' · déjà au-delà de 90 %':' · 90 % dans '+(p.jours_avant_90<60?'environ '+p.jours_avant_90+' jours':'environ '+Math.round(p.jours_avant_90/30)+' mois');}
+      var jc=p.jours_avant_critique!=null?p.jours_avant_critique:p.jours_avant_90,sc=p.seuil_critique||90;
+      if(jc!=null)t+=jc<=0?' · déjà au-delà de '+sc+' %':' · '+sc+' % dans '+(jc<60?'environ '+jc+' jours':'environ '+Math.round(jc/30)+' mois');}
     return '<li><span><b>'+h(k)+'</b></span><span class="sub">'+h(t)+'</span></li>';}).join('')
     :'<li><span class="sub">Prévision de remplissage disponible après 3 jours de relevés.</span></li>';}
 function chargerT(){fetch('/tendances.json?jours='+TJ,{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(d){TD=d;tendances();}).catch(function(){});}
@@ -1315,13 +1337,148 @@ def page_materiel(app, csrf, nonce):
     hist = app.donnees.rapports()
     der = hist[-1] if hist else None
     etat = app.donnees.etat()
-    init = json.dumps(app.mesures.instantane(), ensure_ascii=False).replace("<", "\\u003c")
+    init = json.dumps(dict(app.mesures.instantane(), seuils=app.seuils.effectifs()), ensure_ascii=False).replace("<", "\\u003c")
     corps = (barre(csrf, etat["en_cours"] or etat["demande"], "materiel", der) + '<div class="wrap">' + HTML_MATERIEL +
              '<footer>Audite-moi {v} · <a href="https://github.com/oliv2776/Audite-moi">GitHub</a></footer></div>'.format(v=VERSION) +
              '<script type="application/json" id="init">{}</script><script nonce="{}">{}</script>'.format(init, nonce, JS_MATERIEL))
     hote = der.get("hote", "") if der else socket.gethostname()
     return page("Audite-moi — matériel — " + hote, corps, nonce, nu=True)
 
+
+# ------------------------------------------------------------------ seuils --
+def fichier_seuils_def(conf):
+    ici = os.path.dirname(os.path.abspath(__file__))
+    for f in (conf.get("seuils_def") or "", os.path.join(ici, "seuils.json"), os.path.join(ici, "..", "seuils.json"), "/usr/local/lib/audite-moi/seuils.json"):
+        if f and os.path.isfile(f):
+            return f
+    return ""
+
+
+class Seuils:
+    """Définitions (seuils.json, en lecture seule) et valeurs choisies dans l'interface (reglages/seuils.json)."""
+
+    def __init__(self, conf):
+        self.conf = conf
+
+    def definitions(self):
+        try:
+            with open(fichier_seuils_def(self.conf), encoding="utf-8") as f:
+                d = json.load(f)
+            return d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _fichier(self):
+        return os.path.join(self.conf["reglages"], "seuils.json")
+
+    def perso(self):
+        try:
+            with open(self._fichier(), encoding="utf-8") as f:
+                d = json.load(f)
+            return d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def tous(self):
+        return [s for g in self.definitions().get("groupes", []) for s in g.get("seuils", [])]
+
+    def effectifs(self):
+        p = self.perso()
+        res = {}
+        for s in self.tous():
+            v = p.get(s["cle"])
+            res[s["cle"]] = v if isinstance(v, int) and not isinstance(v, bool) and s["min"] <= v <= s["max"] else s["defaut"]
+        return res
+
+    def valider(self, form):
+        """Formulaire → (valeurs différentes du défaut, erreurs par clé)."""
+        valeurs, erreurs, eff = {}, {}, {}
+        for s in self.tous():
+            brut = (form.get(s["cle"]) or "").strip().replace(" ", "")
+            if brut == "":
+                v = s["defaut"]
+            else:
+                try:
+                    v = int(brut)
+                except ValueError:
+                    erreurs[s["cle"]] = "Nombre entier attendu."
+                    continue
+                if not s["min"] <= v <= s["max"]:
+                    erreurs[s["cle"]] = "Entre {} et {} {}.".format(s["min"], s["max"], s.get("unite", ""))
+                    continue
+            eff[s["cle"]] = v
+            if v != s["defaut"]:
+                valeurs[s["cle"]] = v
+        libs = {s["cle"]: s["libelle"].replace("« ", "").replace(" »", "") for s in self.tous()}
+        unites = {s["cle"]: s.get("unite", "") for s in self.tous()}
+        for a, b in self.definitions().get("paires", []):
+            if a in eff and b in eff and eff[a] >= eff[b] and b not in erreurs:
+                erreurs[b] = "Doit être supérieur à {} {}, la valeur de « {} ».".format(eff[a], unites.get(a, ""), libs.get(a, a))
+        return valeurs, erreurs
+
+    def enregistrer(self, valeurs):
+        with VERROU_REGLAGES:
+            f = self._fichier()
+            tmp = f + ".{}".format(secrets.token_hex(4))
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(valeurs, fh, ensure_ascii=False, indent=1)
+            os.chmod(tmp, 0o660)
+            os.replace(tmp, f)
+
+
+JS_REGLAGES = """(function(){
+Array.prototype.forEach.call(document.querySelectorAll('button[data-defaut]'),function(b){b.addEventListener('click',function(){
+  var i=document.getElementById(b.dataset.cible);i.value=b.dataset.defaut;i.dispatchEvent(new Event('input'));});});
+Array.prototype.forEach.call(document.querySelectorAll('input.seuil'),function(i){i.addEventListener('input',function(){
+  i.closest('.sl').classList.toggle('modifie',i.value!==''&&i.value!==i.dataset.defaut);});});
+var t=document.getElementById('tout-defaut');if(t)t.addEventListener('click',function(){
+  Array.prototype.forEach.call(document.querySelectorAll('input.seuil'),function(i){i.value=i.dataset.defaut;i.dispatchEvent(new Event('input'));});});
+})();"""
+
+
+def page_reglages(app, csrf, nonce, message="", erreurs=None, saisie=None):
+    d = app.donnees
+    hist = d.rapports()
+    der = hist[-1] if hist else None
+    etat = d.etat()
+    defs = app.seuils.definitions()
+    eff = app.seuils.effectifs()
+    erreurs = erreurs or {}
+    out = [barre(csrf, etat["en_cours"] or etat["demande"], "reglages", der), '<div class="wrap">']
+    if erreurs:
+        out.append('<div class="banner warnb"><b>Rien n’a été enregistré :</b> corrigez les valeurs signalées en rouge.</div>')
+    elif message == "ok":
+        out.append('<div class="banner okb">Seuils enregistrés. Ils s’appliquent au prochain audit et au prochain relevé des disques (10 minutes au plus). '
+                   '<form class="inline" method="post" action="/lancer"><input type="hidden" name="csrf" value="{}"><input type="hidden" name="mode" value="complet">'
+                   '<button class="primary">Lancer un audit maintenant</button></form></div>'.format(esc(csrf)))
+    if not defs:
+        out.append('<div class="card"><p class="empty">Fichier des seuils introuvable (seuils.json) : réinstallez Audite-moi.</p></div></div>')
+        return page("Audite-moi — réglages", "".join(out), nonce, nu=True)
+    nmod = sum(1 for s in app.seuils.tous() if eff[s["cle"]] != s["defaut"])
+    out.append('<div class="meta"><span>Seuils à partir desquels un constat passe en « attention » ou en « critique ». {} '
+               'Les valeurs par défaut suivent les recommandations courantes (voir les références dans les rapports).</span></div>'.format(
+                   "<b>{} seuil(s) personnalisé(s).</b>".format(nmod) if nmod else "Tous les seuils sont à leur valeur par défaut."))
+    out.append('<form method="post" action="/reglages" class="reglages"><input type="hidden" name="csrf" value="{}">'.format(esc(csrf)))
+    for g in defs.get("groupes", []):
+        lignes = []
+        for s in g.get("seuils", []):
+            k = s["cle"]
+            v = (saisie or {}).get(k, eff[k])
+            mod = str(v) != str(s["defaut"])
+            err = erreurs.get(k)
+            lignes.append(
+                '<div class="sl{m}{e}"><label for="s-{k}"><b>{l}</b>{a}</label>'
+                '<div class="sv"><input class="seuil" id="s-{k}" name="{k}" type="number" inputmode="numeric" step="1" min="{mi}" max="{ma}" value="{v}" data-defaut="{d}" required>'
+                '<span class="u">{u}</span><button type="button" class="lienbtn" data-defaut="{d}" data-cible="s-{k}" title="Rétablir la valeur par défaut">défaut : {d}</button></div>'
+                '{er}</div>'.format(m=" modifie" if mod else "", e=" err" if err else "", k=esc(k), l=esc(s["libelle"]),
+                                    a='<span class="aide">{}</span>'.format(esc(s["aide"])) if s.get("aide") else "",
+                                    mi=s["min"], ma=s["max"], v=esc(v), d=s["defaut"], u=esc(s.get("unite", "")),
+                                    er='<div class="errm">{}</div>'.format(esc(err)) if err else ""))
+        out.append('<div class="card"><h2>{}</h2>{}</div>'.format(esc(g["nom"]), "".join(lignes)))
+    out.append('<div class="barre-bas"><button type="button" id="tout-defaut">Tout rétablir par défaut</button><button class="primary">Enregistrer</button></div></form>')
+    out.append('<footer>Audite-moi {} · <a href="https://github.com/oliv2776/Audite-moi">GitHub</a></footer></div>'.format(VERSION))
+    out.append('<script nonce="{}">{}</script>'.format(nonce, JS_REGLAGES))
+    return page("Audite-moi — réglages", "".join(out), nonce, nu=True)
 
 def page_texte(donnees, csrf, nonce, nom, contenu):
     hist = donnees.rapports()
@@ -1433,6 +1590,9 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
             return self.envoyer(200, json.dumps(self.app.donnees.etat()), "application/json; charset=utf-8")
         if chemin.path == "/materiel":
             return self.envoyer(200, page_materiel(self.app, s["csrf"], nonce), csp=self.csp_page(nonce))
+        if chemin.path == "/reglages":
+            q = urllib.parse.parse_qs(chemin.query)
+            return self.envoyer(200, page_reglages(self.app, s["csrf"], nonce, q.get("m", [""])[0]), csp=self.csp_page(nonce))
         if chemin.path == "/tendances.json":
             try:
                 j = int(urllib.parse.parse_qs(chemin.query).get("jours", ["30"])[0])
@@ -1440,7 +1600,8 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
                 j = 30
             return self.envoyer(200, json.dumps(self.app.mesures.tendances(j), ensure_ascii=False), "application/json; charset=utf-8")
         if chemin.path == "/materiel.json":
-            return self.envoyer(200, json.dumps(self.app.mesures.instantane(), ensure_ascii=False), "application/json; charset=utf-8")
+            return self.envoyer(200, json.dumps(dict(self.app.mesures.instantane(), seuils=self.app.seuils.effectifs()), ensure_ascii=False),
+                                "application/json; charset=utf-8")
         if chemin.path.startswith("/rapports/"):
             return self.servir_rapport(urllib.parse.unquote(chemin.path[len("/rapports/"):]))
         if chemin.path.startswith("/texte/"):
@@ -1566,6 +1727,17 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
             return self.rediriger("/connexion", {"Set-Cookie": "{}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0".format(COOKIE)})
         if chemin == "/accepter":
             return self.accepter(form)
+        if chemin == "/reglages":
+            valeurs, erreurs = self.app.seuils.valider(form)
+            if erreurs:
+                return self.envoyer(400, page_reglages(self.app, s["csrf"], nonce, "", erreurs, form), csp=self.csp_page(nonce))
+            try:
+                self.app.seuils.enregistrer(valeurs)
+            except OSError as exc:
+                sys.stderr.write("seuils non enregistrés : {}\n".format(exc))
+                return self.rediriger("/?m=erreur")
+            sys.stderr.write("{} seuils modifiés : {}\n".format(self.client_address[0], ", ".join("{}={}".format(k, v) for k, v in sorted(valeurs.items())) or "valeurs par défaut"))
+            return self.rediriger("/reglages?m=ok")
         if chemin in ("/corriger", "/annuler"):
             return self.corriger(chemin, form)
         if chemin == "/mesurer":
@@ -1593,6 +1765,7 @@ class Application:
         self.conf = conf
         self.donnees = Donnees(conf)
         self.mesures = Mesures(conf)
+        self.seuils = Seuils(conf)
         self.tls = bool(conf.get("tls_cert"))
         self._sessions = {}
         self._echecs = {}

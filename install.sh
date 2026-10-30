@@ -78,6 +78,7 @@ install -d -m 755 "$LIB"
 install -m 755 "$SRC/systemd/audite-moi-run" "$LIB/audite-moi-run"
 install -m 755 "$SRC/systemd/audite-moi-mesures" "$LIB/audite-moi-mesures"
 install -m 755 "$SRC/systemd/audite-moi-corriger" "$LIB/audite-moi-corriger"
+install -m 644 "$SRC/seuils.json" "$SRC/references.json" "$LIB/"
 install -m 755 "$SRC/web/audite-moi-web.py" "$LIB/audite-moi-web.py"
 echo "/usr/local/sbin/audite-moi, $LIB/"
 

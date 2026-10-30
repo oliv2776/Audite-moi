@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "groupes": [
+    {
+      "nom": "Disques",
+      "seuils": [
+        {"cle": "disque_temp_hdd_attention", "defaut": 50, "min": 30, "max": 70, "unite": "°C", "libelle": "Disque dur : température « attention »", "aide": "Les fabricants donnent en général 60 °C au maximum en fonctionnement ; au-delà de 45-50 °C, l'usure s'accélère."},
+        {"cle": "disque_temp_hdd_critique", "defaut": 60, "min": 35, "max": 80, "unite": "°C", "libelle": "Disque dur : température « critique »"},
+        {"cle": "disque_temp_ssd_attention", "defaut": 60, "min": 35, "max": 85, "unite": "°C", "libelle": "SSD SATA : température « attention »"},
+        {"cle": "disque_temp_ssd_critique", "defaut": 70, "min": 40, "max": 90, "unite": "°C", "libelle": "SSD SATA : température « critique »"},
+        {"cle": "disque_temp_nvme_attention", "defaut": 70, "min": 40, "max": 90, "unite": "°C", "libelle": "NVMe : température « attention »", "aide": "Les NVMe réduisent leur débit vers 70-80 °C pour se protéger."},
+        {"cle": "disque_temp_nvme_critique", "defaut": 80, "min": 45, "max": 95, "unite": "°C", "libelle": "NVMe : température « critique »"},
+        {"cle": "disque_usure_attention", "defaut": 80, "min": 10, "max": 99, "unite": "%", "libelle": "SSD / NVMe : endurance consommée « attention »", "aide": "Pourcentage de l'endurance garantie par le fabricant déjà écrit sur le disque."},
+        {"cle": "disque_usure_critique", "defaut": 90, "min": 20, "max": 100, "unite": "%", "libelle": "SSD / NVMe : endurance consommée « critique »"},
+        {"cle": "disque_realloues_critique", "defaut": 100, "min": 1, "max": 10000, "unite": "secteurs", "libelle": "Secteurs réalloués : nombre « critique »", "aide": "Dès le premier secteur réalloué, le disque passe « à surveiller »."},
+        {"cle": "disque_en_attente_critique", "defaut": 10, "min": 1, "max": 1000, "unite": "secteurs", "libelle": "Secteurs en attente ou irrécupérables : nombre « critique »", "aide": "Dès le premier, le disque passe « à surveiller » : des données de ce disque sont devenues illisibles."},
+        {"cle": "disque_crc_fenetre_jours", "defaut": 7, "min": 1, "max": 90, "unite": "jours", "libelle": "Erreurs CRC : signalées pendant … après une hausse", "aide": "Le compteur CRC ne redescend jamais : seule une hausse récente indique un câble ou un connecteur défaillant."},
+        {"cle": "disque_autotest_max_jours", "defaut": 35, "min": 7, "max": 365, "unite": "jours", "libelle": "Dernier auto-test SMART : ancienneté maximale"}
+      ]
+    },
+    {
+      "nom": "Pools ZFS et espace disque",
+      "seuils": [
+        {"cle": "pool_attention", "defaut": 80, "min": 50, "max": 98, "unite": "%", "libelle": "Pool rempli : « attention » à partir de", "aide": "ZFS ralentit nettement quand un pool dépasse 80 à 90 % (fragmentation de l'espace libre)."},
+        {"cle": "pool_critique", "defaut": 90, "min": 60, "max": 99, "unite": "%", "libelle": "Pool rempli : « critique » à partir de"},
+        {"cle": "pool_prevision_attention_jours", "defaut": 60, "min": 7, "max": 365, "unite": "jours", "libelle": "Prévision : « attention » si le pool atteint le seuil critique dans moins de"},
+        {"cle": "pool_prevision_critique_jours", "defaut": 14, "min": 1, "max": 180, "unite": "jours", "libelle": "Prévision : « critique » si le pool atteint le seuil critique dans moins de"},
+        {"cle": "scrub_max_jours", "defaut": 40, "min": 7, "max": 365, "unite": "jours", "libelle": "Dernier scrub : ancienneté maximale", "aide": "La recommandation courante est un scrub par mois (par semaine pour des disques grand public)."},
+        {"cle": "snapshot_max_heures", "defaut": 48, "min": 1, "max": 2160, "unite": "heures", "libelle": "Dernier snapshot : ancienneté maximale", "aide": "Au-delà, la création automatique de snapshots (sanoid…) semble arrêtée."},
+        {"cle": "espace_attention", "defaut": 85, "min": 50, "max": 98, "unite": "%", "libelle": "Autres volumes (/, /boot…) : « attention » à partir de"},
+        {"cle": "espace_critique", "defaut": 95, "min": 60, "max": 99, "unite": "%", "libelle": "Autres volumes : « critique » à partir de"}
+      ]
+    },
+    {
+      "nom": "Processeur, mémoire, GPU",
+      "seuils": [
+        {"cle": "cpu_temp_attention", "defaut": 80, "min": 50, "max": 100, "unite": "°C", "libelle": "Processeur : température « attention »", "aide": "Normal pendant un transcodage intensif, anormal au repos."},
+        {"cle": "cpu_temp_critique", "defaut": 90, "min": 55, "max": 105, "unite": "°C", "libelle": "Processeur : température « critique »"},
+        {"cle": "memoire_attention", "defaut": 90, "min": 50, "max": 99, "unite": "%", "libelle": "Pression mémoire « attention » (hors cache ZFS libérable)"},
+        {"cle": "memoire_critique", "defaut": 95, "min": 60, "max": 100, "unite": "%", "libelle": "Pression mémoire « critique »"},
+        {"cle": "swap_attention", "defaut": 80, "min": 10, "max": 100, "unite": "%", "libelle": "Swap utilisé « attention »"},
+        {"cle": "iowait_attention", "defaut": 20, "min": 5, "max": 90, "unite": "%", "libelle": "Attente d'entrées/sorties « attention »"},
+        {"cle": "gpu_temp_attention", "defaut": 85, "min": 50, "max": 105, "unite": "°C", "libelle": "GPU : température « attention »"},
+        {"cle": "gpu_temp_critique", "defaut": 95, "min": 55, "max": 110, "unite": "°C", "libelle": "GPU : température « critique »"}
+      ]
+    },
+    {
+      "nom": "Mises à jour et logiciels",
+      "seuils": [
+        {"cle": "image_exposee_max_jours", "defaut": 180, "min": 14, "max": 730, "unite": "jours", "libelle": "Image Docker d'un service exposé sur Internet : âge maximal", "aide": "Une image ancienne garde ses failles connues ; les services publiés sont les plus visés."},
+        {"cle": "image_max_jours", "defaut": 365, "min": 30, "max": 1825, "unite": "jours", "libelle": "Autres images Docker : âge signalé à partir de"},
+        {"cle": "cloudflared_max_mois", "defaut": 12, "min": 1, "max": 24, "unite": "mois", "libelle": "cloudflared : âge maximal de la version", "aide": "Cloudflare ne prend en charge que les versions publiées depuis moins d'un an."},
+        {"cle": "ubuntu_fin_support_jours", "defaut": 180, "min": 30, "max": 730, "unite": "jours", "libelle": "Fin du support d'Ubuntu : prévenir … avant"}
+      ]
+    },
+    {
+      "nom": "Sauvegardes et réseau",
+      "seuils": [
+        {"cle": "sauvegarde_max_jours", "defaut": 8, "min": 1, "max": 90, "unite": "jours", "libelle": "Tâche de sauvegarde planifiée : dernière réussite au plus tard il y a"},
+        {"cle": "sauvegarde_defaut_heures", "defaut": 26, "min": 1, "max": 2160, "unite": "heures", "libelle": "Preuves de sauvegarde (SAUVEGARDES) : délai par défaut"},
+        {"cle": "ports_observation_jours", "defaut": 7, "min": 1, "max": 90, "unite": "jours", "libelle": "Ports inutilisés : durée d'observation avant de conclure"},
+        {"cle": "port_inutilise_jours", "defaut": 30, "min": 7, "max": 365, "unite": "jours", "libelle": "Port considéré comme inutilisé sans connexion depuis"}
+      ]
+    },
+    {
+      "nom": "Alertes Telegram",
+      "seuils": [
+        {"cle": "alerte_pool_plein_jours", "defaut": 30, "min": 1, "max": 365, "unite": "jours", "libelle": "Alerter si un pool sera plein dans moins de"}
+      ]
+    }
+  ],
+  "paires": [
+    ["disque_temp_hdd_attention", "disque_temp_hdd_critique"], ["disque_temp_ssd_attention", "disque_temp_ssd_critique"],
+    ["disque_temp_nvme_attention", "disque_temp_nvme_critique"], ["disque_usure_attention", "disque_usure_critique"],
+    ["pool_attention", "pool_critique"], ["pool_prevision_critique_jours", "pool_prevision_attention_jours"],
+    ["espace_attention", "espace_critique"], ["cpu_temp_attention", "cpu_temp_critique"], ["memoire_attention", "memoire_critique"],
+    ["gpu_temp_attention", "gpu_temp_critique"], ["image_exposee_max_jours", "image_max_jours"]
+  ]
+}

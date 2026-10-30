@@ -1,0 +1,991 @@
+{
+  "version": 1,
+  "note": "Références vérifiées le 30/10/2026. CIS Ubuntu : numérotation de la v1.0.0 (d'après le projet ComplianceAsCode) ; CIS Docker : v1.7.0. Les intitulés CIS et ANSSI (R37 et suivantes) sont en anglais, tels que publiés.",
+  "sources": {
+    "cis-u-1.2.2.1": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "1.2.2.1",
+      "titre": "Ensure updates, patches, and additional security software are installed",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-1.3.1": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "1.3.1.1 à 1.3.1.4",
+      "titre": "AppArmor installé, activé et profils appliqués",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-1.5": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "1.5.1 à 1.5.3",
+      "titre": "ASLR, ptrace_scope, core dumps",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-2.1.2": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "2.1.2",
+      "titre": "Ensure avahi daemon services are not in use",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-2.1.9": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "2.1.9",
+      "titre": "Ensure network file system services are not in use",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-2.1.22": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "2.1.22",
+      "titre": "Ensure only approved services are listening on a network interface",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-3.3": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "3.3.1 à 3.3.11",
+      "titre": "Paramètres réseau du noyau (redirections ICMP, routage par la source, SYN cookies…)",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-4.2.3": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "4.2.3",
+      "titre": "Ensure ufw service is enabled",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-4.2.6": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "4.2.6",
+      "titre": "Ensure ufw firewall rules exist for all open ports",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-4.2.7": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "4.2.7",
+      "titre": "Ensure ufw default deny firewall policy",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-5.1.4": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "5.1.4",
+      "titre": "Ensure sshd access is configured",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-5.1.8": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "5.1.8",
+      "titre": "Ensure sshd DisableForwarding is enabled",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-5.1.16": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "5.1.16",
+      "titre": "Ensure sshd MaxAuthTries is configured",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-5.1.19": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "5.1.19",
+      "titre": "Ensure sshd PermitEmptyPasswords is disabled",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-5.1.20": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "5.1.20",
+      "titre": "Ensure sshd PermitRootLogin is disabled",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-5.2.4": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "5.2.4",
+      "titre": "Ensure users must provide password for privilege escalation",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-5.4.2.1": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "5.4.2.1",
+      "titre": "Ensure root is the only UID 0 account",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-6.2.1": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "6.2.1.1 / 6.2.1.2",
+      "titre": "Ensure auditd packages are installed / service is enabled and active",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-7.1.5": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "7.1.1 à 7.1.10",
+      "titre": "Permissions de /etc/passwd, /etc/shadow, /etc/gshadow…",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-7.1.11": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "7.1.11",
+      "titre": "Ensure world writable files and directories are secured",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-7.1.12": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "7.1.12",
+      "titre": "Ensure no files or directories without an owner and a group exist",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-7.1.13": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "7.1.13",
+      "titre": "Ensure SUID and SGID files are reviewed",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-u-7.2.2": {
+      "source": "CIS Ubuntu 24.04 v1.0.0",
+      "id": "7.2.2",
+      "titre": "Ensure /etc/shadow password fields are not empty",
+      "url": "https://www.cisecurity.org/benchmark/ubuntu_linux"
+    },
+    "cis-d-2.7": {
+      "source": "CIS Docker 1.7.0",
+      "id": "2.7",
+      "titre": "Ensure TLS authentication for Docker daemon is configured",
+      "url": "https://www.cisecurity.org/benchmark/docker"
+    },
+    "cis-d-4.1": {
+      "source": "CIS Docker 1.7.0",
+      "id": "4.1",
+      "titre": "Ensure that a user for the container has been created",
+      "url": "https://www.cisecurity.org/benchmark/docker"
+    },
+    "cis-d-5.4": {
+      "source": "CIS Docker 1.7.0",
+      "id": "5.4",
+      "titre": "Ensure that Linux kernel capabilities are restricted within containers",
+      "url": "https://www.cisecurity.org/benchmark/docker"
+    },
+    "cis-d-5.5": {
+      "source": "CIS Docker 1.7.0",
+      "id": "5.5",
+      "titre": "Ensure that privileged containers are not used",
+      "url": "https://www.cisecurity.org/benchmark/docker"
+    },
+    "cis-d-5.6": {
+      "source": "CIS Docker 1.7.0",
+      "id": "5.6",
+      "titre": "Ensure sensitive host system directories are not mounted on containers",
+      "url": "https://www.cisecurity.org/benchmark/docker"
+    },
+    "cis-d-5.10": {
+      "source": "CIS Docker 1.7.0",
+      "id": "5.10",
+      "titre": "Ensure that the host's network namespace is not shared",
+      "url": "https://www.cisecurity.org/benchmark/docker"
+    },
+    "cis-d-5.11": {
+      "source": "CIS Docker 1.7.0",
+      "id": "5.11",
+      "titre": "Ensure that the memory usage for containers is limited",
+      "url": "https://www.cisecurity.org/benchmark/docker"
+    },
+    "cis-d-5.14": {
+      "source": "CIS Docker 1.7.0",
+      "id": "5.14",
+      "titre": "Ensure that incoming container traffic is bound to a specific host interface",
+      "url": "https://www.cisecurity.org/benchmark/docker"
+    },
+    "cis-d-5.26": {
+      "source": "CIS Docker 1.7.0",
+      "id": "5.26",
+      "titre": "Ensure that the container is restricted from acquiring additional privileges",
+      "url": "https://www.cisecurity.org/benchmark/docker"
+    },
+    "cis-d-5.32": {
+      "source": "CIS Docker 1.7.0",
+      "id": "5.32",
+      "titre": "Ensure that the Docker socket is not mounted inside any container",
+      "url": "https://www.cisecurity.org/benchmark/docker"
+    },
+    "anssi-r8": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R8",
+      "titre": "Paramétrer les options de configuration de la mémoire",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r9": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R9",
+      "titre": "Paramétrer les options de configuration du noyau",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r12": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R12",
+      "titre": "Paramétrer les options de configuration du réseau IPv4",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r30": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R30",
+      "titre": "Désactiver les comptes utilisateur inutilisés",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r31": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R31",
+      "titre": "Utiliser des mots de passe robustes",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r33": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R33",
+      "titre": "Assurer l'imputabilité des actions d'administration",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r39": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R39",
+      "titre": "Sudo configuration guidelines",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r45": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R45",
+      "titre": "Enable AppArmor security profiles",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r50": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R50",
+      "titre": "Rights to access sensitive files and directories",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r53": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R53",
+      "titre": "Files or directories without a known user or group",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r54": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R54",
+      "titre": "Sticky bit and write access rights",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r56": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R56 / R57",
+      "titre": "Executables with setuid and setgid bits",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r61": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R61",
+      "titre": "Regular updates",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r62": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R62",
+      "titre": "Minimization of installed services",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r73": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R73",
+      "titre": "Logging activity by auditd",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r79": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R79",
+      "titre": "Hardening and monitoring of exposed services",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-r80": {
+      "source": "ANSSI-BP-028 v2.0",
+      "id": "R80",
+      "titre": "Minimization of network services",
+      "url": "https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf"
+    },
+    "anssi-ssh-r2": {
+      "source": "ANSSI (Open)SSH",
+      "id": "R2",
+      "titre": "Utiliser SSH à la place de TELNET, RSH et RLOGIN",
+      "url": "https://cyber.gouv.fr/sites/default/files/2014/01/NT_OpenSSH.pdf"
+    },
+    "anssi-ssh-r8": {
+      "source": "ANSSI (Open)SSH",
+      "id": "R8",
+      "titre": "Taille minimale de 2048 bits pour les clés RSA",
+      "url": "https://cyber.gouv.fr/sites/default/files/2014/01/NT_OpenSSH.pdf"
+    },
+    "anssi-ssh-r17": {
+      "source": "ANSSI (Open)SSH",
+      "id": "R17",
+      "titre": "Préférer l'authentification par clé ; mot de passe à proscrire pour les comptes à privilèges",
+      "url": "https://cyber.gouv.fr/sites/default/files/2014/01/NT_OpenSSH.pdf"
+    },
+    "anssi-ssh-r21": {
+      "source": "ANSSI (Open)SSH",
+      "id": "R21",
+      "titre": "Le compte root ne doit pas être accessible directement (PermitRootLogin no)",
+      "url": "https://cyber.gouv.fr/sites/default/files/2014/01/NT_OpenSSH.pdf"
+    },
+    "anssi-ssh-r22": {
+      "source": "ANSSI (Open)SSH",
+      "id": "R22",
+      "titre": "Restreindre l'accès aux utilisateurs explicitement autorisés (AllowUsers / AllowGroups)",
+      "url": "https://cyber.gouv.fr/sites/default/files/2014/01/NT_OpenSSH.pdf"
+    },
+    "anssi-ssh-r26": {
+      "source": "ANSSI (Open)SSH",
+      "id": "R25 / R26",
+      "titre": "Adresse et port d'écoute du serveur SSH",
+      "url": "https://cyber.gouv.fr/sites/default/files/2014/01/NT_OpenSSH.pdf"
+    },
+    "anssi-ssh-r28": {
+      "source": "ANSSI (Open)SSH",
+      "id": "R28",
+      "titre": "Désactiver la redirection X11 (X11Forwarding no)",
+      "url": "https://cyber.gouv.fr/sites/default/files/2014/01/NT_OpenSSH.pdf"
+    },
+    "owasp-docker-0": {
+      "source": "OWASP Docker Security Cheat Sheet",
+      "id": "Rule #0",
+      "titre": "Keep Host and Docker up to date",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html"
+    },
+    "owasp-docker-1": {
+      "source": "OWASP Docker Security Cheat Sheet",
+      "id": "Rule #1",
+      "titre": "Do not expose the Docker daemon socket (even to the containers)",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html#rule-1-do-not-expose-the-docker-daemon-socket-even-to-the-containers"
+    },
+    "owasp-docker-2": {
+      "source": "OWASP Docker Security Cheat Sheet",
+      "id": "Rule #2",
+      "titre": "Set a user",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html#rule-2-set-a-user"
+    },
+    "owasp-docker-3": {
+      "source": "OWASP Docker Security Cheat Sheet",
+      "id": "Rule #3",
+      "titre": "Limit capabilities",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html"
+    },
+    "owasp-docker-4": {
+      "source": "OWASP Docker Security Cheat Sheet",
+      "id": "Rule #4",
+      "titre": "no-new-privileges",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html"
+    },
+    "owasp-docker-7": {
+      "source": "OWASP Docker Security Cheat Sheet",
+      "id": "Rule #7",
+      "titre": "Limit resources (memory, CPU, file descriptors, processes, restarts)",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html"
+    },
+    "owasp-docker-9": {
+      "source": "OWASP Docker Security Cheat Sheet",
+      "id": "Rule #9",
+      "titre": "Use static analysis tools",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html"
+    },
+    "owasp-wstg-conf-04": {
+      "source": "OWASP WSTG",
+      "id": "WSTG-CONF-04",
+      "titre": "Review Old Backup and Unreferenced Files for Sensitive Information",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information"
+    },
+    "owasp-hsts": {
+      "source": "OWASP",
+      "id": "HSTS Cheat Sheet",
+      "titre": "HTTP Strict Transport Security Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Strict_Transport_Security_Cheat_Sheet.html"
+    },
+    "backblaze-smart": {
+      "source": "Backblaze",
+      "id": "SMART 5, 187, 188, 197, 198",
+      "titre": "Hard Drive SMART Stats : les attributs SMART qui annoncent une panne",
+      "url": "https://www.backblaze.com/blog/hard-drive-smart-stats/"
+    },
+    "oracle-zfs-remplissage": {
+      "source": "Oracle ZFS",
+      "id": "Storage Pool Practices for Performance",
+      "titre": "Garder le pool sous 90 % ; surveiller au-delà de 80 %",
+      "url": "https://docs.oracle.com/en/operating-systems/solaris/oracle-solaris/11.4/manage-zfs/storage-pool-practices-performance.html"
+    },
+    "truenas-80": {
+      "source": "TrueNAS",
+      "id": "The ZFS 80% Rule",
+      "titre": "Pourquoi la règle des 80 % existe",
+      "url": "https://www.truenas.com/blog/zfs-80-percent-rule/"
+    },
+    "uscert-321": {
+      "source": "US-CERT / CISA",
+      "id": "Data Backup Options",
+      "titre": "Règle 3-2-1 : 3 copies, 2 supports, 1 hors site",
+      "url": "https://www.cisa.gov/uscert/sites/default/files/publications/data_backup_options.pdf"
+    },
+    "ubuntu-maj-auto": {
+      "source": "Ubuntu Server",
+      "id": "Automatic updates",
+      "titre": "Mises à jour de sécurité automatiques (unattended-upgrades)",
+      "url": "https://documentation.ubuntu.com/server/how-to/software/automatic-updates/"
+    },
+    "ms-smb1": {
+      "source": "Microsoft",
+      "id": "Stop using SMB1",
+      "titre": "Ne plus utiliser SMB1",
+      "url": "https://techcommunity.microsoft.com/blog/filecab/stop-using-smb1/425858"
+    },
+    "nc-durcissement": {
+      "source": "Nextcloud",
+      "id": "Hardening and security guidance",
+      "titre": "Guide de durcissement de Nextcloud",
+      "url": "https://docs.nextcloud.com/server/stable/admin_manual/installation/harden_server.html"
+    },
+    "nc-2fa": {
+      "source": "Nextcloud",
+      "id": "Two-factor authentication",
+      "titre": "Activer et imposer la double authentification",
+      "url": "https://docs.nextcloud.com/server/stable/admin_manual/configuration_user/two_factor-auth.html"
+    },
+    "nc-bruteforce": {
+      "source": "Nextcloud",
+      "id": "Brute force protection",
+      "titre": "Protection anti-brute-force (dépend de trusted_proxies)",
+      "url": "https://docs.nextcloud.com/server/stable/admin_manual/configuration_server/bruteforce_configuration.html"
+    },
+    "nc-proxy": {
+      "source": "Nextcloud",
+      "id": "Reverse proxy",
+      "titre": "Déclarer les proxys de confiance (trusted_proxies)",
+      "url": "https://docs.nextcloud.com/server/stable/admin_manual/configuration_server/reverse_proxy_configuration.html"
+    },
+    "stash-auth": {
+      "source": "Stash",
+      "id": "Authentication required…",
+      "titre": "Stash n'est pas conçu pour être exposé sans authentification",
+      "url": "https://dogmadragon.github.io/Stash-Docs/docs/Network/Authentication-Required-When-Accessing-Stash-From-the-Internet"
+    },
+    "cf-access": {
+      "source": "Cloudflare",
+      "id": "Access — self-hosted application",
+      "titre": "Protéger une application publiée par Cloudflare Access",
+      "url": "https://developers.cloudflare.com/cloudflare-one/applications/configure-apps/self-hosted-apps"
+    },
+    "cf-proxy": {
+      "source": "Cloudflare",
+      "id": "Proxy status",
+      "titre": "Enregistrements proxifiés : l'adresse d'origine reste cachée",
+      "url": "https://developers.cloudflare.com/dns/proxy-status/"
+    },
+    "cf-ip-exposee": {
+      "source": "Cloudflare",
+      "id": "Exposed IP addresses",
+      "titre": "Enregistrements DNS qui exposent l'adresse du serveur",
+      "url": "https://developers.cloudflare.com/dns/manage-dns-records/troubleshooting/exposed-ip-address/"
+    },
+    "cf-versions": {
+      "source": "Cloudflare",
+      "id": "cloudflared — deprecated releases",
+      "titre": "Seules les versions de moins d'un an sont prises en charge",
+      "url": "https://developers.cloudflare.com/tunnel/downloads/"
+    }
+  },
+  "regles": [
+    {
+      "section": "ssh",
+      "motif": "mot de passe",
+      "refs": [
+        "anssi-ssh-r17",
+        "anssi-ssh-r26"
+      ]
+    },
+    {
+      "section": "ssh",
+      "motif": "root",
+      "refs": [
+        "cis-u-5.1.20",
+        "anssi-ssh-r21"
+      ]
+    },
+    {
+      "section": "ssh",
+      "motif": "AllowUsers|AllowGroups",
+      "refs": [
+        "cis-u-5.1.4",
+        "anssi-ssh-r22"
+      ]
+    },
+    {
+      "section": "ssh",
+      "motif": "MaxAuthTries",
+      "refs": [
+        "cis-u-5.1.16"
+      ]
+    },
+    {
+      "section": "ssh",
+      "motif": "X11|redirection",
+      "refs": [
+        "cis-u-5.1.8",
+        "anssi-ssh-r28"
+      ]
+    },
+    {
+      "section": "ssh",
+      "motif": "vide|PermitEmptyPasswords",
+      "refs": [
+        "cis-u-5.1.19"
+      ]
+    },
+    {
+      "section": "ssh",
+      "motif": "clé(s)? (RSA|DSA)|RSA de [0-9]+ bits|DSA",
+      "refs": [
+        "anssi-ssh-r8"
+      ]
+    },
+    {
+      "section": "ssh",
+      "motif": "force brute|fail2ban|crowdsec|tentatives",
+      "refs": [
+        "anssi-r79"
+      ]
+    },
+    {
+      "section": "comptes",
+      "motif": "UID 0",
+      "refs": [
+        "cis-u-5.4.2.1"
+      ]
+    },
+    {
+      "section": "comptes",
+      "motif": "^Aucun compte sans mot de passe|compte\\(s\\) sans mot de passe|mot de passe vide",
+      "refs": [
+        "cis-u-7.2.2",
+        "anssi-r31"
+      ]
+    },
+    {
+      "section": "comptes",
+      "motif": "NOPASSWD|sudo sans",
+      "refs": [
+        "cis-u-5.2.4",
+        "anssi-r39"
+      ]
+    },
+    {
+      "section": "comptes",
+      "motif": "groupe docker",
+      "refs": [
+        "owasp-docker-1"
+      ]
+    },
+    {
+      "section": "comptes",
+      "motif": "Administrateurs|inutilisé|inactif",
+      "refs": [
+        "anssi-r30",
+        "anssi-r33"
+      ]
+    },
+    {
+      "section": "parefeu",
+      "motif": "UFW (est )?(inactif|désactivé)|aucun pare-feu|pare-feu inactif",
+      "refs": [
+        "cis-u-4.2.3"
+      ]
+    },
+    {
+      "section": "parefeu",
+      "motif": "autorisées par défaut",
+      "refs": [
+        "cis-u-4.2.7"
+      ]
+    },
+    {
+      "section": "parefeu",
+      "motif": "règle\\(s\\) UFW|Chaque règle UFW",
+      "refs": [
+        "cis-u-4.2.6",
+        "anssi-r80"
+      ]
+    },
+    {
+      "section": "parefeu",
+      "motif": "Docker contourne UFW|Ports Docker publiés",
+      "refs": [
+        "cis-d-5.14"
+      ]
+    },
+    {
+      "section": "parefeu",
+      "motif": "API Docker",
+      "refs": [
+        "cis-d-2.7",
+        "owasp-docker-1"
+      ]
+    },
+    {
+      "section": "parefeu",
+      "motif": "Services sensibles|service sensible",
+      "refs": [
+        "anssi-r80",
+        "cis-u-2.1.22"
+      ]
+    },
+    {
+      "section": "parefeu",
+      "motif": "SMB1",
+      "refs": [
+        "ms-smb1"
+      ]
+    },
+    {
+      "section": "parefeu",
+      "motif": "NFS|sharenfs",
+      "refs": [
+        "cis-u-2.1.9"
+      ]
+    },
+    {
+      "section": "parefeu",
+      "motif": "avahi|Services réseau actifs",
+      "refs": [
+        "cis-u-2.1.2",
+        "anssi-r62"
+      ]
+    },
+    {
+      "section": "parefeu",
+      "motif": "sans utilisation observée|Tous les ports en écoute",
+      "refs": [
+        "cis-u-2.1.22",
+        "anssi-r80"
+      ]
+    },
+    {
+      "section": "parefeu",
+      "motif": "Connexions directes depuis Internet|Interfaces d'administration",
+      "refs": [
+        "anssi-r79"
+      ]
+    },
+    {
+      "section": "dockersec",
+      "motif": "privilégié",
+      "refs": [
+        "cis-d-5.5",
+        "owasp-docker-3"
+      ]
+    },
+    {
+      "section": "dockersec",
+      "motif": "socket Docker",
+      "refs": [
+        "cis-d-5.32",
+        "owasp-docker-1"
+      ]
+    },
+    {
+      "section": "dockersec",
+      "motif": "réseau (host|de l'hôte)",
+      "refs": [
+        "cis-d-5.10"
+      ]
+    },
+    {
+      "section": "dockersec",
+      "motif": "capacité",
+      "refs": [
+        "cis-d-5.4",
+        "owasp-docker-3"
+      ]
+    },
+    {
+      "section": "dockersec",
+      "motif": "montage sensible",
+      "refs": [
+        "cis-d-5.6"
+      ]
+    },
+    {
+      "section": "dockersec",
+      "motif": "fonctionne en root",
+      "refs": [
+        "cis-d-4.1",
+        "owasp-docker-2"
+      ]
+    },
+    {
+      "section": "dockersec",
+      "motif": "no-new-privileges",
+      "refs": [
+        "cis-d-5.26",
+        "owasp-docker-4"
+      ]
+    },
+    {
+      "section": "dockersec",
+      "motif": "limite mémoire|sans limite",
+      "refs": [
+        "cis-d-5.11",
+        "owasp-docker-7"
+      ]
+    },
+    {
+      "section": "dockersec",
+      "motif": "Image .* construite il y a|images anciennes",
+      "refs": [
+        "owasp-docker-0",
+        "anssi-r61"
+      ]
+    },
+    {
+      "section": "dockersec",
+      "motif": "secrets",
+      "refs": [
+        "anssi-r50"
+      ]
+    },
+    {
+      "section": "cloudflare",
+      "motif": "obsolète|cloudflared « .* » : version",
+      "refs": [
+        "cf-versions"
+      ]
+    },
+    {
+      "section": "cloudflare",
+      "motif": "Cloudflare Access",
+      "refs": [
+        "cf-access"
+      ]
+    },
+    {
+      "section": "cloudflare",
+      "motif": "aussi accessible directement",
+      "refs": [
+        "cis-d-5.14"
+      ]
+    },
+    {
+      "section": "outils",
+      "motif": "vulnérabilité",
+      "refs": [
+        "owasp-docker-9"
+      ]
+    },
+    {
+      "section": "maj",
+      "motif": "mise\\(s\\) à jour de sécurité|mises à jour automatiques|unattended",
+      "refs": [
+        "cis-u-1.2.2.1",
+        "anssi-r61",
+        "ubuntu-maj-auto"
+      ]
+    },
+    {
+      "section": "maj",
+      "motif": "Ubuntu .*(support|maintenue)",
+      "refs": [
+        "anssi-r61"
+      ]
+    },
+    {
+      "section": "noyau",
+      "motif": "sysctl|Paramètres de sécurité du noyau",
+      "refs": [
+        "anssi-r9",
+        "anssi-r12",
+        "cis-u-3.3",
+        "cis-u-1.5"
+      ]
+    },
+    {
+      "section": "noyau",
+      "motif": "AppArmor",
+      "refs": [
+        "cis-u-1.3.1",
+        "anssi-r45"
+      ]
+    },
+    {
+      "section": "noyau",
+      "motif": "Vulnérabilités du processeur",
+      "refs": [
+        "anssi-r8"
+      ]
+    },
+    {
+      "section": "fichiers",
+      "motif": "modifiables par tous|ouverts à tous",
+      "refs": [
+        "cis-u-7.1.11",
+        "anssi-r54"
+      ]
+    },
+    {
+      "section": "fichiers",
+      "motif": "SUID|setuid",
+      "refs": [
+        "cis-u-7.1.13",
+        "anssi-r56"
+      ]
+    },
+    {
+      "section": "fichiers",
+      "motif": "shadow|passwd|sensible",
+      "refs": [
+        "cis-u-7.1.5",
+        "anssi-r50"
+      ]
+    },
+    {
+      "section": "fichiers",
+      "motif": "sans propriétaire",
+      "refs": [
+        "cis-u-7.1.12",
+        "anssi-r53"
+      ]
+    },
+    {
+      "section": "journaux",
+      "motif": "auditd",
+      "refs": [
+        "cis-u-6.2.1",
+        "anssi-r73"
+      ]
+    },
+    {
+      "section": "disques",
+      "motif": "^Disque ",
+      "refs": [
+        "backblaze-smart"
+      ]
+    },
+    {
+      "section": "zfs",
+      "motif": "rempli|presque plein",
+      "refs": [
+        "oracle-zfs-remplissage",
+        "truenas-80"
+      ]
+    },
+    {
+      "section": "sauvegardes",
+      "motif": "sauvegarde|copie hors|snapshot",
+      "refs": [
+        "uscert-321"
+      ]
+    },
+    {
+      "section": "exposition",
+      "motif": "pointe directement sur votre box|IP personnelle est publiée|résout hors de Cloudflare",
+      "refs": [
+        "cf-proxy",
+        "cf-ip-exposee"
+      ]
+    },
+    {
+      "section": "exposition",
+      "motif": "fichier sensible|dossier de données",
+      "refs": [
+        "owasp-wstg-conf-04"
+      ]
+    },
+    {
+      "section": "exposition",
+      "motif": "dossier de données",
+      "refs": [
+        "nc-durcissement"
+      ]
+    },
+    {
+      "section": "exposition",
+      "motif": "HSTS|HTTP non chiffré",
+      "refs": [
+        "owasp-hsts"
+      ]
+    },
+    {
+      "section": "exposition",
+      "motif": "Stash",
+      "refs": [
+        "stash-auth",
+        "cf-access"
+      ]
+    },
+    {
+      "section": "exposition",
+      "motif": "sans Cloudflare Access|page accessible",
+      "refs": [
+        "cf-access"
+      ]
+    },
+    {
+      "section": "exposition",
+      "motif": "Nextcloud .*(correctifs|plus maintenu)",
+      "refs": [
+        "anssi-r61"
+      ]
+    },
+    {
+      "section": "applis",
+      "motif": "double authentification",
+      "refs": [
+        "nc-2fa"
+      ]
+    },
+    {
+      "section": "applis",
+      "motif": "vraies adresses IP|brute-force",
+      "refs": [
+        "nc-bruteforce",
+        "nc-proxy"
+      ]
+    },
+    {
+      "section": "applis",
+      "motif": "mode debug|erreurs de configuration",
+      "refs": [
+        "nc-durcissement"
+      ]
+    },
+    {
+      "section": "applis",
+      "motif": "Stash",
+      "refs": [
+        "stash-auth"
+      ]
+    },
+    {
+      "section": "opnsense",
+      "motif": "SSH d'OPNsense : connexion root",
+      "refs": [
+        "anssi-ssh-r21"
+      ]
+    },
+    {
+      "section": "opnsense",
+      "motif": "SSH d'OPNsense : authentification par mot de passe",
+      "refs": [
+        "anssi-ssh-r17"
+      ]
+    },
+    {
+      "section": "lan",
+      "motif": "API Docker",
+      "refs": [
+        "cis-d-2.7"
+      ]
+    },
+    {
+      "section": "lan",
+      "motif": "Services risqués",
+      "refs": [
+        "anssi-ssh-r2",
+        "anssi-r80"
+      ]
+    }
+  ]
+}

@@ -53,8 +53,8 @@ maintenant=$(date +%s)
 jq -n --argjson n "$maintenant" '{debut: ($n - 864000), releves: 1400, ports: {"tcp/22": {vu: ($n - 3600)}, "tcp/445": {vu: $n},
   "tcp/8096": {vu: $n, publiques: 2, exemples_publics: ["81.56.12.34", "90.1.2.3"]}, "tcp/9443": {vu: ($n - 3456000)}}}' > "$TMP/trafic.json"
 printf '{"parefeu|Docker contourne UFW : # port(s) publié(s) sur toutes les interfaces": {"raison": "voulu : accès local", "date": 1}}\n' > "$TMP/acceptes.json"
-echo '{"pools": [{"nom": "rapide", "tendance": {"octets_par_jour": 5368709120, "jours_observes": 30, "jours_avant_90": 10, "jours_avant_plein": 28}},
-  {"nom": "stockage", "tendance": {"octets_par_jour": 21474836480, "jours_observes": 30, "jours_avant_90": 400, "jours_avant_plein": 510}}]}' > "$TMP/mesures-audit.json"
+echo '{"pools": [{"nom": "rapide", "tendance": {"octets_par_jour": 5368709120, "jours_observes": 30, "jours_avant_critique": 10, "jours_avant_plein": 28}},
+  {"nom": "stockage", "tendance": {"octets_par_jour": 21474836480, "jours_observes": 30, "jours_avant_critique": 400, "jours_avant_plein": 510}}]}' > "$TMP/mesures-audit.json"
 export AUDITE_MOI_TRAFIC=$TMP/trafic.json AUDITE_MOI_ACCEPTES=$TMP/acceptes.json AUDITE_MOI_MESURES=$TMP/mesures-audit.json
 mkdir -p "$OUT" && printf '00:0d:b9:11:22:33\t192.168.1.1\trouteur.maison\tPC Engines\n' > "$OUT/.inventaire-reseau"
 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT" --config "$TMP/audit.conf" --no-color --keep 5 > "$TMP/sortie.txt" 2> "$TMP/erreurs.txt"
@@ -68,6 +68,7 @@ perms=$(stat -c %a "$J" 2>/dev/null); [[ $perms == 600 ]] && ok "rapport en mode
 grep -q 'TresSecret123' "$OUT"/rapport-* && ko "un secret apparaît dans le rapport" || ok "secrets masqués dans les rapports"
 grep -q 'eyJhIjoiMTIz' "$OUT"/rapport-* && ko "le jeton du tunnel apparaît dans le rapport" || ok "jeton du tunnel absent du rapport"
 
+Hf0=$(ls "$OUT"/rapport-*.html | head -n 1)
 expect() {   # expect NIVEAU "motif dans le titre"
   if jq -e --arg l "$1" --arg t "$2" '.constats[] | select(.niveau == $l and (.titre | contains($t)))' "$J" >/dev/null; then ok "[$1] $2"
   else ko "constat attendu absent : [$1] $2"; fi
@@ -141,6 +142,16 @@ expect INFO "Port VPN ouvert sur le WAN : udp 51820"
 expect WARN "UPnP activé sur le routeur"
 expect WARN "SSH d'OPNsense : connexion root autorisée"
 jq -e '.constats[] | select(.titre | contains("8080/tcp"))' "$J" >/dev/null && ko "une redirection désactivée est signalée" || ok "redirection désactivée ignorée"
+# Références
+jq -e '.constats[] | select(.titre == "Conteneur tdarr privilégié") | .references | any(.source == "CIS Docker 1.7.0" and .id == "5.5")' "$J" >/dev/null \
+  && ok "référence CIS Docker 5.5 sur le conteneur privilégié" || ko "référence CIS Docker 5.5"
+jq -e '.constats[] | select(.titre | startswith("SSH exposé à Internet")) | .references | any(.id == "R17")' "$J" >/dev/null \
+  && ok "référence ANSSI (Open)SSH R17 sur l'authentification par mot de passe" || ko "référence ANSSI SSH R17"
+jq -e '.constats[] | select(.titre | startswith("Root autorisé en SSH")) | .references | any(.id == "R8") | not' "$J" >/dev/null \
+  && ok "pas de référence hors sujet (taille de clé RSA) sur « root par clé »" || ko "référence hors sujet"
+jq -e '[.constats[].references[]?.url] | length > 30 and all(startswith("https://"))' "$J" >/dev/null && ok "références présentes, liens HTTPS" || ko "références"
+grep -q 'class="refs">Références : <a href="https://' "$Hf0" && ok "références affichées dans le rapport HTML" || ko "références dans le rapport HTML"
+grep -q 'Réf. : CIS Docker 1.7.0 5.5' "$OUT"/rapport-nas-demo-2026*.txt && ok "références dans le rapport texte" || ko "références dans le rapport texte"
 # Tendances
 expect CRIT "Pool rapide rempli à 90 % dans environ 10 jours"
 expect INFO "Pool stockage : +20.0Gio par jour"
@@ -192,6 +203,18 @@ p = P(); p.feed(open(sys.argv[1], encoding="utf-8").read())
 sys.exit(1 if p.err or p.stack else 0)
 PY
 
+echo "▶ Seuils personnalisés"
+echo '{"pool_attention": 85, "pool_critique": 95, "scrub_max_jours": 100, "disque_temp_hdd_attention": 40, "inconnu": 5, "espace_attention": 999, "cpu_temp_critique": "90"}' > "$TMP/seuils.json"
+OUT2=$TMP/rapports-seuils
+AUDITE_MOI_SEUILS=$TMP/seuils.json PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT2" --config "$TMP/audit.conf" --no-color --quick > /dev/null 2>&1
+J2=$(ls "$OUT2"/rapport-*.json 2>/dev/null | head -n 1)
+jq -e '.constats[] | select(.titre | startswith("Pool rapide rempli à 83"))' "$J2" >/dev/null && ko "pool à 83 % signalé malgré le seuil à 85 %" || ok "seuil de remplissage relevé : pool à 83 % accepté"
+jq -e '.constats[] | select(.niveau == "WARN" and (.titre | contains("dernier scrub il y a")))' "$J2" >/dev/null && ko "scrub de 82 jours signalé malgré le seuil à 100" || ok "seuil du scrub relevé à 100 jours"
+jq -e '.constats[] | select(.titre | startswith("Disque /dev/sdd")) | .titre | contains("température élevée (41 °C)")' "$J2" >/dev/null && ok "seuil de température abaissé : sdd (41 °C) signalé" || ko "seuil de température des disques"
+jq -e '.constats[] | select(.titre | startswith("Pool rapide rempli à 95 % dans environ"))' "$J2" >/dev/null && ok "prévision calculée sur le seuil critique choisi (95 %)" || ko "prévision avec le seuil critique"
+jq -e '.seuils_modifies | length == 4' "$J2" >/dev/null && ok "seuils modifiés listés dans le rapport (valeurs hors bornes ou invalides ignorées)" || ko "seuils modifiés : $(jq -c .seuils_modifies "$J2")"
+grep -q 'Seuils personnalisés' "$OUT2"/rapport-*.html && ok "seuils personnalisés affichés dans le rapport HTML" || ko "seuils dans le rapport HTML"
+
 echo "▶ Conservation des rapports (--keep)"
 for i in 1 2 3 4 5 6; do touch "$OUT/rapport-nas-demo-2025010$i-1200".{html,txt,json}; done
 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT" --no-color --quick --keep 3 >/dev/null 2>&1
@@ -216,6 +239,11 @@ verifie "sdd à surveiller (secteurs réalloués, CRC en hausse, erreurs ZFS)" '
 verifie "SSD : usure lue (sda 9 %)" '.disques[] | select(.nom == "sda" and .etat == "ok" and .usure == 9)'
 jq '(.disques[] | select(.nom == "sdd") | .crc_hausse) = 1000' "$M" > "$M.t" && mv "$M.t" "$M"
 releve; verifie "erreurs CRC anciennes et stables : simple note" '.disques[] | select(.nom == "sdd" and (.note | test("stables")) and (.raisons | length) == 2)'
+mkdir -p "$TMP/etat-seuils"
+AUDITE_MOI_SEUILS=$TMP/seuils.json AUDITE_MOI_TELEGRAM_FICHIER="" PATH="$ROOT/tests/mock/bin:$PATH" python3 "$ROOT/systemd/audite-moi-mesures" \
+  --sortie "$TMP/etat-seuils/mesures.json" --demande "$TMP/dem-mesurer" --groupe root --conf /dev/null --rapports "$TMP/rap"
+jq -e '.disques[] | select(.nom == "sdd" and (.raisons | any(test("Température élevée"))))' "$TMP/etat-seuils/mesures.json" >/dev/null \
+  && ok "seuil de température du relevé : sdd (41 °C) à surveiller" || ko "seuil de température du relevé"
 AUDITE_MOI_VEILLE=sdc releve
 verifie "disque en veille : pas réveillé, dernières valeurs gardées" '.disques[] | select(.nom == "sdc" and .veille == true and .temperature == 38 and .etat == "veille")'
 
