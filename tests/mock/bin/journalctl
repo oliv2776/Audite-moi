@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Faux journalctl
 args="$*"
+if [[ ${AUDITE_MOI_JOURNAL_SSH_ECHEC:-} == 1 && "$args" == *"-t sshd"* ]]; then
+  echo "ssh journal inaccessible" >&2
+  exit 1
+fi
 if [[ ${AUDITE_MOI_JOURNAL_NOYAU_ECHEC:-} == 1 && ( "$args" == *"-k -p err"* || "$args" == *"-k --since 7 days ago"* ) ]]; then
   echo "kernel journal inaccessible" >&2
   exit 1
