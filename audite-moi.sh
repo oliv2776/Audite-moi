@@ -238,7 +238,7 @@ START=$NOW
 
 # Variables partagées entre sections
 declare -A DISK_POOL=() POOL_MEDIA=() POOL_NVME=() SNAP_COUNT=() SNAP_LAST=()
-declare -A EXPOSED=() REACHABLE=() PORTMAP=() CNAMES=() CF_NETMODE=()
+declare -A EXPOSED=() REACHABLE=() PORTMAP=() CNAMES=() CF_NETMODE=() VIA_PORT=()
 declare -a POOLS=() ZFS_MOUNTS=() INGRESS=() PERM_BAD=()
 DOCKER_OK=0 SSH_EXPOSED=0 SSH_PASS=0 REBOOT_REQ=0 CF_FOUND=0 CF_NETS="" IPV6_GLOBAL="" TRIM_SCHED=""
 ARC_SIZE=0 ARC_MIN=0 ARC_MAX=0 ARC_HITS=0 ARC_MISS=0
@@ -400,6 +400,9 @@ check_systeme() {
     local kerr; kerr=$(tmo 30 journalctl -k -p err --since "24 hours ago" --no-pager -q 2>/dev/null)
     local pat='I/O error|blk_update_request|Buffer I/O error|critical medium error|ata[0-9.]+: (exception|failed command|SError)|nvme[0-9]+.*(timeout|Abort|reset|controller is down)|EXT4-fs error|XFS .*(error|corrupt)|Hardware Error|Machine check|mce: |soft lockup|hung_task|blocked for more than|BUG:|Oops'
     local hits; hits=$(grep -E "$pat" <<< "$kerr" | tail -n 12)
+    local fst; fst=$(grep -oE "Duplicate entry in '/etc/fstab'|Failed to create unit file '[^']+'" <<< "$kerr" | grep -oE "/run/systemd/generator/[^']+" | sort -u | sed 's|.*/||' | tr '\n' ' ')
+    [[ -n $fst ]] && warn "Entrée en double dans /etc/fstab ($fst)" "systemd signale le même point de montage deux fois (à chaque rechargement) : au démarrage, le montage peut échouer ou masquer l'autre entrée." \
+      "Repérez le doublon : \`grep -v '^#' /etc/fstab\`, supprimez une des deux lignes (gardez celle avec UUID=…), puis \`sudo systemctl daemon-reload && sudo mount -a\`"
     if [[ -n $hits ]]; then
       warn "Erreurs matérielles ou système dans le journal du noyau (24 h)" "$hits" \
         "Croisez avec la section « Disques (SMART) » ; détail : \`journalctl -k -p err --since '24 hours ago'\`"
@@ -1033,6 +1036,10 @@ check_gpu() {
     [[ $g == *NVIDIA* ]] && has_nv=1
     [[ $g == *"Advanced Micro Devices"* || $g == *"[AMD/ATI]"* || $g == *"ATI Technologies"* ]] && has_amd=1
   done
+  if ((!has_intel)) && [[ ${CPU_MODEL:-} =~ Intel.*Core.*-[0-9]{4,5}([A-Z]*) ]] && [[ ${BASH_REMATCH[1]} != *F* ]]; then
+    info "iGPU Intel du processeur non visible" "Le processeur (${CPU_MODEL}) possède un iGPU (Quick Sync), mais il n'apparaît pas : il est probablement désactivé dans le BIOS parce qu'une carte graphique est installée." \
+      "Dans le BIOS : activez « iGPU Multi-Monitor » (ou « Internal Graphics : Enabled »), redémarrez, puis vérifiez \`ls /dev/dri\` (un nœud renderD de plus)"
+  fi
   if ((${#gpus[@]})); then
     info "Processeur(s) graphique(s) détecté(s)" "$(printf '%s\n' "${gpus[@]}" | sed -E 's/^[^ ]+ [^:]+: //')"
   else
@@ -1120,7 +1127,7 @@ check_gpu() {
       esac
       gpu_vainfo "$a" "AMD"
     done
-    local afw; afw=$(grep -iE 'amdgpu|radeon' <<< "$klog" | grep -iE 'fail|error|timeout|ring .* test failed|firmware' | grep -viE 'loaded|version' | tail -n 6)
+    local afw; afw=$(grep -iE 'amdgpu|radeon' <<< "$klog" | grep -iE 'fail|error|timeout|test failed|hang|gpu reset' | grep -viE 'loaded|version|will use|successfully' | tail -n 6)
     [[ -n $afw ]] && warn "Erreurs du pilote AMD dans le journal du noyau" "$afw" "Mettez à jour \`linux-firmware\` et le noyau (HWE) ; détail : \`journalctl -k -b | grep -i amdgpu\`"
     ((QUICK)) || ! have radeontop || raw "radeontop (échantillon)" "$(tmo 5 radeontop -d - -l 2 2>&1 | tail -n 2)"
   fi
@@ -1258,8 +1265,13 @@ check_sauvegardes() {
     for p in "${POOLS[@]}"; do
       n=${SNAP_COUNT[$p]:-0}; last=${SNAP_LAST[$p]:-0}
       if ((n == 0)); then
-        warn "Pool $p : aucun snapshot" "Sans snapshots, un fichier supprimé ou chiffré par un rançongiciel est définitivement perdu." \
-          "Installez sanoid (\`sudo apt install sanoid\`) et configurez /etc/sanoid/sanoid.conf (ex. : 24 horaires, 30 quotidiens, 6 mensuels)"
+        if have sanoid; then
+          warn "Pool $p : aucun snapshot" "sanoid est installé mais ne crée aucun snapshot de ce pool : sans snapshots, un fichier supprimé ou chiffré par un rançongiciel est définitivement perdu." \
+            "Déclarez le pool dans /etc/sanoid/sanoid.conf (section \`[$p]\` avec \`use_template = production\`, \`recursive = yes\`), puis \`sudo systemctl enable --now sanoid.timer\`"
+        else
+          warn "Pool $p : aucun snapshot" "Sans snapshots, un fichier supprimé ou chiffré par un rançongiciel est définitivement perdu." \
+            "Installez sanoid (\`sudo apt install sanoid\`) et configurez /etc/sanoid/sanoid.conf (ex. : 24 horaires, 30 quotidiens, 6 mensuels)"
+        fi
       else
         age=$(( (NOW - last) / 3600 ))
         if ((age > 48)); then
@@ -1288,10 +1300,13 @@ check_sauvegardes() {
     [[ -n $cb ]] && bk+=("conteneurs : $cb")
   fi
   local plan; plan=$( { grep -rhsE 'restic|borg|kopia|rclone|syncoid|zfs send|rsync' /etc/crontab /etc/cron.d /var/spool/cron/crontabs 2>/dev/null | grep -v '^[[:space:]]*#'
-                        systemctl list-timers --all --no-legend 2>/dev/null | grep -Ei 'restic|borg|kopia|rclone|syncoid|backup|sauvegarde'; } | head -n 5)
-  if ((${#bk[@]})); then
-    ok "Outils de sauvegarde détectés" "$(join_list ' ; ' "${bk[@]}")${plan:+$NL$plan}"
+                        systemctl list-timers --all --no-legend 2>/dev/null | grep -Ei 'restic|borg|kopia|rclone|syncoid|backup|sauvegarde' | grep -v 'dpkg-db-backup'; } | head -n 5)
+  if [[ -n $plan || -n ${cb:-} ]]; then
+    ok "Sauvegardes planifiées détectées" "$(join_list ' ; ' "${bk[@]}")${plan:+$NL$plan}"
     info "Pensez à tester une restauration" "Une sauvegarde n'est fiable que si sa restauration a été testée ; gardez une copie hors site (règle 3-2-1)."
+  elif ((${#bk[@]})); then
+    warn "Outils de sauvegarde installés mais rien de planifié" "Installé(s) : $(join_list ', ' "${bk[@]}"), mais aucune tâche planifiée (cron ou minuteur systemd) ne les utilise." \
+      "Planifiez la sauvegarde, par ex. dans /etc/cron.d/sauvegarde : \`30 3 * * * root /usr/sbin/syncoid -r <pool>/<dataset> <destination>\`"
   else
     warn "Aucun outil de sauvegarde détecté" "La redondance ZFS (miroir, RAIDZ) protège d'une panne de disque, pas d'une suppression, d'un rançongiciel, d'un incendie ou d'une erreur de manipulation. Règle 3-2-1 : 3 copies, 2 supports, 1 hors site." \
       "Par exemple \`syncoid\` (paquet sanoid) vers un autre pool ou serveur, ou restic/kopia vers un stockage distant chiffré"
@@ -1463,6 +1478,11 @@ cf_docker() {
   tmo 120 docker logs "$id" 2>&1 | grep -E "$CF_META_RE" | tail -n 400 > "$meta"
   tmo 60 docker logs --since 24h "$id" 2>&1 | tail -n 20000 > "$recent"
   CF_NETMODE[$name]=$net
+  local pol; pol=$(jq -r --arg id "$id" '.[] | select(.Id == $id) | .HostConfig.RestartPolicy.Name // ""' "$INSPECT")
+  if [[ -z $pol || $pol == no ]]; then
+    warn "Tunnel « $name » sans redémarrage automatique" "Le conteneur cloudflared a été lancé sans politique de redémarrage : après un redémarrage du NAS ou de Docker, vos services ne seront plus joignables depuis Internet." \
+      "Immédiatement : \`docker update --restart unless-stopped $name\` ; idéalement, décrivez le tunnel dans un docker-compose avec \`restart: unless-stopped\`"
+  fi
   CF_NETS+=" $(jq -r --arg id "$id" '.[] | select(.Id == $id) | (.NetworkSettings.Networks // {}) | keys[]' "$INSPECT" | tr '\n' ' ')"
   cf_analyse "$name" "$meta" "$recent" "$pid" docker "$id"
   local tok; tok=$(jq -r --arg id "$id" '.[] | select(.Id == $id)
@@ -1512,7 +1532,7 @@ cf_exposure() {
   local r h s pa ac tn host port scheme tgt nm
   for r in "${INGRESS[@]}"; do
     IFS=$US read -r h s pa ac tn <<< "$r"
-    tgt=""
+    tgt="" host=""
     if [[ $s =~ ^([a-z0-9+.-]+)://\[?([^]/:]+)\]?(:([0-9]+))? ]]; then
       scheme=${BASH_REMATCH[1]} host=${BASH_REMATCH[2]} port=${BASH_REMATCH[4]}
       if [[ -z $port ]]; then case $scheme in https) port=443 ;; http) port=80 ;; ssh) port=22 ;; rdp) port=3389 ;; esac; fi
@@ -1537,16 +1557,19 @@ cf_exposure() {
     if [[ $h == "*" ]]; then
       warn "Tunnel « $tn » : la règle par défaut mène à un service ($s)" "Tout nom d'hôte pointant vers ce tunnel atteindra ce service." "Terminez la liste des routes par \`service: http_status:404\`"
     fi
-    [[ -n $tgt && -n ${CNAMES[$tgt]:-} && $h != "*" ]] && EXPOSED[$tgt]+="${EXPOSED[$tgt]:+, }$h"
+    if [[ -n $tgt && -n ${CNAMES[$tgt]:-} && $h != "*" ]]; then
+      [[ ", ${EXPOSED[$tgt]:-}, " == *", $h, "* ]] || EXPOSED[$tgt]+="${EXPOSED[$tgt]:+, }$h"
+      [[ $myips == *" ${host:-?} "* && ${PORTMAP[$port]:-} == "$tgt" ]] && VIA_PORT[$tgt]+=" $port "
+    fi
     irows+=("$h$TAB$s${pa:+ (chemin $pa)}$TAB${tgt:-—}$TAB$( [[ $ac == true ]] && echo "@OK exigé par le tunnel" || echo "@INFO à vérifier côté Cloudflare")$TAB$tn")
   done
   if ((${#irows[@]})); then
     tbl "Services publiés via les tunnels" < <(printf "Nom d'hôte public\tService d'origine\tConteneur\tCloudflare Access\tTunnel\n"; printf '%s\n' "${irows[@]}")
     local -a hosts=()
     for k in "${!EXPOSED[@]}"; do hosts+=("${EXPOSED[$k]} → $k"); done
-    info "${#irows[@]} service(s) publié(s) sur Internet" "$(printf '%s\n' "${hosts[@]}")"
+    info "${#EXPOSED[@]} conteneur(s) publié(s) sur Internet (${#irows[@]} route(s))" "$(printf '%s\n' "${hosts[@]}")"
     local noacc=""
-    for r in "${INGRESS[@]}"; do IFS=$US read -r h s pa ac tn <<< "$r"; [[ $h != "*" && $ac != true ]] && noacc+="$h "; done
+    for r in "${INGRESS[@]}"; do IFS=$US read -r h s pa ac tn <<< "$r"; [[ $h != "*" && $ac != true && " $noacc" != *" $h "* ]] && noacc+="$h "; done
     if [[ -n $noacc ]]; then
       info "Protection Cloudflare Access à confirmer : $noacc" "Le serveur ne voit pas les applications Access configurées dans le tableau de bord Cloudflare." \
         "Zero Trust > Access > Applications : protégez chaque nom d'hôte (connexion + MFA), ou activez « Protect with Access » dans la route publique du tunnel"
@@ -1569,6 +1592,9 @@ cf_exposure() {
   for c in "${!EXPOSED[@]}"; do
     pp=$(jq -r --arg n "$c" '.[] | select((.Name | ltrimstr("/")) == $n) | (.NetworkSettings.Ports // {}) | to_entries[] | select(.value != null)
       | .value[] | select((.HostIp // "") == "" or .HostIp == "0.0.0.0" or .HostIp == "::") | .HostPort' "$INSPECT" | sort -un | tr '\n' ' ')
+    local x restants=""
+    for x in $pp; do [[ ${VIA_PORT[$c]:-} == *" $x "* ]] || restants+="$x "; done
+    pp=$restants
     [[ -n $pp ]] && info "$c : aussi accessible directement (port ${pp% })" \
       "En plus du tunnel, ce service est joignable sans passer par Cloudflare (ni Access, ni WAF) depuis tout le réseau local — et depuis Internet si la box redirige ce port ou via IPv6. Normal si vous l'utilisez en local." \
       "Sinon, supprimez \`ports:\` (cloudflared passe par le réseau Docker) ou limitez à \`127.0.0.1:PORT:PORT\`"
@@ -2056,20 +2082,26 @@ check_dockersec() {
     if [[ -n $sockm ]]; then
       lvl=WARN; ((isexp)) && lvl=CRIT
       add "$lvl" "Conteneur $n : socket Docker monté ($sockm)$where" "Accès au socket Docker = contrôle total de l'hôte. Le montage en lecture seule (:ro) ne protège pas l'API." \
-        "Si l'outil en a vraiment besoin, passez par un proxy limitant les appels autorisés (ex. tecnativa/docker-socket-proxy)"
+        "$( [[ $img == nextcloud/all-in-one* ]] && echo "Indispensable au fonctionnement de Nextcloud AIO : gardez son interface (port 8080) inaccessible depuis Internet" || echo "Si l'outil en a vraiment besoin, passez par un proxy limitant les appels autorisés (ex. tecnativa/docker-socket-proxy)")"
     fi
     if [[ $net == host ]]; then
       if ((isexp)); then warn "Conteneur $n en réseau « host »$where" "Aucune isolation réseau : il voit et peut écouter sur toutes les interfaces de l'hôte." "Utilisez un réseau bridge et publiez uniquement les ports nécessaires"
       else info "Conteneur $n en réseau « host »" "Pas d'isolation réseau (parfois nécessaire pour la découverte DLNA/mDNS)."; fi
     fi
     [[ $pidm == host ]] && warn "Conteneur $n partage l'espace de processus de l'hôte (pid: host)" "Il voit et peut signaler tous les processus du serveur." "Retirez \`pid: host\` si ce n'est pas indispensable"
-    if [[ ,$caps, =~ ,(CAP_)?(SYS_ADMIN|ALL|SYS_MODULE|SYS_RAWIO|SYS_PTRACE|DAC_READ_SEARCH|BPF), ]]; then
+    if [[ ,$caps, =~ ,(CAP_)?(SYS_ADMIN|ALL|SYS_MODULE|SYS_RAWIO|SYS_PTRACE|DAC_READ_SEARCH|BPF), ]] && [[ $img == *aio-collabora* ]]; then
+      info "Conteneur $n : capacités étendues ($caps)" "Requises par Collabora (Nextcloud AIO) pour isoler chaque document : c'est la configuration prévue." ""
+    elif [[ ,$caps, =~ ,(CAP_)?(SYS_ADMIN|ALL|SYS_MODULE|SYS_RAWIO|SYS_PTRACE|DAC_READ_SEARCH|BPF), ]]; then
       warn "Conteneur $n : capacités dangereuses ($caps)" "Ces capacités permettent souvent de s'échapper du conteneur." "Retirez-les de \`cap_add\` si possible"
     fi
     [[ $secopt == *unconfined* ]] && warn "Conteneur $n : confinement désactivé ($secopt)" "Seccomp ou AppArmor est désactivé pour ce conteneur." "Retirez \`seccomp:unconfined\` / \`apparmor:unconfined\` de \`security_opt\`"
     if [[ -n $sens ]]; then
-      if [[ ", $sens" == *", /→"*"(rw)"* || $sens == *"/etc→"*"(rw)"* || $sens == *"/root→"*"(rw)"* ]]; then lvl=CRIT; else lvl=WARN; fi
-      add "$lvl" "Conteneur $n : montage sensible de l'hôte" "$sens" "Ne montez que les dossiers utiles, en lecture seule (\`:ro\`) quand c'est possible"
+      local smsg=$sens
+      if [[ ", $sens" == *", /→"*"(rw)"* || $sens == *"/etc→"*"(rw)"* || $sens == *"/root→"*"(rw)"* ]]; then
+        if [[ $user == root ]]; then lvl=CRIT; smsg+="${NL}Le conteneur tourne en root : il peut modifier n'importe quel fichier du serveur."
+        else lvl=WARN; smsg+="${NL}Le conteneur tourne sous l'utilisateur $user : il peut lire presque tout le serveur et modifier tout ce qui appartient à cet utilisateur."; fi
+      else lvl=WARN; fi
+      add "$lvl" "Conteneur $n : montage sensible de l'hôte" "$smsg" "Ne montez que les dossiers utiles (ex. \`/hddPool/partage:/srv\` au lieu de \`/\`), en lecture seule (\`:ro\`) quand c'est possible"
     fi
     if ((isexp)) && [[ $user == root && $haspuid != true ]]; then
       info "Conteneur $n (exposé) fonctionne en root" "L'application tourne en root dans le conteneur : une faille donne davantage de prise." "Si l'image le permet : \`user: \"1000:1000\"\` dans le compose"
@@ -2080,8 +2112,9 @@ check_dockersec() {
       agec="$age j"
       if ((isexp && age > 180)); then
         agec="@WARN $age j"
-        warn "Image de $n construite il y a $age jours$where" "Service exposé : ses failles connues restent ouvertes tant que l'image n'est pas mise à jour (vérifiez qu'une version plus récente existe)." \
-          "Dans le dossier du projet : \`docker compose pull && docker compose up -d\` ; un outil comme diun peut vous prévenir des nouvelles versions"
+        local maj="Dans le dossier du projet : \`docker compose pull && docker compose up -d\` ; un outil comme diun peut vous prévenir des nouvelles versions"
+        [[ $img == *nextcloud-releases/aio-* ]] && maj="Conteneur géré par Nextcloud AIO : mettez à jour depuis son interface (port 8080 de l'hôte) → « Arrêter les conteneurs », puis « Démarrer et mettre à jour ». Si rien ne se met à jour, mettez d'abord à jour le conteneur maître (nextcloud-aio-mastercontainer)"
+        warn "Image de $n construite il y a $age jours$where" "Service exposé : ses failles connues restent ouvertes tant que l'image n'est pas mise à jour (vérifiez qu'une version plus récente existe)." "$maj"
       elif ((age > 365)); then
         agec="@INFO $age j"; oldimg+=("$n ($age j)")
       fi

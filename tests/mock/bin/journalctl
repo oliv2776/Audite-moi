@@ -7,6 +7,7 @@ case "$args" in
 Oct 29 03:12:44 nas kernel: ata4.00: exception Emask 0x0 SAct 0x10000 SErr 0x0 action 0x0
 Oct 29 03:12:44 nas kernel: ata4.00: failed command: READ FPDMA QUEUED
 Oct 29 03:12:44 nas kernel: blk_update_request: I/O error, dev sdd, sector 1234567890 op 0x0:(READ)
+Oct 29 21:56:00 nas systemd-fstab-generator[770945]: Failed to create unit file '/run/systemd/generator/mnt-data.mount', as it already exists. Duplicate entry in '/etc/fstab'?
 EOT
   ;;
   *"-k --since 7 days ago"*) cat <<EOT
@@ -20,6 +21,7 @@ Oct 29 07:00:01 nas kernel: i915 0000:00:02.0: [drm] GT0: HuC firmware i915/tgl_
 Oct 29 07:00:01 nas kernel: i915 0000:00:02.0: [drm] GT0: HuC: authenticated for all workloads
 Oct 29 07:00:02 nas kernel: [drm] amdgpu kernel modesetting enabled.
 Oct 29 07:00:03 nas kernel: amdgpu 0000:03:00.0: amdgpu: SMU is initialized successfully!
+Oct 29 07:00:03 nas kernel: amdgpu 0000:03:00.0: amdgpu: Will use PSP to load VCN firmware
 EOT
   ;;
   *"-t sshd"*) cat <<EOT
