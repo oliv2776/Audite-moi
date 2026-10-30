@@ -330,6 +330,7 @@ declare -A DISK_POOL=() POOL_MEDIA=() POOL_NVME=() SNAP_COUNT=() SNAP_LAST=()
 declare -A EXPOSED=() REACHABLE=() PORTMAP=() CNAMES=() CF_NETMODE=() VIA_PORT=()
 declare -a POOLS=() ZFS_MOUNTS=() INGRESS=() PERM_BAD=()
 DOCKER_OK=0 SSH_EXPOSED=0 SSH_PASS=0 REBOOT_REQ=0 CF_FOUND=0 CF_NETS="" IPV6_GLOBAL="" TRIM_SCHED=""
+ZFS_SCAN_OK=0
 ARC_SIZE=0 ARC_MIN=0 ARC_MAX=0 ARC_HITS=0 ARC_MISS=0
 INSPECT="$WORK/inspect.json"
 echo '[]' > "$INSPECT"
@@ -400,7 +401,17 @@ read_arc() {
 
 zfs_prep() {   # pools, disques membres et type de support (SSD/HDD)
   have zpool || return 0
-  mapfile -t POOLS < <(tmo 30 zpool list -H -o name 2>/dev/null)
+  local liste
+  if liste=$(tmo 30 zpool list -H -o name 2>/dev/null); then
+    ZFS_SCAN_OK=1
+    POOLS=()
+    [[ -z $liste ]] || mapfile -t POOLS <<< "$liste"
+  else
+    # Une erreur de zpool list ne prouve pas que les pools ont disparu.
+    ZFS_SCAN_OK=0
+    POOLS=()
+    return 0
+  fi
   local p line dev disk sect rot nrot nssd nnv
   local re_sect=$'^\t(logs|cache|spares|special|dedup)[[:space:]]*$'
   for p in "${POOLS[@]}"; do
@@ -840,6 +851,11 @@ check_zfs() {
   if ! have zpool; then info "ZFS n'est pas installé" "La commande zpool est introuvable."; return; fi
   local v; v=$(zfs version 2>/dev/null | tr '\n' ' ')
   [[ -n $v ]] && info "Version d'OpenZFS" "$v"
+  if ((ZFS_SCAN_OK == 0)); then
+    warn "Inventaire ZFS indisponible" "La commande \`zpool list\` a échoué ou a dépassé son délai : impossible de déterminer l'état des pools. Aucune alerte de pool absent n'est émise." \
+      "Vérifiez le chargement du module ZFS et les journaux : \`sudo zpool status\` et \`journalctl -k -b\`"
+    return
+  fi
   if ((${#POOLS[@]} == 0)); then
     crit "Aucun pool ZFS importé" "Aucun pool n'est importé : les données des pools ne sont pas accessibles." \
       "\`sudo zpool import\` pour lister les pools disponibles, puis \`sudo zpool import <nom>\`"

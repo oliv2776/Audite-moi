@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Faux zpool : deux pools, « rapide » (miroir SSD) et « stockage » (RAIDZ1 de disques durs)
 args="$*"
+if [[ ${AUDITE_MOI_ZPOOL_ECHEC:-0} == 1 && $args == "list -H -o name" ]]; then
+  echo "zpool list indisponible (simulation)" >&2
+  exit 1
+fi
+if [[ ${AUDITE_MOI_ZPOOL_VIDE:-0} == 1 && $args == "list -H -o name" ]]; then
+  exit 0
+fi
 case "$args" in
   "list -H -o name") printf 'rapide\nstockage\n' ;;
   "list -H -p -o size,alloc,free,frag,cap,health,dedupratio rapide") printf '996432412672\t826538905600\t169893507072\t31\t83\tONLINE\t1.00\n' ;;
