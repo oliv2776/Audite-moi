@@ -3477,16 +3477,23 @@ check_journaux() {
   fi
   if have journalctl; then
     local sj nsudo sfail acct
-    sj=$(tmo 30 journalctl -t sudo --since "7 days ago" --no-pager -q -o short-iso 2>/dev/null)
-    nsudo=$(grep -c 'COMMAND=' <<< "$sj")
-    sfail=$(grep -E 'authentication failure|incorrect password attempt|NOT in sudoers|user NOT authorized' <<< "$sj" | tail -n 10)
-    if [[ -n $sfail ]]; then
-      warn "Échecs d'authentification sudo (7 jours)" "$sfail" "Vérifiez qu'il s'agit bien de vous (faute de frappe) ; sinon, un compte local est peut-être compromis"
+    if sj=$(tmo 30 journalctl -t sudo --since "7 days ago" --no-pager -q -o short-iso 2>/dev/null); then
+      nsudo=$(grep -c 'COMMAND=' <<< "$sj")
+      sfail=$(grep -E 'authentication failure|incorrect password attempt|NOT in sudoers|user NOT authorized' <<< "$sj" | tail -n 10)
+      if [[ -n $sfail ]]; then
+        warn "Échecs d'authentification sudo (7 jours)" "$sfail" "Vérifiez qu'il s'agit bien de vous (faute de frappe) ; sinon, un compte local est peut-être compromis"
+      else
+        ok "Aucun échec sudo (7 jours)" "$nsudo commande(s) sudo exécutée(s)."
+      fi
     else
-      ok "Aucun échec sudo (7 jours)" "$nsudo commande(s) sudo exécutée(s)."
+      info "Lecture du journal sudo indisponible" "journalctl n'a pas pu lire les événements sudo des 7 derniers jours ; l'absence d'échec d'authentification n'est pas déterminable."
     fi
-    acct=$(tmo 30 journalctl --since "30 days ago" --no-pager -q -o short-iso -t useradd -t userdel -t usermod -t groupadd -t gpasswd -t passwd -t chpasswd 2>/dev/null | tail -n 15)
-    [[ -n $acct ]] && info "Modifications de comptes ou de groupes (30 jours)" "$acct" "Vérifiez que chaque changement est de votre fait"
+    if acct=$(tmo 30 journalctl --since "30 days ago" --no-pager -q -o short-iso -t useradd -t userdel -t usermod -t groupadd -t gpasswd -t passwd -t chpasswd 2>/dev/null); then
+      acct=$(tail -n 15 <<< "$acct")
+      [[ -n $acct ]] && info "Modifications de comptes ou de groupes (30 jours)" "$acct" "Vérifiez que chaque changement est de votre fait"
+    else
+      info "Lecture des modifications de comptes indisponible" "journalctl n'a pas pu lire les événements de gestion des comptes des 30 derniers jours."
+    fi
   fi
   if systemctl is-active --quiet auditd 2>/dev/null; then
     ok "auditd actif (journalisation fine des accès)"
