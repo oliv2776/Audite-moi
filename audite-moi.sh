@@ -2722,7 +2722,7 @@ check_ssh() {
   for af in "$auth_dir/auth.log.1" "$auth_dir/auth.log"; do
     [[ -f $af && -r $af ]] && auth_files+=("$af")
   done
-  if [[ ! -s $lf ]] && (("${#auth_files[@]}")); then
+  if [[ ! -s $lf ]] && ((${#auth_files[@]})); then
     if cat "${auth_files[@]}" >/dev/null 2>&1; then
       log_ok=1
       grep -hE 'sshd(-session)?\\[' "${auth_files[@]}" >> "$lf" || true
