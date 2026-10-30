@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Garde-fou : l'audit tourne déjà en root et ne doit jamais appeler sudo.
+# Un appel ici trahit presque toujours un conseil dont les accents graves
+# n'ont pas été échappés, donc une commande réellement exécutée.
+printf '%s\n' "$*" >> "${AUDITE_MOI_SUDO_TRACE:-/dev/null}"
+exit 1
