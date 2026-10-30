@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-[[ $* == "list --upgradable" ]] && cat <<EOT
+[[ $* == "list --upgradable" ]] || exit 0
+[[ ${AUDITE_MOI_APT_LIST_ECHEC:-0} == 1 ]] && exit 100
+cat <<EOT
 Listing...
 openssl/noble-updates,noble-security 3.0.13-0ubuntu3.6 amd64 [upgradable from: 3.0.13-0ubuntu3.5]
 libssl3t64/noble-updates,noble-security 3.0.13-0ubuntu3.6 amd64 [upgradable from: 3.0.13-0ubuntu3.5]
