@@ -5,7 +5,9 @@ args="$*"
 case "$args" in
   "is-active --quiet "*) u=${args#is-active --quiet }; [[ $ACTIVE == *" ${u%.service} "* ]] ;;
   "is-active "*) u=${args#is-active }; [[ $ACTIVE == *" ${u%.service} "* ]] && echo active || { echo inactive; exit 3; } ;;
-  "--failed --no-legend --plain") echo "sauvegarde-nuit.service loaded failed failed Sauvegarde nocturne" ;;
+  "--failed --no-legend --plain")
+    [[ ${AUDITE_MOI_SYSTEMCTL_FAILED_ECHEC:-0} == 1 ]] && exit 1
+    echo "sauvegarde-nuit.service loaded failed failed Sauvegarde nocturne" ;;
   "list-timers --all --no-legend")
     echo "Mon 2026-11-02 00:00:00 CET 3 days left Mon 2026-10-26 00:00:00 CET 3 days ago fstrim.timer fstrim.service"
     echo "Fri 2026-10-30 03:00:00 CET 12h left Thu 2026-10-29 03:00:00 CET 5h ago restic-cloud.timer restic-cloud.service"
