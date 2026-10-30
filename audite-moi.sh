@@ -587,7 +587,7 @@ check_materiel() {
       if [[ -n $oom ]]; then
         local victims; victims=$(grep -oE 'Killed process [0-9]+ \([^)]+\)' <<< "$oom" | sed -E 's/.*\((.*)\)/\1/' | sort | uniq -c | sort -rn | awk '{printf "%s (%d×) ", $2, $1}')
         warn "Manque de mémoire : l'OOM killer est intervenu (7 jours)" "Processus tués : ${victims:-voir le journal du noyau}" \
-          "Fixez une limite mémoire aux conteneurs gourmands (`mem_limit`), réduisez `zfs_arc_max` ou ajoutez de la RAM"
+          "Fixez une limite mémoire aux conteneurs gourmands (\`mem_limit\`), réduisez \`zfs_arc_max\` ou ajoutez de la RAM"
       fi
     else
       info "Historique OOM du noyau indisponible" "journalctl n'a pas pu lire le journal du noyau des 7 derniers jours ; l'absence d'intervention de l'OOM killer n'est pas vérifiable."
