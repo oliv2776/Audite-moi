@@ -34,7 +34,64 @@ class Refus(Exception):
     """Demande invalide : rien n'a été exécuté."""
 
 
+def ouvrir_fichier_sans_liens(cible):
+    """Ouvre un fichier absolu en refusant les liens symboliques à chaque composant."""
+    if not isinstance(cible, str) or not cible.startswith("/"):
+        raise Refus("chemin de fichier invalide")
+    composants = cible.split("/")[1:]
+    if not composants or any(x in ("", ".", "..") for x in composants):
+        raise Refus("chemin de fichier non canonique")
+    flags_dir = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    flags_file = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+    courant = os.open("/", flags_dir)
+    try:
+        for composant in composants[:-1]:
+            suivant = os.open(composant, flags_dir, dir_fd=courant)
+            os.close(courant)
+            courant = suivant
+        fd = os.open(composants[-1], flags_file, dir_fd=courant)
+    finally:
+        os.close(courant)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise Refus("{} n'est pas un fichier ordinaire".format(cible))
+        return fd, st
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def fchmod_securise(cible, mode, peripherique, inode, mode_attendu):
+    """Modifie les permissions sur le descripteur vérifié, jamais via un chemin."""
+    if not re.fullmatch(r"[0-7]{3,4}", mode) or not re.fullmatch(r"[0-7]{3,4}", mode_attendu):
+        raise Refus("mode de fichier invalide")
+    fd, st = ouvrir_fichier_sans_liens(cible)
+    try:
+        if st.st_dev != int(peripherique) or st.st_ino != int(inode):
+            raise Refus("le fichier a été remplacé depuis la préparation de la correction")
+        if stat.S_IMODE(st.st_mode) != int(mode_attendu, 8):
+            raise Refus("les permissions du fichier ont changé depuis la préparation de la correction")
+        os.fchmod(fd, int(mode, 8))
+    finally:
+        os.close(fd)
+
+
+def commande_affichee(argv):
+    if argv and argv[0] == "@fchmod":
+        return ["chmod", argv[1], "--", argv[2]]
+    return argv
+
+
 def lancer(argv, timeout=120):
+    if argv and argv[0] == "@fchmod":
+        try:
+            if len(argv) != 6:
+                raise Refus("opération chmod interne invalide")
+            fchmod_securise(argv[2], argv[1], argv[3], argv[4], argv[5])
+            return 0, "permissions modifiées sur le fichier vérifié"
+        except (OSError, ValueError, Refus) as exc:
+            return 1, str(exc)
     p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
     sortie = (p.stdout + p.stderr).strip()
     return p.returncode, sortie[-2000:]
@@ -99,11 +156,20 @@ def docker_restart(cible):
 def chmod_600(cible):
     if not cible.startswith("/") or ".." in cible.split("/") or not FICHIER_PROTEGEABLE.search(cible):
         raise Refus("fichier non autorisé : seuls les fichiers .env et compose peuvent être protégés")
-    st = os.lstat(cible)
-    if not stat.S_ISREG(st.st_mode):
-        raise Refus("{} n'est pas un fichier ordinaire".format(cible))
-    avant = "{:o}".format(stat.S_IMODE(st.st_mode))
-    return ("Protéger {} (droits 600)".format(cible), [["chmod", "600", "--", cible]], [["chmod", avant, "--", cible]])
+    try:
+        fd, st = ouvrir_fichier_sans_liens(cible)
+    except OSError as exc:
+        raise Refus("fichier inaccessible ou chemin contenant un lien symbolique : {}".format(exc))
+    try:
+        avant = "{:o}".format(stat.S_IMODE(st.st_mode))
+        identite = [str(st.st_dev), str(st.st_ino)]
+    finally:
+        os.close(fd)
+    # @fchmod agit sur un descripteur ouvert avec O_NOFOLLOW et revérifie
+    # l'inode ainsi que le mode attendu immédiatement avant la modification.
+    appliquer = ["@fchmod", "600", cible] + identite + [avant]
+    annuler = ["@fchmod", avant, cible] + identite + ["600"]
+    return ("Protéger {} (droits 600)".format(cible), [appliquer], [annuler])
 
 
 def zfs_scrub(cible):
@@ -176,7 +242,8 @@ def executer(commandes):
     sorties = []
     for c in commandes:
         rc, s = lancer(c)
-        sorties.append("$ {}\n{}".format(" ".join(shlex.quote(x) for x in c), s).strip())
+        affichee = commande_affichee(c)
+        sorties.append("$ {}\n{}".format(" ".join(shlex.quote(x) for x in affichee), s).strip())
         if rc != 0:
             return False, "\n".join(sorties)
     return True, "\n".join(sorties)
@@ -216,7 +283,7 @@ def traiter(dem, journal, rapports):
         if ok:
             ent["annule"] = maintenant
         return {"id": ident, "date": maintenant, "type": "annulation", "cible": ent["id"], "libelle": "Annulation : " + ent["libelle"],
-                "commandes": [" ".join(shlex.quote(x) for x in c) for c in ent["annulation"]], "ok": ok, "sortie": sortie, "par": dem.get("par", "")}
+                "commandes": [" ".join(shlex.quote(x) for x in commande_affichee(c)) for c in ent["annulation"]], "ok": ok, "sortie": sortie, "par": dem.get("par", "")}
     typ, cible = dem.get("type"), dem.get("cible", "")
     if typ not in ACTIONS or not isinstance(cible, str) or len(cible) > 500 or "\n" in cible or "\x00" in cible:
         raise Refus("correction inconnue")
@@ -224,7 +291,7 @@ def traiter(dem, journal, rapports):
     libelle, cmds, annul = ACTIONS[typ](cible)
     ok, sortie = executer(cmds)
     return {"id": ident, "date": maintenant, "type": typ, "cible": cible, "libelle": libelle,
-            "commandes": [" ".join(shlex.quote(x) for x in c) for c in cmds], "annulation": annul if ok else None,
+            "commandes": [" ".join(shlex.quote(x) for x in commande_affichee(c)) for c in cmds], "annulation": annul if ok else None,
             "ok": ok, "sortie": sortie, "par": dem.get("par", "")}
 
 

@@ -8,3 +8,19 @@ Type=oneshot
 ExecStart=/usr/bin/python3 /usr/local/lib/audite-moi/audite-moi-corriger
 TimeoutStartSec=5min
 PrivateTmp=yes
+
+# Réduire l'impact d'une erreur dans le service root. /usr reste en lecture
+# seule ; /etc reste modifiable pour les actions autorisées (UFW, systemd et
+# protection des fichiers .env/compose dont le chemin dépend de l'installation).
+NoNewPrivileges=yes
+ProtectSystem=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
