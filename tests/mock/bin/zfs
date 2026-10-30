@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Faux zfs
 args="$*"; now=$(date +%s)
+if [[ ${AUDITE_MOI_ZFS_ECHEC:-0} == 1 && $args == "list -H -p -t snapshot -o creation -s creation -d 1 stockage/photos" ]]; then
+  echo "zfs list indisponible (simulation)" >&2
+  exit 1
+fi
 case "$args" in
   "list -H -p -t snapshot -o creation -s creation -d 1 stockage/photos") echo $((now - 7200)) ;;
   version) printf 'zfs-2.2.2-0ubuntu9.4\nzfs-kmod-2.2.2-0ubuntu9.4\n' ;;
