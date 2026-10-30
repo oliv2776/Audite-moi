@@ -1368,27 +1368,40 @@ check_reseau() {
   done
   ((${#rows[@]})) && tbl "Interfaces physiques" < <(printf 'Interface\tÉtat\tVitesse\tDuplex\tMTU\tErreurs RX / TX\tPaquets RX rejetés\n'; printf '%s\n' "${rows[@]}")
 
-  local gw=""
-  have ip && gw=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
-  if have ip && [[ -z $gw ]]; then
-    warn "Aucune route par défaut" "Le serveur ne peut pas joindre Internet (tunnels, mises à jour)." "Vérifiez la configuration réseau (\`/etc/netplan/\`)"
-  elif [[ -n $gw ]] && have ping; then
-    if ping -c 2 -W 2 "$gw" >/dev/null 2>&1; then ok "Passerelle $gw joignable"; else info "La passerelle $gw ne répond pas au ping" "Certaines box filtrent l'ICMP."; fi
+  local gw="" routes="" ipv6=""
+  if have ip; then
+    if routes=$(ip route show default 2>/dev/null); then
+      gw=$(awk '/default/ {print $3; exit}' <<< "$routes")
+      if [[ -z $gw ]]; then
+        warn "Aucune route par défaut" "Le serveur ne peut pas joindre Internet (tunnels, mises à jour)." "Vérifiez la configuration réseau (`/etc/netplan/`)"
+      elif have ping; then
+        if ping -c 2 -W 2 "$gw" >/dev/null 2>&1; then ok "Passerelle $gw joignable"; else info "La passerelle $gw ne répond pas au ping" "Certaines box filtrent l'ICMP."; fi
+      fi
+    else
+      info "Contrôle de la route par défaut indisponible" "La commande ip n'a pas pu lire la table de routage ; l'absence de passerelle n'est pas déterminable."
+    fi
   fi
-  if getent ahosts cloudflare.com >/dev/null 2>&1; then
-    ok "Résolution DNS fonctionnelle"
+  if have getent; then
+    if getent ahosts cloudflare.com >/dev/null 2>&1; then
+      ok "Résolution DNS fonctionnelle"
+    else
+      warn "Résolution DNS en échec" "La résolution de cloudflare.com n'a pas abouti ; vérifiez la connectivité et les serveurs DNS." "`resolvectl status` et vérifiez les serveurs DNS de `/etc/netplan/`"
+    fi
   else
-    warn "Résolution DNS en échec" "Les tunnels Cloudflare et les mises à jour ne peuvent pas fonctionner." "\`resolvectl status\` et vérifiez les serveurs DNS de \`/etc/netplan/\`"
+    info "Contrôle DNS indisponible" "La commande getent n'est pas installée ; la résolution DNS n'a pas pu être vérifiée."
   fi
   if have ping; then
     if ping -c 2 -W 3 1.1.1.1 >/dev/null 2>&1; then ok "Accès Internet (ping 1.1.1.1)"; else info "Pas de réponse au ping de 1.1.1.1" "L'ICMP sortant est peut-être filtré."; fi
   fi
   if have ip; then
-    IPV6_GLOBAL=$(ip -6 addr show scope global 2>/dev/null | awk '/inet6/ {print $2}' | grep -viE '^f[cd]' | tr '\n' ' ')
-    [[ -n $IPV6_GLOBAL ]] && info "Adresse(s) IPv6 publique(s) : $IPV6_GLOBAL" "Avec IPv6, le serveur peut être joignable directement depuis Internet si la box ne filtre pas les connexions entrantes." \
-      "Vérifiez que le pare-feu IPv6 de votre box bloque les connexions entrantes"
+    if ipv6=$(ip -6 addr show scope global 2>/dev/null); then
+      IPV6_GLOBAL=$(awk '/inet6/ {print $2}' <<< "$ipv6" | grep -viE '^f[cd]' | tr '\n' ' ')
+      [[ -n $IPV6_GLOBAL ]] && info "Adresse(s) IPv6 publique(s) : $IPV6_GLOBAL" "Avec IPv6, le serveur peut être joignable directement depuis Internet si la box ne filtre pas les connexions entrantes." \
+        "Vérifiez que le pare-feu IPv6 de votre box bloque les connexions entrantes"
+    else
+      info "Inventaire IPv6 indisponible" "La commande ip n'a pas pu lire les adresses IPv6 ; leur présence n'est pas déterminable."
+    fi
   fi
-}
 
 # Vérifie que les sauvegardes tournent vraiment : dernière exécution réussie et copie hors du serveur
 sauvegardes_verif() {
