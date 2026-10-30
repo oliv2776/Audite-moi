@@ -109,8 +109,8 @@ DOMAINES_EXTRA=""
 OPNSENSE_URL=""
 OPNSENSE_KEY=""
 OPNSENSE_SECRET=""
-# Vérifier le certificat HTTPS du routeur (non : certificat auto-signé d'origine)
-OPNSENSE_VERIFIER_TLS=non
+# Vérifier le certificat HTTPS du routeur (désactiver uniquement pour un certificat auto-signé)
+OPNSENSE_VERIFIER_TLS=oui
 
 # Scan nmap du réseau local pendant l'audit complet : oui / non
 SCAN_RESEAU=oui
@@ -196,7 +196,11 @@ if ((OPN)); then
   if [[ -z $cle_api || -z $secret_api || $cle_api$secret_api$url == *[\"\\[:space:]]* ]]; then
     echo "Clé ou secret vide ou invalide : rien n'a été enregistré." >&2; exit 1
   fi
-  code=$(printf 'user = "%s:%s"\n' "$cle_api" "$secret_api" | curl -sS -k -m 15 -K - -o /dev/null -w '%{http_code}' "${url%/}/api/core/firmware/status" 2>/dev/null || true)
+  verif_tls=oui
+  read -r -p "Le routeur utilise-t-il un certificat HTTPS auto-signé/non reconnu ? (désactive la vérification TLS) [o/N] " rep_tls
+  args_tls=()
+  if [[ $rep_tls =~ ^[oOyY]$ ]]; then verif_tls=non; args_tls=(-k); fi
+  code=$(printf 'user = "%s:%s"\n' "$cle_api" "$secret_api" | curl -sS "${args_tls[@]}" -m 15 -K - -o /dev/null -w '%{http_code}' "${url%/}/api/core/firmware/status" 2>/dev/null || true)
   case $code in
     200) echo "✔ Connexion à l'API d'OPNsense réussie" ;;
     401) echo "✘ OPNsense refuse cette clé (HTTP 401) : vérifiez la clé et le secret." >&2; exit 1 ;;
@@ -204,6 +208,7 @@ if ((OPN)); then
     *)   echo "⚠ OPNsense ne répond pas (code ${code:-aucun}) à ${url%/} ; enregistrement quand même." ;;
   esac
   conf_set OPNSENSE_URL "${url%/}"; conf_set OPNSENSE_KEY "$cle_api"; conf_set OPNSENSE_SECRET "$secret_api"
+  conf_set OPNSENSE_VERIFIER_TLS "$verif_tls"
   unset secret_api cle_api
   echo "Clé enregistrée dans $CONF (lisible par root uniquement)"
 fi

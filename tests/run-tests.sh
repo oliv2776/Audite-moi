@@ -293,6 +293,8 @@ grep -q "Correction appliquée depuis l'interface" "$TMP/telegram.txt" && grep -
 echo "▶ Interface web"
 if python3 "$ROOT/tests/test_web.py" > "$TMP/web.txt" 2>&1; then ok "tests de l'interface web ($(grep -oE 'Ran [0-9]+ tests' "$TMP/web.txt"))"
 else ko "tests de l'interface web"; tail -n 25 "$TMP/web.txt"; fi
+if python3 "$ROOT/tests/test_corriger.py" > "$TMP/corriger.txt" 2>&1; then ok "tests de sécurité du moteur de correction"
+else ko "tests du moteur de correction"; tail -n 25 "$TMP/corriger.txt"; fi
 for f in "$ROOT"/install.sh "$ROOT"/uninstall.sh "$ROOT"/systemd/audite-moi-run "$SCRIPT"; do bash -n "$f" || ko "syntaxe : $f"; done
 python3 -c "import ast,sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]" "$ROOT/systemd/audite-moi-mesures" "$ROOT/web/audite-moi-web.py" && ok "syntaxe Python" || ko "syntaxe Python"
 if command -v shellcheck >/dev/null; then
