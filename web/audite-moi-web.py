@@ -17,6 +17,7 @@ import argparse
 import base64
 import collections
 import getpass
+import gzip
 import hashlib
 import ipaddress
 import hmac
@@ -99,25 +100,50 @@ VERROU_REGLAGES = threading.Lock()
 class Donnees:
     def __init__(self, conf):
         self.conf = conf
+        # Rapports déjà lus, par nom : (mtime_ns, taille, contenu). Chaque page
+        # relisait jusqu'à 60 rapports JSON (plusieurs Mo) ; seuls les fichiers
+        # nouveaux ou modifiés sont désormais relus.
+        self._cache = {}
+        self._verrou_cache = threading.Lock()
 
     def rapports(self):
-        """Résumés des rapports JSON, du plus ancien au plus récent."""
+        """Rapports JSON, du plus ancien au plus récent (à traiter en lecture seule)."""
         dossier = self.conf["rapports"]
         res = []
         try:
             noms = os.listdir(dossier)
         except OSError:
             return res
+        vus = set()
         for nom in noms:
             if not (NOM_RAPPORT.match(nom) and nom.endswith(".json")):
                 continue
+            chemin = os.path.join(dossier, nom)
             try:
-                with open(os.path.join(dossier, nom), encoding="utf-8") as f:
-                    d = json.load(f)
-                d["_fichier"] = nom
-                res.append(d)
-            except (OSError, ValueError):
+                st = os.stat(chemin)
+            except OSError:
                 continue
+            cle = (st.st_mtime_ns, st.st_size)
+            with self._verrou_cache:
+                deja = self._cache.get(nom)
+            if deja and deja[0] == cle:
+                d = deja[1]
+            else:
+                try:
+                    with open(chemin, encoding="utf-8") as f:
+                        d = json.load(f)
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(d, dict):
+                    continue
+                d["_fichier"] = nom
+                with self._verrou_cache:
+                    self._cache[nom] = (cle, d)
+            vus.add(nom)
+            res.append(d)
+        with self._verrou_cache:
+            for nom in [n for n in self._cache if n not in vus]:
+                del self._cache[nom]
         res.sort(key=lambda d: d.get("horodatage", 0))
         return res
 
@@ -714,6 +740,7 @@ a.stat:hover{border-color:var(--muted)}
 .ic.OK{background:var(--ok)}.ic.WARN{background:var(--warn)}.ic.CRIT{background:var(--crit)}.ic.INFO{background:var(--info)}
 .faits{display:flex;gap:18px;flex-wrap:wrap;margin-top:8px}
 .faits div{min-width:0}.faits .val{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+.alerte-perime{margin:0 0 10px;padding:8px 12px;border-radius:8px;background:var(--warn-bg);font-size:13.5px}
 .raisons{font-size:12.5px;color:var(--muted);white-space:normal;margin-top:2px;max-width:420px}
 td.etat{white-space:normal}
 .modele{display:block;font-size:12px;color:var(--muted);max-width:260px;overflow:hidden;text-overflow:ellipsis}
@@ -741,6 +768,15 @@ ul.prev li{grid-template-columns:minmax(0,10em) minmax(0,1fr)}
 @media (max-width:620px){.kpis,.grid2{grid-template-columns:1fr}.coeurs{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:980px){.hero{grid-template-columns:repeat(2,minmax(0,1fr))}.actions{margin-left:0}}
 @media (max-width:620px){ol.items li{grid-template-columns:1fr}}
+select{max-width:100%}
+@media (max-width:700px){
+.topbar{position:static}.topbar .in{padding:8px 12px;gap:8px}
+.brand{width:100%}
+.nav{width:100%;gap:2px 0}.nav a{white-space:nowrap;font-size:13.5px;padding:5px 7px}
+.actions{width:100%;flex-wrap:nowrap}.actions form{flex:0 1 auto}
+.topbar .actions button{font-size:13px;padding:6px 10px;white-space:nowrap}
+.wrap{padding-left:12px;padding-right:12px}
+}
 """
 
 GRADE = lambda s: "A" if s >= 90 else "B" if s >= 75 else "C" if s >= 60 else "D" if s >= 40 else "E"
@@ -764,7 +800,7 @@ def page(titre, corps, nonce, nu=False):
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex"><title>{t}</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232f5fd0'/%3E%3Cpath d='M4 8.5l2.5 2.5L12 5' stroke='white' stroke-width='2' fill='none'/%3E%3C/svg%3E">
-<style nonce="{n}">{css}</style></head><body>{c}</body></html>""".format(t=esc(titre), n=nonce, css=CSS, c=corps if nu else '<div class="wrap">' + corps + "</div>")
+<link rel="stylesheet" href="{css}"></head><body>{c}</body></html>""".format(t=esc(titre), css=statique("app.css"), c=corps if nu else '<div class="wrap">' + corps + "</div>")
 
 
 def graphique(hist, nonce):
@@ -1063,7 +1099,7 @@ def tableau_bord(donnees, csrf, nonce, message, choix=""):
 <div class="count" id="fcount"><span></span><button type="button" id="freset" class="cache">Réinitialiser les filtres</button></div>
 <ol class="items" id="items">{li}</ol><p class="vide cache" id="fvide">Aucun constat ne correspond à ces filtres.</p></div>""".format(
             sc=seg_cat, sn=seg_niv, o=opts, li="".join(lis)))
-        out.append('<script nonce="{}">{}</script>'.format(nonce, JS_FILTRES))
+        out.append('<script src="{}" defer></script>'.format(statique("filtres.js")))
 
     # Journal des corrections
     if journal or etat.get("correction"):
@@ -1113,7 +1149,7 @@ def tableau_bord(donnees, csrf, nonce, message, choix=""):
     out.append('<footer>Audite-moi {v}{p} · <a href="https://github.com/oliv2776/Audite-moi">GitHub</a></footer></div>'.format(
         v=VERSION, p=" · prochain audit automatique : " + esc(prochain) if prochain else ""))
     out.append(DIALOGUE.format(csrf=esc(csrf)))
-    out.append('<script nonce="{}">{}</script>'.format(nonce, JS_DIALOGUE))
+    out.append('<script src="{}" defer></script>'.format(statique("dialogue.js")))
     if occupe or etat.get("correction"):
         out.append("""<script nonce="{n}">(function(){{var j=document.getElementById('journal');
 setInterval(function(){{fetch('/etat.json',{{credentials:'same-origin'}}).then(function(r){{return r.json();}}).then(function(e){{
@@ -1265,13 +1301,16 @@ function stockage(){
   var dl=(r.disques||[]).slice().sort(function(a,b){return (a.pool||'~').localeCompare(b.pool||'~')||(RANG[a.etat]-RANG[b.etat])||a.nom.localeCompare(b.nom);});
   T.innerHTML=dl.length?'<table><thead><tr><th>Disque</th><th>Type</th><th>Capacité</th><th>Pool</th><th class="num">Temp.</th><th class="num">En service</th><th class="num">Usure</th><th>État</th></tr></thead><tbody>'+
     dl.map(function(d){var ra=(d.raisons||[]).slice();if(d.note)ra.push(d.note);if(d.veille)ra.unshift('En veille : valeurs du relevé '+ilya(D.maintenant-(d.mesure||r.horodatage))+' (le disque n’est pas réveillé)');
+      if(d.donnees_perimees)ra.unshift('Relevé SMART indisponible : valeurs '+ilya(D.maintenant-(d.mesure||r.horodatage))+', non actualisées');
       return '<tr id="d-'+h(d.nom)+'"><td><b>'+h(d.nom)+'</b><span class="modele" title="'+h(d.modele)+'">'+h(d.modele||'')+'</span></td><td>'+h(d.type||'—')+'</td><td>'+(d.taille?oct(d.taille):'—')+'</td>'+
       '<td>'+h(d.pool||'—')+(d.role&&d.role!=='donnees'?' <span class="tag">'+h(ROLE[d.role]||d.role)+'</span>':'')+'</td><td class="num">'+(d.temperature!=null?d.temperature+' °C':'—')+'</td>'+
       '<td class="num">'+duree(d.heures)+'</td><td class="num">'+(d.usure!=null?d.usure+' %':'—')+'</td><td class="etat">'+badge(d.veille&&d.etat==='ok'?'veille':d.etat)+
       (ra.length?'<div class="raisons">'+ra.map(h).join('<br>')+'</div>':'')+'</td></tr>';}).join('')+'</tbody></table>':'<p class="empty">Aucun disque trouvé par smartctl.</p>';
   $('k-sto').innerHTML=tot?oct(lib)+'<small> libres</small>':'—';
   $('k-sto-s').textContent=tot?'sur '+oct(tot)+((r.pools||[]).length?' · '+r.pools.length+' pool(s) ZFS':''):' ';
-  $('k-sto-e').innerHTML=nC?icone('critique')+' '+nC+' disque(s) en état critique':nW?icone('attention')+' '+nW+' disque(s) à surveiller':(r.disques||[]).length?icone('ok')+' tous les disques sont sains':' ';
+  var perime=r.smart_scan_ok===false;
+  if(perime)T.insertAdjacentHTML('afterbegin','<p class="alerte-perime">'+icone('attention')+' smartctl n’a pas pu lister les disques au dernier relevé : les valeurs ci-dessous sont les dernières connues. Vérifiez <code>sudo smartctl --scan-open</code>.</p>');
+  $('k-sto-e').innerHTML=perime?icone('attention')+' relevé SMART indisponible':nC?icone('critique')+' '+nC+' disque(s) en état critique':nW?icone('attention')+' '+nW+' disque(s) à surveiller':(r.disques||[]).length?icone('ok')+' tous les disques sont sains':' ';
 }
 $('st-maj').addEventListener('click',function(){var b=this;b.disabled=true;
   fetch('/mesurer',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'csrf='+encodeURIComponent(CSRF)})
@@ -1342,12 +1381,35 @@ def page_materiel(app, csrf, nonce):
     init = json.dumps(dict(app.mesures.instantane(), seuils=app.seuils.effectifs()), ensure_ascii=False).replace("<", "\\u003c")
     corps = (barre(csrf, etat["en_cours"] or etat["demande"], "materiel", der) + '<div class="wrap">' + HTML_MATERIEL +
              '<footer>Audite-moi {v} · <a href="https://github.com/oliv2776/Audite-moi">GitHub</a></footer></div>'.format(v=VERSION) +
-             '<script type="application/json" id="init">{}</script><script nonce="{}">{}</script>'.format(init, nonce, JS_MATERIEL))
+             '<script type="application/json" id="init">{}</script><script src="{}" defer></script>'.format(init, statique("materiel.js")))
     hote = der.get("hote", "") if der else socket.gethostname()
     return page("Audite-moi — matériel — " + hote, corps, nonce, nu=True)
 
 
 # ------------------------------------------------------------------ seuils --
+CACHE_STATIQUE = "public, max-age=31536000, immutable"
+
+
+def _statiques():
+    res = {}
+    for nom, texte, type_ in (("app.css", CSS, "text/css; charset=utf-8"), ("filtres.js", JS_FILTRES, "text/javascript; charset=utf-8"),
+                              ("dialogue.js", JS_DIALOGUE, "text/javascript; charset=utf-8"),
+                              ("materiel.js", JS_MATERIEL, "text/javascript; charset=utf-8"),
+                              ("reglages.js", JS_REGLAGES, "text/javascript; charset=utf-8")):
+        brut = texte.encode("utf-8")
+        empreinte = hashlib.sha256(brut).hexdigest()[:12]
+        f = {"brut": brut, "gz": gzip.compress(brut, 9, mtime=0), "type": type_, "etag": '"{}"'.format(empreinte)}
+        base, ext = nom.rsplit(".", 1)
+        f["url"] = "/static/{}.{}.{}".format(base, empreinte, ext)
+        res[nom] = f
+        res["{}.{}.{}".format(base, empreinte, ext)] = f
+    return res
+
+
+def statique(nom):
+    return STATIQUES[nom]["url"]
+
+
 def fichier_seuils_def(conf):
     ici = os.path.dirname(os.path.abspath(__file__))
     for f in (conf.get("seuils_def") or "", os.path.join(ici, "seuils.json"), os.path.join(ici, "..", "seuils.json"), "/usr/local/lib/audite-moi/seuils.json"):
@@ -1438,6 +1500,9 @@ var t=document.getElementById('tout-defaut');if(t)t.addEventListener('click',fun
 })();"""
 
 
+STATIQUES = _statiques()
+
+
 def page_reglages(app, csrf, nonce, message="", erreurs=None, saisie=None):
     d = app.donnees
     hist = d.rapports()
@@ -1479,7 +1544,7 @@ def page_reglages(app, csrf, nonce, message="", erreurs=None, saisie=None):
         out.append('<div class="card"><h2>{}</h2>{}</div>'.format(esc(g["nom"]), "".join(lignes)))
     out.append('<div class="barre-bas"><button type="button" id="tout-defaut">Tout rétablir par défaut</button><button class="primary">Enregistrer</button></div></form>')
     out.append('<footer>Audite-moi {} · <a href="https://github.com/oliv2776/Audite-moi">GitHub</a></footer></div>'.format(VERSION))
-    out.append('<script nonce="{}">{}</script>'.format(nonce, JS_REGLAGES))
+    out.append('<script src="{}" defer></script>'.format(statique("reglages.js")))
     return page("Audite-moi — réglages", "".join(out), nonce, nu=True)
 
 def page_texte(donnees, csrf, nonce, nom, contenu):
@@ -1516,13 +1581,13 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt_, *args):
         sys.stderr.write("{} {}\n".format(self.client_address[0], fmt_ % args))
 
-    def envoyer(self, code, corps=b"", type_="text/html; charset=utf-8", entetes=None, csp=None):
+    def envoyer(self, code, corps=b"", type_="text/html; charset=utf-8", entetes=None, csp=None, cache="no-store"):
         if isinstance(corps, str):
             corps = corps.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", type_)
         self.send_header("Content-Length", str(len(corps)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "same-origin")   # « no-referrer » ferait envoyer « Origin: null »
@@ -1539,8 +1604,23 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
         e.update(entetes or {})
         self.envoyer(303, b"", entetes=e)
 
+    def servir_statique(self, nom):
+        """Feuille de style et scripts de l'interface : contenu fixe, sans donnée
+        du serveur, donc servi sans session, compressé et mis en cache un an
+        (le nom contient l'empreinte du contenu : une mise à jour change l'URL)."""
+        f = STATIQUES.get(nom)
+        if not f or f["url"] != "/static/" + nom:   # seulement les noms avec empreinte (cache d'un an)
+            return self.envoyer(404, b"Introuvable", "text/plain; charset=utf-8")
+        if self.headers.get("If-None-Match") == f["etag"]:
+            return self.envoyer(304, b"", f["type"], entetes={"ETag": f["etag"]}, cache=CACHE_STATIQUE)
+        gz = "gzip" in (self.headers.get("Accept-Encoding") or "")
+        entetes = {"ETag": f["etag"], "Vary": "Accept-Encoding"}
+        if gz:
+            entetes["Content-Encoding"] = "gzip"
+        return self.envoyer(200, f["gz"] if gz else f["brut"], f["type"], entetes=entetes, cache=CACHE_STATIQUE)
+
     def csp_page(self, nonce):
-        return ("default-src 'none'; style-src 'nonce-{n}'; script-src 'nonce-{n}'; img-src 'self' data:; connect-src 'self'; "
+        return ("default-src 'none'; style-src 'self' 'nonce-{n}'; script-src 'self' 'nonce-{n}'; img-src 'self' data:; connect-src 'self'; "
                 "form-action 'self'; frame-ancestors 'none'; base-uri 'none'").format(n=nonce)
 
     def session(self):
@@ -1593,6 +1673,8 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         chemin = urllib.parse.urlsplit(self.path)
         nonce = secrets.token_urlsafe(16)
+        if chemin.path.startswith("/static/"):
+            return self.servir_statique(chemin.path[len("/static/"):])
         if chemin.path == "/connexion":
             if self.session():
                 return self.rediriger("/")

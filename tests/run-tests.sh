@@ -33,6 +33,7 @@ done
 for d in sda:0 sdb:0 sdc:1 sdd:1 sde:1 nvme0n1:0; do mkdir -p "$S/block/${d%%:*}/queue"; echo "${d#*:}" > "$S/block/${d%%:*}/queue/rotational"; done
 printf 'x x x\nname type data\nsize 4 12884901888\nc_min 4 1073741824\nc_max 4 16777216000\nhits 4 98765432\nmisses 4 1234567\n' > "$TMP/arcstats"
 
+export AUDITE_MOI_SUDO_TRACE=$TMP/appels-sudo.txt
 export AUDITE_MOI_FIX=$ROOT/tests/fixtures AUDITE_MOI_DRI_DIR=$TMP/dri AUDITE_MOI_DRM_CLASS=$S/drm \
        AUDITE_MOI_ARCSTATS=$TMP/arcstats AUDITE_MOI_SYS_BLOCK=$S/block AUDITE_MOI_SMB_CONF=$ROOT/tests/fixtures/smb.conf
 
@@ -317,6 +318,19 @@ for f in "$ROOT"/install.sh "$ROOT"/uninstall.sh "$ROOT"/systemd/audite-moi-run 
 python3 -c "import ast,sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]" "$ROOT/systemd/audite-moi-mesures" "$ROOT/web/audite-moi-web.py" && ok "syntaxe Python" || ko "syntaxe Python"
 if command -v shellcheck >/dev/null; then
   shellcheck -S warning "$SCRIPT" "$ROOT/install.sh" "$ROOT/uninstall.sh" "$ROOT/systemd/audite-moi-run" && ok "shellcheck sans avertissement" || ko "shellcheck"
+  # SC2006 est de niveau « style » : sans ce contrôle, un `…` non échappé dans un
+  # conseil serait exécuté par l'audit (root) au lieu d'être affiché.
+  shellcheck -S style -i SC2006 "$SCRIPT" "$ROOT/install.sh" "$ROOT/uninstall.sh" "$ROOT/systemd/audite-moi-run" \
+    && ok "aucun accent grave non échappé (commande exécutée au lieu d'être affichée)" || ko "accents graves non échappés (SC2006)"
+fi
+
+# ufw (iptables-nft) a besoin de netlink : sans AF_NETLINK, la suppression d'une règle échouerait.
+if grep -qE '^RestrictAddressFamilies=.*AF_NETLINK' "$ROOT/systemd/audite-moi-corriger.service"; then ok "le correcteur peut piloter ufw (AF_NETLINK autorisé)"
+else ko "audite-moi-corriger.service : AF_NETLINK manquant (ufw échouerait)"; fi
+if [[ -s $AUDITE_MOI_SUDO_TRACE ]]; then
+  ko "l'audit a tenté d'exécuter sudo (conseil exécuté au lieu d'être affiché ?) :"; sed 's/^/      /' "$AUDITE_MOI_SUDO_TRACE"
+else
+  ok "aucun appel à sudo pendant les audits simulés"
 fi
 
 if [[ ${1:-} == --reel ]]; then

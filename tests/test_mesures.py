@@ -65,5 +65,22 @@ class TestInventaireSMART(unittest.TestCase):
             self.assertEqual(sauvegarde["disques"]["sda"]["etat"], "ok")
 
 
+    def test_echecs_smart_repetes_previennent_puis_retablissement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            etat = os.path.join(tmp, "alertes.json")
+            rapports = os.path.join(tmp, "rapports")
+            os.mkdir(rapports)
+            with open(etat, "w", encoding="utf-8") as f:
+                json.dump({"disques": {"sda": {"etat": "ok", "crc": 0, "vu": 1}}}, f)
+            echec = {"disques": [{"nom": "sda", "etat": "ok", "donnees_perimees": True}], "smart_scan_ok": False, "pools": []}
+            ok = {"disques": [{"nom": "sda", "etat": "ok"}], "smart_scan_ok": True, "pools": []}
+            recus = []
+            with patch.object(mesures, "unites_sauvegarde", return_value={}):
+                for n, mes in enumerate([echec, echec, echec, echec, ok]):
+                    recus.append(mesures.alertes({}, mes, {}, etat, rapports, 123456 + n * 600, "root"))
+            indispo = [i for i, m in enumerate(recus) if any("Relevé SMART indisponible" in x for x in m)]
+            self.assertEqual(indispo, [2], "une seule alerte, au 3e relevé raté")
+            self.assertTrue(any("de nouveau disponible" in x for x in recus[4]))
+
 if __name__ == "__main__":
     unittest.main()

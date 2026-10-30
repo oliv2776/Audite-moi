@@ -513,10 +513,10 @@ check_systeme() {
       local hits; hits=$(grep -E "$pat" <<< "$kerr" | tail -n 12)
       local fst; fst=$(grep -oE "Duplicate entry in '/etc/fstab'|Failed to create unit file '[^']+'" <<< "$kerr" | grep -oE "/run/systemd/generator/[^']+" | sort -u | sed 's|.*/||' | tr '\n' ' ')
       [[ -n $fst ]] && warn "Entrée en double dans /etc/fstab ($fst)" "systemd signale le même point de montage deux fois (à chaque rechargement) : au démarrage, le montage peut échouer ou masquer l'autre entrée." \
-        "Repérez le doublon : `grep -v '^#' /etc/fstab`, supprimez une des deux lignes (gardez celle avec UUID=…), puis `sudo systemctl daemon-reload && sudo mount -a`"
+        "Repérez le doublon : \`grep -v '^#' /etc/fstab\`, supprimez une des deux lignes (gardez celle avec UUID=…), puis \`sudo systemctl daemon-reload && sudo mount -a\`"
       if [[ -n $hits ]]; then
         warn "Erreurs matérielles ou système dans le journal du noyau (24 h)" "$hits" \
-          "Croisez avec la section « Disques (SMART) » ; détail : `journalctl -k -p err --since '24 hours ago'`"
+          "Croisez avec la section « Disques (SMART) » ; détail : \`journalctl -k -p err --since '24 hours ago'\`"
       elif [[ -n $kerr ]]; then
         info "$(nlines "$kerr") message(s) d'erreur du noyau (24 h)" "$(tail -n 5 <<< "$kerr")"
       else
@@ -2399,7 +2399,7 @@ PY
 }
 OPN_NETS=""
 opn_api() {   # opn_api chemin fichier → code HTTP (identifiants passés par l'entrée standard, pas sur la ligne de commande)
-  local -a k=(); oui "$(cfg OPNSENSE_VERIFIER_TLS non)" || k=(-k)
+  local -a k=(); oui "$(cfg OPNSENSE_VERIFIER_TLS oui)" || k=(-k)
   printf 'user = "%s:%s"\n' "$(cfg OPNSENSE_KEY)" "$(cfg OPNSENSE_SECRET)" \
     | tmo 40 curl -sS -m 30 "${k[@]}" -K - -o "$2" -w '%{http_code}' "$(cfg OPNSENSE_URL)$1" 2>/dev/null || echo 000
 }
@@ -2421,7 +2421,9 @@ check_opnsense() {
   case $code in
     200) ;;
     401) warn "OPNsense refuse la clé API (HTTP 401)" "Clé ou secret incorrect." "Vérifiez OPNSENSE_KEY et OPNSENSE_SECRET dans $CONF_FILE"; return ;;
-    000) warn "OPNsense injoignable ($url)" "Pas de réponse de l'API." "Vérifiez OPNSENSE_URL (ex. https://10.10.1.1) et que le NAS peut joindre l'interface d'administration"; return ;;
+    000) local tls=""
+         oui "$(cfg OPNSENSE_VERIFIER_TLS oui)" && tls=" Si le routeur utilise son certificat auto-signé d'origine, la vérification HTTPS échoue aussi : mettez OPNSENSE_VERIFIER_TLS=non dans $CONF_FILE (ou relancez \`sudo ./install.sh --configurer-opnsense\`)."
+         warn "OPNsense injoignable ($url)" "Pas de réponse de l'API.$tls" "Vérifiez OPNSENSE_URL (ex. https://10.10.1.1) et que le NAS peut joindre l'interface d'administration"; return ;;
     *) info "OPNsense : état des mises à jour illisible (HTTP $code)" "" "Ajoutez le privilège « System: Firmware » à l'utilisateur de la clé API" ;;
   esac
   if [[ $code == 200 ]]; then

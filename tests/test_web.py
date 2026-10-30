@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Tests de l'interface web d'Audite-moi (bibliothèque standard uniquement) :  python3 tests/test_web.py"""
+import gzip
 import http.client
 import importlib.util
 import json
@@ -297,9 +298,12 @@ class TestInterface(unittest.TestCase):
         cookie = self.connexion()
         r, t = self.req("GET", "/materiel", cookie=cookie)
         self.assertEqual(r.status, 200)
-        nonce = re.search(r"script-src 'nonce-([^']+)'", r.getheader("Content-Security-Policy")).group(1)
-        self.assertIn('<script nonce="{}">'.format(nonce), t)
+        csp = r.getheader("Content-Security-Policy")
+        self.assertRegex(csp, r"script-src 'self' 'nonce-[^']+'")
+        self.assertIn('<script src="{}" defer></script>'.format(web.statique("materiel.js")), t)
+        self.assertIn('<link rel="stylesheet" href="{}">'.format(web.statique("app.css")), t)
         self.assertNotIn(' style="', t)
+        self.assertNotIn("<style", t)
         self.assertNotIn("<b>", t.split('id="init">')[1].split("</script>")[0])   # données échappées dans le JSON embarqué
         self.assertIn('class="on">Matériel', t)
         r, t = self.req("GET", "/materiel.json", cookie=cookie)
@@ -308,6 +312,44 @@ class TestInterface(unittest.TestCase):
         self.assertEqual(d["releve"]["pools"][0]["nom"], "stockage<b>")
         self.assertIsNotNone(d["direct"]["cpu"]["pourcent"])
         self.assertIn("demande", d)
+
+    def test_fichiers_statiques(self):
+        url = web.statique("app.css")
+        self.assertRegex(url, r"^/static/app\.[0-9a-f]{12}\.css$")
+        r, t = self.req("GET", url)                                  # sans session : contenu fixe, rien de sensible
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.getheader("Cache-Control"), "public, max-age=31536000, immutable")
+        self.assertIn(".topbar", t)
+        etag = r.getheader("ETag")
+        r, _ = self.req("GET", url, entetes={"If-None-Match": etag})
+        self.assertEqual(r.status, 304)
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        c.request("GET", web.statique("materiel.js"), headers={"Accept-Encoding": "gzip"})
+        r = c.getresponse()
+        brut = r.read()
+        c.close()
+        self.assertEqual(r.getheader("Content-Encoding"), "gzip")
+        self.assertIn(b"use strict", gzip.decompress(brut))
+        for mauvais in ("/static/app.css", "/static/app.000000000000.css", "/static/../web.json", "/static/"):
+            r, _ = self.req("GET", mauvais)
+            self.assertEqual(r.status, 404, mauvais)                  # seuls les noms avec empreinte sont servis
+
+    def test_cache_des_rapports(self):
+        d = web.Donnees({"rapports": self.tmp.name + "/cache-rapports"})
+        os.mkdir(d.conf["rapports"])
+        rapport(d.conf["rapports"], "rapport-nas-test-20260101-1000", 1767258000, 55, 40)
+        premier = d.rapports()
+        self.assertIs(d.rapports()[0], premier[0])                   # fichier inchangé : pas de relecture
+        chemin = os.path.join(d.conf["rapports"], "rapport-nas-test-20260101-1000.json")
+        with open(chemin, encoding="utf-8") as f:
+            contenu = json.load(f)
+        contenu["hote"] = "autre-nom-plus-long"
+        with open(chemin, "w", encoding="utf-8") as f:
+            json.dump(contenu, f)
+        self.assertEqual(d.rapports()[0]["hote"], "autre-nom-plus-long")   # fichier modifié : relu
+        os.remove(chemin)
+        self.assertEqual(d.rapports(), [])
+        self.assertEqual(d._cache, {})                              # rapport supprimé : oublié
 
     def test_tendances(self):
         h = os.path.join(self.tmp.name, "etat", "historique.jsonl")

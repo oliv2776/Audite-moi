@@ -624,6 +624,18 @@ def alertes(conf, mes, ecoute, chemin_etat, rapports, maintenant, groupe):
         elif j is None or j > 2 * S("alerte_pool_plein_jours", 30):
             a["bientot"] = False
 
+    # Relevé SMART en échec : prévenir après 3 relevés ratés d'affilée (environ
+    # 30 minutes), sinon les disques resteraient affichés « sains » sans mesure.
+    if mes.get("smart_scan_ok", True):
+        if st.get("smart_echecs", 0) >= 3:
+            msgs.append("✅ Relevé SMART des disques de nouveau disponible")
+        st["smart_echecs"] = 0
+    else:
+        st["smart_echecs"] = st.get("smart_echecs", 0) + 1
+        if st["smart_echecs"] == 3:
+            msgs.append("🟠 <b>Relevé SMART indisponible</b>\nsmartctl échoue depuis plusieurs relevés : l'état des disques n'est plus surveillé. "
+                        "Vérifiez : sudo smartctl --scan-open")
+
     # Disques : changement d'état, erreurs CRC en hausse, disque disparu.
     # Un inventaire SMART en échec ne permet ni de confirmer une disparition,
     # ni de modifier l'état mémorisé des disques.

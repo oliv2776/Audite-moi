@@ -126,6 +126,7 @@ Ils se règlent dans `/etc/audite-moi/audit.conf` (créé par l'installateur ; `
 | `EXTERNE=oui` | teste depuis Internet les noms d'hôte des tunnels Cloudflare (trouvés automatiquement) |
 | `DOMAINES_EXTRA="a.exemple.fr b.exemple.fr"` | autres noms à tester (si les routes du tunnel ne sont pas visibles) |
 | `OPNSENSE_URL`, `OPNSENSE_KEY`, `OPNSENSE_SECRET` | accès en lecture à OPNsense (voir ci-dessous) |
+| `OPNSENSE_VERIFIER_TLS=non` | ne pas vérifier le certificat HTTPS du routeur (seulement s'il garde son certificat auto-signé d'origine ; vérifié par défaut) |
 | `SCAN_RESEAU=oui` | scan `nmap` du réseau local lors de l'audit complet |
 | `SCAN_RESEAUX="10.10.1.0/24 192.168.10.0/24"` | réseaux à scanner (par défaut : ceux d'OPNsense, sinon ceux du NAS ; 1 024 adresses au plus par réseau) |
 
@@ -164,7 +165,7 @@ L'installateur vous guide : créez un bot avec **@BotFather** dans Telegram (`/n
 
 Vous êtes ensuite prévenu, en quelques minutes :
 - **pool** dégradé ou de nouveau en ligne, rempli à 80 / 90 / 95 %, ou plein dans moins de 30 jours au rythme actuel ;
-- **disque** qui passe « à surveiller » ou « critique », erreurs CRC en hausse, disque disparu ;
+- **disque** qui passe « à surveiller » ou « critique », erreurs CRC en hausse, disque disparu ; relevé SMART impossible depuis 30 minutes (les disques ne sont alors plus surveillés) ;
 - **sauvegarde** planifiée en échec ;
 - **nouveau port en écoute** sur le serveur ;
 - **après chaque audit** : notes, nouveaux problèmes, problèmes résolus, nouveaux appareils sur le réseau ;
