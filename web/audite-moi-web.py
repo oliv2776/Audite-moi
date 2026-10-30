@@ -18,6 +18,7 @@ import base64
 import collections
 import getpass
 import hashlib
+import ipaddress
 import hmac
 import html
 import http.server
@@ -30,6 +31,7 @@ import ssl
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import urllib.parse
 from datetime import datetime
@@ -1550,13 +1552,26 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
         return None
 
     def lire_formulaire(self):
-        try:
-            n = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            n = 0
+        """Lit un formulaire borné ; refuse les longueurs ambiguës et les corps tronqués."""
+        longueurs = self.headers.get_all("Content-Length", [])
+        if len(longueurs) > 1 or self.headers.get("Transfer-Encoding"):
+            raise ValueError("en-têtes de longueur ambigus")
+        brut = longueurs[0].strip() if longueurs else "0"
+        if not brut.isascii() or not brut.isdigit():
+            raise ValueError("Content-Length invalide")
+        if len(brut) > 10:
+            raise OverflowError("requête trop volumineuse")
+        n = int(brut)
         if n > 4096:
-            return None
-        return {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(n).decode("utf-8", "replace")).items()}
+            raise OverflowError("requête trop volumineuse")
+        contenu = self.rfile.read(n)
+        if len(contenu) != n:
+            raise ValueError("corps de requête tronqué")
+        try:
+            champs = urllib.parse.parse_qs(contenu.decode("utf-8", "strict"), max_num_fields=64)
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise ValueError("formulaire invalide") from exc
+        return {k: v[0] for k, v in champs.items()}
 
     def origine_ok(self):
         orig = self.headers.get("Origin")
@@ -1699,10 +1714,16 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
         chemin = urllib.parse.urlsplit(self.path).path
         nonce = secrets.token_urlsafe(16)
         if not self.origine_ok():
+            self.close_connection = True
             return self.envoyer(403, b"Origine refusee", "text/plain; charset=utf-8")
-        form = self.lire_formulaire()
-        if form is None:
+        try:
+            form = self.lire_formulaire()
+        except OverflowError:
+            self.close_connection = True
             return self.envoyer(413, b"Requete trop volumineuse", "text/plain; charset=utf-8")
+        except ValueError:
+            self.close_connection = True
+            return self.envoyer(400, b"Formulaire invalide", "text/plain; charset=utf-8")
         if chemin == "/connexion":
             ip = self.client_address[0]
             if self.app.bloque(ip):
@@ -1768,14 +1789,81 @@ class Application:
         self.seuils = Seuils(conf)
         self.tls = bool(conf.get("tls_cert"))
         self._sessions = {}
-        self._echecs = {}
         self._verrou = threading.Lock()
+        self._echecs = self._charger_echecs()
+
+    MAX_SESSIONS = 256
+    MAX_IPS_ECHECS = 512
+    FENETRE_ECHECS = 900
+    MAX_ECHECS = 5
+
+    def _fichier_echecs(self):
+        return self.conf.get("fichier_tentatives") or os.path.join(self.conf["reglages"], "tentatives-connexion.json")
+
+    def _charger_echecs(self):
+        """Recharge les tentatives récentes afin qu'un redémarrage ne réinitialise pas la protection."""
+        try:
+            with open(self._fichier_echecs(), encoding="utf-8") as f:
+                donnees = json.load(f)
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as exc:
+            sys.stderr.write("limitation des connexions : impossible de lire l'état persistant : {}\n".format(exc))
+            return {}
+        if not isinstance(donnees, dict):
+            return {}
+        maintenant = time.time()
+        resultat = {}
+        for ip, valeurs in donnees.items():
+            if not isinstance(ip, str) or not isinstance(valeurs, list):
+                continue
+            try:
+                ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            recents = [float(v) for v in valeurs
+                       if isinstance(v, (int, float)) and not isinstance(v, bool)
+                       and maintenant - self.FENETRE_ECHECS < v <= maintenant + 60]
+            if recents:
+                resultat[ip] = recents[-self.MAX_ECHECS:]
+        return dict(sorted(resultat.items(), key=lambda item: item[1][-1], reverse=True)[:self.MAX_IPS_ECHECS])
+
+    def _sauver_echecs(self):
+        """Écrit l'état par remplacement atomique ; mkstemp crée un fichier privé (0600)."""
+        chemin = self._fichier_echecs()
+        dossier = os.path.dirname(chemin) or "."
+        fd = None
+        temporaire = None
+        try:
+            fd, temporaire = tempfile.mkstemp(prefix=".tentatives-", dir=dossier)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                fd = None
+                json.dump(self._echecs, f, separators=(",", ":"))
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporaire, chemin)
+            temporaire = None
+        except OSError as exc:
+            sys.stderr.write("limitation des connexions : impossible de persister l'état : {}\n".format(exc))
+        finally:
+            if fd is not None:
+                os.close(fd)
+            if temporaire:
+                try:
+                    os.unlink(temporaire)
+                except OSError:
+                    pass
 
     def nouvelle_session(self):
+        maintenant = time.time()
         jeton = secrets.token_urlsafe(32)
         with self._verrou:
+            self._sessions = {k: v for k, v in self._sessions.items() if v["expire"] > maintenant}
+            if len(self._sessions) >= self.MAX_SESSIONS:
+                ancien = min(self._sessions, key=lambda k: self._sessions[k]["expire"])
+                self._sessions.pop(ancien, None)
             self._sessions[jeton] = {"jeton": jeton, "csrf": secrets.token_urlsafe(24),
-                                     "expire": time.time() + self.conf["duree_session_h"] * 3600}
+                                     "expire": maintenant + self.conf["duree_session_h"] * 3600}
         return jeton
 
     def session_valide(self, jeton):
@@ -1791,14 +1879,38 @@ class Application:
             self._sessions.pop(jeton, None)
 
     def echec(self, ip):
+        maintenant = time.time()
+        try:
+            ip = str(ipaddress.ip_address(ip))
+        except ValueError:
+            return
         with self._verrou:
-            self._echecs.setdefault(ip, []).append(time.time())
+            for adresse in list(self._echecs):
+                recents = [t for t in self._echecs[adresse] if maintenant - t < self.FENETRE_ECHECS]
+                if recents:
+                    self._echecs[adresse] = recents
+                else:
+                    self._echecs.pop(adresse, None)
+            if ip not in self._echecs and len(self._echecs) >= self.MAX_IPS_ECHECS:
+                plus_ancien = min(self._echecs, key=lambda k: self._echecs[k][-1])
+                self._echecs.pop(plus_ancien, None)
+            self._echecs.setdefault(ip, []).append(maintenant)
+            self._echecs[ip] = self._echecs[ip][-self.MAX_ECHECS:]
+            self._sauver_echecs()
 
     def bloque(self, ip):
+        try:
+            ip = str(ipaddress.ip_address(ip))
+        except ValueError:
+            return False
+        maintenant = time.time()
         with self._verrou:
-            recents = [t for t in self._echecs.get(ip, []) if time.time() - t < 900]
-            self._echecs[ip] = recents
-            return len(recents) >= 5
+            recents = [t for t in self._echecs.get(ip, []) if maintenant - t < self.FENETRE_ECHECS]
+            if recents:
+                self._echecs[ip] = recents
+            else:
+                self._echecs.pop(ip, None)
+            return len(recents) >= self.MAX_ECHECS
 
 
 class Serveur(http.server.ThreadingHTTPServer):

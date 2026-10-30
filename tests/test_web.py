@@ -188,11 +188,47 @@ class TestInterface(unittest.TestCase):
     def test_limite_tentatives(self):
         web_ip = "127.0.0.1"
         app = self.srv.app
+        chemin = app._fichier_echecs()
+        app._echecs.clear()
+        try:
+            os.unlink(chemin)
+        except FileNotFoundError:
+            pass
         for _ in range(5):
             app.echec(web_ip)
+        self.assertTrue(app.bloque(web_ip))
+        # Un nouveau processus recharge les échecs depuis le fichier privé.
+        redemarre = web.Application(app.conf)
+        self.assertTrue(redemarre.bloque(web_ip))
         r, _ = self.req("POST", "/connexion", {"mot_de_passe": MDP})
         self.assertEqual(r.status, 429)
         app._echecs.clear()
+        try:
+            os.unlink(chemin)
+        except FileNotFoundError:
+            pass
+
+    def test_sessions_bornees(self):
+        app = self.srv.app
+        app._sessions.clear()
+        app.MAX_SESSIONS = 2
+        a, b, c = app.nouvelle_session(), app.nouvelle_session(), app.nouvelle_session()
+        self.assertEqual(len(app._sessions), 2)
+        self.assertIsNone(app.session_valide(a))
+        self.assertIsNotNone(app.session_valide(c))
+
+    def test_formulaire_longueur_invalide(self):
+        r, _ = self.req("POST", "/connexion", None, entetes={"Content-Length": "-1"})
+        self.assertEqual(r.status, 400)
+        r, _ = self.req("POST", "/connexion", {"mot_de_passe": "x" * 5000})
+        self.assertEqual(r.status, 413)
+
+    def test_formulaire_trop_de_champs(self):
+        corps = "&".join("k{}=v".format(i) for i in range(65))
+        r, _ = self.req("POST", "/connexion", None, entetes={
+            "Content-Length": str(len(corps)), "Content-Type": "application/x-www-form-urlencoded"
+        })
+        self.assertIn(r.status, (400, 413))
 
     def test_navigation(self):
         ck = self.connexion()
