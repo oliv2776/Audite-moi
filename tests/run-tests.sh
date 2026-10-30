@@ -345,6 +345,24 @@ else
   ko "échec de zfs list : contrôle de sauvegarde non distingué"
 fi
 
+echo "▶ Contrôles réseau indisponibles"
+OUT_NET=$TMP/rapports-reseau-indisponible
+mkdir -p "$OUT_NET"
+AUDITE_MOI_IP_ROUTE_ECHEC=1 AUDITE_MOI_IP_IPV6_ECHEC=1 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_NET" --config "$TMP/audit.conf" --no-color --quick > "$TMP/reseau-indisponible.txt" 2>&1 || true
+JN=$(ls "$OUT_NET"/rapport-*.json 2>/dev/null | head -n 1)
+if [[ -n $JN ]] \
+   && jq -e '.constats[] | select(.titre == "Contrôle de la route par défaut indisponible")' "$JN" >/dev/null \
+   && ! jq -e '.constats[] | select(.titre == "Aucune route par défaut")' "$JN" >/dev/null; then
+  ok "échec de lecture des routes : pas de fausse alerte d'absence de passerelle"
+else
+  ko "échec de lecture des routes : contrôle indisponible non distingué"
+fi
+if [[ -n $JN ]] && jq -e '.constats[] | select(.titre == "Inventaire IPv6 indisponible")' "$JN" >/dev/null; then
+  ok "échec de lecture IPv6 : inventaire signalé indisponible"
+else
+  ko "échec de lecture IPv6 : indisponibilité non signalée"
+fi
+
 [[ -n ${GARDER:-} ]] && { cp -r "$OUT" "$GARDER"; echo "Rapports copiés dans $GARDER"; }
 echo
 if ((fail)); then echo "Des tests ont échoué."; exit 1; fi
