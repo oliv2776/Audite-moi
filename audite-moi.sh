@@ -852,8 +852,8 @@ check_zfs() {
   local v; v=$(zfs version 2>/dev/null | tr '\n' ' ')
   [[ -n $v ]] && info "Version d'OpenZFS" "$v"
   if ((ZFS_SCAN_OK == 0)); then
-    warn "Inventaire ZFS indisponible" "La commande `zpool list` a échoué ou a dépassé son délai : impossible de déterminer l'état des pools. Aucune alerte de pool absent n'est émise." \
-      "Vérifiez le chargement du module ZFS et les journaux : `sudo zpool status` et `journalctl -k -b`"
+    warn "Inventaire ZFS indisponible" "La commande \`zpool list\` a échoué ou a dépassé son délai : impossible de déterminer l'état des pools. Aucune alerte de pool absent n'est émise." \
+      "Vérifiez le chargement du module ZFS et les journaux : \`sudo zpool status\` et \`journalctl -k -b\`"
     return
   fi
   if ((${#POOLS[@]} == 0)); then
