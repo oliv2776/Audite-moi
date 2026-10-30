@@ -393,6 +393,20 @@ else
   ko "échec de journalctl : indisponibilité non distinguée"
 fi
 
+echo "▶ Journaux du noyau indisponibles"
+OUT_KJ=$TMP/rapports-journal-noyau-indisponible
+mkdir -p "$OUT_KJ"
+AUDITE_MOI_JOURNAL_NOYAU_ECHEC=1 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_KJ" --config "$TMP/audit.conf" --no-color --quick > "$TMP/journal-noyau-indisponible.txt" 2>&1 || true
+JK=$(ls "$OUT_KJ"/rapport-*.json 2>/dev/null | head -n 1)
+if [[ -n $JK ]] \
+   && jq -e '.constats[] | select(.titre == "Lecture des erreurs du noyau indisponible")' "$JK" >/dev/null \
+   && ! jq -e '.constats[] | select(.titre == "Aucune erreur dans le journal du noyau (24 h)")' "$JK" >/dev/null \
+   && jq -e '.constats[] | select(.titre == "Historique OOM du noyau indisponible")' "$JK" >/dev/null; then
+  ok "échec de journalctl noyau : erreurs et historique OOM signalés indisponibles"
+else
+  ko "échec de journalctl noyau : indisponibilité non distinguée"
+fi
+
 [[ -n ${GARDER:-} ]] && { cp -r "$OUT" "$GARDER"; echo "Rapports copiés dans $GARDER"; }
 echo
 if ((fail)); then echo "Des tests ont échoué."; exit 1; fi
