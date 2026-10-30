@@ -2725,7 +2725,7 @@ check_ssh() {
   if [[ ! -s $lf ]] && ((${#auth_files[@]})); then
     if cat "${auth_files[@]}" >/dev/null 2>&1; then
       log_ok=1
-      grep -hE 'sshd(-session)?\\[' "${auth_files[@]}" >> "$lf" || true
+      grep -hE 'sshd(-session)?\[' "${auth_files[@]}" >> "$lf" || true
     fi
   fi
   local fails nfail ipc acc
