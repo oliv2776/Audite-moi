@@ -585,7 +585,7 @@ check_materiel() {
     if oom=$(tmo 30 journalctl -k --since "7 days ago" --no-pager -q 2>/dev/null); then
       oom=$(grep -E 'Out of memory|oom-kill|invoked oom-killer' <<< "$oom")
       if [[ -n $oom ]]; then
-        local victims; victims=$(grep -oE 'Killed process [0-9]+ \\([^)]+\\)' <<< "$oom" | sed -E 's/.*\\((.*)\\)/\\1/' | sort | uniq -c | sort -rn | awk '{printf "%s (%d×) ", $2, $1}')
+        local victims; victims=$(grep -oE 'Killed process [0-9]+ \([^)]+\)' <<< "$oom" | sed -E 's/.*\((.*)\)/\1/' | sort | uniq -c | sort -rn | awk '{printf "%s (%d×) ", $2, $1}')
         warn "Manque de mémoire : l'OOM killer est intervenu (7 jours)" "Processus tués : ${victims:-voir le journal du noyau}" \
           "Fixez une limite mémoire aux conteneurs gourmands (`mem_limit`), réduisez `zfs_arc_max` ou ajoutez de la RAM"
       fi
