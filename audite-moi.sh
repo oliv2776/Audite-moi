@@ -507,21 +507,25 @@ check_systeme() {
   if have journalctl; then
     local ju; ju=$(journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[KMGT]?B?' | head -n 1)
     [[ -n $ju ]] && info "Taille des journaux systemd : $ju"
-    local kerr; kerr=$(tmo 30 journalctl -k -p err --since "24 hours ago" --no-pager -q 2>/dev/null)
-    local pat='I/O error|blk_update_request|Buffer I/O error|critical medium error|ata[0-9.]+: (exception|failed command|SError)|nvme[0-9]+.*(timeout|Abort|reset|controller is down)|EXT4-fs error|XFS .*(error|corrupt)|Hardware Error|Machine check|mce: |soft lockup|hung_task|blocked for more than|BUG:|Oops'
-    local hits; hits=$(grep -E "$pat" <<< "$kerr" | tail -n 12)
-    local fst; fst=$(grep -oE "Duplicate entry in '/etc/fstab'|Failed to create unit file '[^']+'" <<< "$kerr" | grep -oE "/run/systemd/generator/[^']+" | sort -u | sed 's|.*/||' | tr '\n' ' ')
-    [[ -n $fst ]] && warn "Entrée en double dans /etc/fstab ($fst)" "systemd signale le même point de montage deux fois (à chaque rechargement) : au démarrage, le montage peut échouer ou masquer l'autre entrée." \
-      "Repérez le doublon : \`grep -v '^#' /etc/fstab\`, supprimez une des deux lignes (gardez celle avec UUID=…), puis \`sudo systemctl daemon-reload && sudo mount -a\`"
-    if [[ -n $hits ]]; then
-      warn "Erreurs matérielles ou système dans le journal du noyau (24 h)" "$hits" \
-        "Croisez avec la section « Disques (SMART) » ; détail : \`journalctl -k -p err --since '24 hours ago'\`"
-    elif [[ -n $kerr ]]; then
-      info "$(nlines "$kerr") message(s) d'erreur du noyau (24 h)" "$(tail -n 5 <<< "$kerr")"
+    local kerr
+    if kerr=$(tmo 30 journalctl -k -p err --since "24 hours ago" --no-pager -q 2>/dev/null); then
+      local pat='I/O error|blk_update_request|Buffer I/O error|critical medium error|ata[0-9.]+: (exception|failed command|SError)|nvme[0-9]+.*(timeout|Abort|reset|controller is down)|EXT4-fs error|XFS .*(error|corrupt)|Hardware Error|Machine check|mce: |soft lockup|hung_task|blocked for more than|BUG:|Oops'
+      local hits; hits=$(grep -E "$pat" <<< "$kerr" | tail -n 12)
+      local fst; fst=$(grep -oE "Duplicate entry in '/etc/fstab'|Failed to create unit file '[^']+'" <<< "$kerr" | grep -oE "/run/systemd/generator/[^']+" | sort -u | sed 's|.*/||' | tr '\n' ' ')
+      [[ -n $fst ]] && warn "Entrée en double dans /etc/fstab ($fst)" "systemd signale le même point de montage deux fois (à chaque rechargement) : au démarrage, le montage peut échouer ou masquer l'autre entrée." \
+        "Repérez le doublon : `grep -v '^#' /etc/fstab`, supprimez une des deux lignes (gardez celle avec UUID=…), puis `sudo systemctl daemon-reload && sudo mount -a`"
+      if [[ -n $hits ]]; then
+        warn "Erreurs matérielles ou système dans le journal du noyau (24 h)" "$hits" \
+          "Croisez avec la section « Disques (SMART) » ; détail : `journalctl -k -p err --since '24 hours ago'`"
+      elif [[ -n $kerr ]]; then
+        info "$(nlines "$kerr") message(s) d'erreur du noyau (24 h)" "$(tail -n 5 <<< "$kerr")"
+      else
+        ok "Aucune erreur dans le journal du noyau (24 h)"
+      fi
+      raw "Erreurs du noyau (24 h)" "$kerr"
     else
-      ok "Aucune erreur dans le journal du noyau (24 h)"
+      info "Lecture des erreurs du noyau indisponible" "journalctl n'a pas pu lire les erreurs du noyau des dernières 24 heures ; l'absence d'erreur matérielle ou système n'est pas déterminable."
     fi
-    raw "Erreurs du noyau (24 h)" "$kerr"
   fi
 }
 
@@ -577,13 +581,17 @@ check_materiel() {
     info "Pas de swap configuré" "Sans swap, un pic de mémoire déclenche directement l'OOM killer."
   fi
   if have journalctl; then
-    local oom; oom=$(tmo 30 journalctl -k --since "7 days ago" --no-pager -q 2>/dev/null | grep -E 'Out of memory|oom-kill|invoked oom-killer')
-    if [[ -n $oom ]]; then
-      local victims; victims=$(grep -oE 'Killed process [0-9]+ \([^)]+\)' <<< "$oom" | sed -E 's/.*\((.*)\)/\1/' | sort | uniq -c | sort -rn | awk '{printf "%s (%d×) ", $2, $1}')
-      warn "Manque de mémoire : l'OOM killer est intervenu (7 jours)" "Processus tués : ${victims:-voir le journal du noyau}" \
-        "Fixez une limite mémoire aux conteneurs gourmands (\`mem_limit\`), réduisez \`zfs_arc_max\` ou ajoutez de la RAM"
+    local oom
+    if oom=$(tmo 30 journalctl -k --since "7 days ago" --no-pager -q 2>/dev/null); then
+      oom=$(grep -E 'Out of memory|oom-kill|invoked oom-killer' <<< "$oom")
+      if [[ -n $oom ]]; then
+        local victims; victims=$(grep -oE 'Killed process [0-9]+ \\([^)]+\\)' <<< "$oom" | sed -E 's/.*\\((.*)\\)/\\1/' | sort | uniq -c | sort -rn | awk '{printf "%s (%d×) ", $2, $1}')
+        warn "Manque de mémoire : l'OOM killer est intervenu (7 jours)" "Processus tués : ${victims:-voir le journal du noyau}" \
+          "Fixez une limite mémoire aux conteneurs gourmands (`mem_limit`), réduisez `zfs_arc_max` ou ajoutez de la RAM"
+      fi
+    else
+      info "Historique OOM du noyau indisponible" "journalctl n'a pas pu lire le journal du noyau des 7 derniers jours ; l'absence d'intervention de l'OOM killer n'est pas vérifiable."
     fi
-  fi
 
   # Températures (capteurs hwmon)
   local -a rows=()
