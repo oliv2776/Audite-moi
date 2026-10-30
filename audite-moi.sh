@@ -592,6 +592,7 @@ check_materiel() {
     else
       info "Historique OOM du noyau indisponible" "journalctl n'a pas pu lire le journal du noyau des 7 derniers jours ; l'absence d'intervention de l'OOM killer n'est pas vérifiable."
     fi
+  fi
 
   # Températures (capteurs hwmon)
   local -a rows=()
