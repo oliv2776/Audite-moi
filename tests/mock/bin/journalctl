@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Faux journalctl
 args="$*"
+if [[ ${AUDITE_MOI_JOURNALCTL_ECHEC:-} == 1 && ( "$args" == *"-t sudo"* || "$args" == *"-t useradd"* ) ]]; then
+  echo "journal inaccessible" >&2
+  exit 1
+fi
 case "$args" in
   *--disk-usage*) echo "Archived and active journals take up 1.2G in the file system." ;;
   *"-k -p err"*) cat <<EOT
