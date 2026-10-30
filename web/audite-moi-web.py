@@ -15,6 +15,7 @@ Utilisation :
 """
 import argparse
 import base64
+import collections
 import getpass
 import hashlib
 import hmac
@@ -33,7 +34,7 @@ import time
 import urllib.parse
 from datetime import datetime
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 COOKIE = "audite_moi_session"
 ITERATIONS = 600_000
 NOM_RAPPORT = re.compile(r"^rapport-[A-Za-z0-9._-]+-\d{8}-\d{4}\.(html|txt|json)$")
@@ -148,24 +149,271 @@ class Donnees:
         return None
 
 
+# ------------------------------------------------------ mesures en direct --
+class Mesures:
+    """Processeur, mémoire et GPU lus dans /proc et /sys (aucun droit particulier),
+    plus le relevé des disques écrit par audite-moi-mesures (root).
+    Un échantillon toutes les 2 s, seulement quand la page Matériel est ouverte."""
+    PAS = 2.0
+    GARDE = 90          # 90 × 2 s = 3 minutes d'historique
+    VENDEURS = {"0x1002": "AMD", "0x8086": "Intel", "0x10de": "NVIDIA"}
+
+    def __init__(self, conf):
+        self.proc = conf.get("racine_proc", "/proc")
+        self.sys = conf.get("racine_sys", "/sys")
+        self.fichier = os.path.join(conf["etat"], "mesures.json")
+        self.demande = os.path.join(conf["demandes"], "mesurer")
+        self.pci_ids = conf.get("pci_ids") or next((p for p in ("/usr/share/misc/pci.ids", "/usr/share/hwdata/pci.ids") if os.path.exists(p)), "")
+        self.hist = collections.deque(maxlen=self.GARDE)
+        self.dernier = None
+        self.vu = 0.0
+        self._cpu_prec = None
+        self._rc6 = {}
+        self._noms = {}
+        self._modele = None
+        self._verrou = threading.Lock()
+
+    # -- lecture de fichiers
+    def _lire(self, *chemin):
+        try:
+            with open(os.path.join(*chemin), encoding="utf-8", errors="replace") as f:
+                return f.read().strip()
+        except OSError:
+            return None
+
+    def _nombre(self, *chemin):
+        v = self._lire(*chemin)
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    # -- processeur
+    def _cpu_brut(self):
+        res = {}
+        for l in (self._lire(self.proc, "stat") or "").splitlines():
+            if not l.startswith("cpu"):
+                break
+            c = l.split()
+            v = [int(x) for x in c[1:9]]
+            res[c[0]] = (sum(v), v[3] + v[4])    # total, inactif (idle + iowait)
+        return res
+
+    def _cpu_pourcent(self, brut):
+        prec, self._cpu_prec = self._cpu_prec, brut
+        if not prec:
+            return None, []
+        def pc(k):
+            if k not in prec or k not in brut:
+                return None
+            dt, di = brut[k][0] - prec[k][0], brut[k][1] - prec[k][1]
+            return round(100.0 * (dt - di) / dt, 1) if dt > 0 else 0.0
+        coeurs = sorted((k for k in brut if k != "cpu"), key=lambda k: int(k[3:]))
+        return pc("cpu"), [pc(k) for k in coeurs]
+
+    def _hwmon_temp(self, noms):
+        base = os.path.join(self.sys, "class", "hwmon")
+        meilleur = None
+        for h in sorted(os.listdir(base)) if os.path.isdir(base) else []:
+            if self._lire(base, h, "name") not in noms:
+                continue
+            temps = []
+            for f in os.listdir(os.path.join(base, h)):
+                m = re.match(r"temp(\d+)_input$", f)
+                if m:
+                    lab = (self._lire(base, h, "temp{}_label".format(m.group(1))) or "").lower()
+                    v = self._nombre(base, h, f)
+                    if v is not None:
+                        temps.append((0 if ("package" in lab or "tctl" in lab or "tdie" in lab) else 1, v / 1000.0))
+            if temps:
+                v = sorted(temps)[0][1]
+                meilleur = v if meilleur is None else max(meilleur, v)
+        return round(meilleur) if meilleur is not None else None
+
+    def _info_cpu(self):
+        txt = self._lire(self.proc, "cpuinfo") or ""
+        if self._modele is None:
+            m = re.search(r"^model name\s*:\s*(.+)$", txt, re.M)
+            self._modele = re.sub(r"\s+", " ", m.group(1)).replace("(R)", "").replace("(TM)", "").strip() if m else ""
+        f = [float(x) for x in re.findall(r"^cpu MHz\s*:\s*([\d.]+)", txt, re.M)]
+        return self._modele, (round(sum(f) / len(f)) if f else None)
+
+    # -- mémoire
+    def _memoire(self):
+        mi = {}
+        for l in (self._lire(self.proc, "meminfo") or "").splitlines():
+            k, _, v = l.partition(":")
+            try:
+                mi[k] = int(v.split()[0]) * 1024
+            except (ValueError, IndexError):
+                pass
+        arc = 0
+        for l in (self._lire(self.proc, "spl", "kstat", "zfs", "arcstats") or "").splitlines():
+            c = l.split()
+            if len(c) == 3 and c[0] == "size":
+                arc = int(c[2])
+        total = mi.get("MemTotal", 0)
+        if not total:
+            return None
+        cache = mi.get("Buffers", 0) + mi.get("Cached", 0) + mi.get("SReclaimable", 0)
+        libre = mi.get("MemFree", 0)
+        appli = max(0, total - libre - cache - arc)
+        return {"total": total, "applis": appli, "arc": arc, "cache": cache, "libre": libre,
+                "disponible": mi.get("MemAvailable", 0), "swap_total": mi.get("SwapTotal", 0),
+                "swap_utilise": mi.get("SwapTotal", 0) - mi.get("SwapFree", 0), "pourcent": round(100.0 * appli / total, 1)}
+
+    # -- GPU
+    def _nom_pci(self, vendeur, device):
+        cle = (vendeur, device)
+        if cle in self._noms:
+            return self._noms[cle]
+        v, d = vendeur[2:].lower(), device[2:].lower()
+        nom = ""
+        if self.pci_ids:
+            try:
+                dans = False
+                with open(self.pci_ids, encoding="utf-8", errors="replace") as f:
+                    for l in f:
+                        if not l.startswith("\t") and not l.startswith("#"):
+                            dans = l[:4].lower() == v
+                        elif dans and l.startswith("\t") and not l.startswith("\t\t") and l[1:5].lower() == d:
+                            nom = l[5:].strip()
+                            break
+            except OSError:
+                pass
+        m = re.search(r"\[([^\]]+)\]\s*$", nom)
+        nom = m.group(1) if m else nom
+        marque = self.VENDEURS.get(vendeur, "GPU")
+        self._noms[cle] = "{} {}".format(marque, nom) if nom else "{} ({}:{})".format("Carte " + marque if marque != "GPU" else "GPU", v, d)
+        return self._noms[cle]
+
+    def _gpus(self, maintenant):
+        base = os.path.join(self.sys, "class", "drm")
+        res = []
+        for carte in sorted(os.listdir(base)) if os.path.isdir(base) else []:
+            if not re.match(r"card\d+$", carte):
+                continue
+            dev = os.path.join(base, carte, "device")
+            vendeur, device = self._lire(dev, "vendor") or "", self._lire(dev, "device") or ""
+            pilote = os.path.basename(os.path.realpath(os.path.join(dev, "driver"))) if os.path.exists(os.path.join(dev, "driver")) else ""
+            try:
+                noeud = next((n for n in sorted(os.listdir(os.path.join(dev, "drm"))) if n.startswith("renderD")), "")
+            except OSError:
+                noeud = ""
+            g = {"id": carte, "nom": self._nom_pci(vendeur, device), "marque": self.VENDEURS.get(vendeur, ""), "pilote": pilote, "noeud": noeud,
+                 "occupation": None, "vram_utilisee": None, "vram_totale": None, "temperature": None, "jonction": None,
+                 "puissance": None, "frequence": None, "frequence_max": None, "estimation": False}
+            if vendeur == "0x1002":
+                g["occupation"] = self._nombre(dev, "gpu_busy_percent")
+                g["vram_utilisee"], g["vram_totale"] = self._nombre(dev, "mem_info_vram_used"), self._nombre(dev, "mem_info_vram_total")
+                hw = os.path.join(dev, "hwmon")
+                for h in sorted(os.listdir(hw)) if os.path.isdir(hw) else []:
+                    for i in (1, 2, 3):
+                        lab = (self._lire(hw, h, "temp{}_label".format(i)) or "").lower()
+                        v = self._nombre(hw, h, "temp{}_input".format(i))
+                        if v is None:
+                            continue
+                        if lab in ("edge", "") and g["temperature"] is None:
+                            g["temperature"] = round(v / 1000)
+                        elif lab == "junction":
+                            g["jonction"] = round(v / 1000)
+                    p = self._nombre(hw, h, "power1_average") or self._nombre(hw, h, "power1_input")
+                    if p is not None:
+                        g["puissance"] = round(p / 1e6, 1)
+                    f = self._nombre(hw, h, "freq1_input")
+                    if f is not None:
+                        g["frequence"] = round(f / 1e6)
+            elif vendeur == "0x8086":
+                c = os.path.join(base, carte)
+                g["frequence"] = self._nombre(c, "gt_act_freq_mhz") or self._nombre(c, "gt", "gt0", "rps_act_freq_mhz")
+                g["frequence_max"] = self._nombre(c, "gt_max_freq_mhz") or self._nombre(c, "gt", "gt0", "rps_max_freq_mhz")
+                rc6 = self._nombre(c, "gt", "gt0", "rc6_residency_ms")
+                if rc6 is None:
+                    rc6 = self._nombre(c, "power", "rc6_residency_ms")
+                if rc6 is not None:
+                    prec = self._rc6.get(carte)
+                    self._rc6[carte] = (maintenant, rc6)
+                    if prec and maintenant > prec[0]:
+                        repos = (rc6 - prec[1]) / ((maintenant - prec[0]) * 1000.0)
+                        g["occupation"] = int(round(max(0.0, min(1.0, 1 - repos)) * 100))
+                        g["estimation"] = True
+            res.append(g)
+        return res
+
+    # -- échantillons
+    def echantillon(self):
+        with self._verrou:
+            t = time.time()
+            brut = self._cpu_brut()
+            cpu, coeurs = self._cpu_pourcent(brut)
+            modele, freq = self._info_cpu()
+            charge = (self._lire(self.proc, "loadavg") or "").split()[:3]
+            up = (self._lire(self.proc, "uptime") or "0").split()[0]
+            d = {"t": t, "cpu": {"pourcent": cpu, "coeurs": coeurs, "modele": modele, "frequence": freq,
+                                 "temperature": self._hwmon_temp({"coretemp", "k10temp", "zenpower", "cpu_thermal", "acpitz"}),
+                                 "charge": [float(x) for x in charge] if len(charge) == 3 else None},
+                 "memoire": self._memoire(), "gpus": self._gpus(t), "demarrage": t - float(up or 0)}
+            self.dernier = d
+            if cpu is not None:
+                self.hist.append({"t": round(t, 1), "cpu": cpu, "ram": (d["memoire"] or {}).get("pourcent"),
+                                  "gpu": {g["id"]: g["occupation"] for g in d["gpus"]}})
+            return d
+
+    def boucle(self):
+        while True:
+            if time.time() - self.vu < 600:     # page consultée dans les 10 dernières minutes
+                try:
+                    self.echantillon()
+                except Exception as exc:          # une mesure ratée ne doit pas arrêter la boucle
+                    sys.stderr.write("mesure : {}\n".format(exc))
+            time.sleep(self.PAS)
+
+    def demarrer(self):
+        threading.Thread(target=self.boucle, name="mesures", daemon=True).start()
+
+    def stockage(self):
+        try:
+            with open(self.fichier, encoding="utf-8") as f:
+                s = json.load(f)
+        except (OSError, ValueError):
+            s = None
+        return {"releve": s, "demande": os.path.exists(self.demande)}
+
+    def demander(self):
+        tmp = os.path.join(os.path.dirname(self.demande), ".mesurer-{}".format(secrets.token_hex(6)))
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("mesurer\n")
+        os.replace(tmp, self.demande)
+
+    def instantane(self):
+        inactif = time.time() - self.vu > 600 or self.dernier is None
+        self.vu = time.time()
+        if inactif:                     # retour sur la page : mesure immédiate (deux échantillons pour le % processeur)
+            self.echantillon()
+            time.sleep(0.25)
+            self.echantillon()
+        with self._verrou:
+            return {"direct": self.dernier, "historique": list(self.hist), "maintenant": time.time(), **self.stockage()}
+
+
 # ------------------------------------------------------------------ gabarits --
 CSS = """
 :root{--bg:#f4f5f7;--card:#fff;--ink:#1b1f27;--muted:#5d6675;--line:#e3e6eb;--soft:#f0f2f5;--accent:#2f5fd0;--accent-ink:#fff;--sel:#e7eefc;
 --crit:#c4352f;--crit-bg:#fdecea;--warn:#a35f00;--warn-bg:#fff3dd;--ok:#1d7a4c;--ok-bg:#e4f4ea;--info:#3461c1;--info-bg:#e9effc;
---s1:#2a78d6;--s2:#eb6834;--grid:#e8eaee;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--trk:#dbe7f8;--free:#e6e8ec;--grid:#e8eaee;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
 @media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--ink:#e7eaee;--muted:#9aa3af;--line:#29303a;--soft:#1e232b;--accent:#5b86f0;--sel:#1c2a48;
 --crit:#ff7b72;--crit-bg:#3a1d1d;--warn:#f2b24c;--warn-bg:#382a12;--ok:#4cc38a;--ok-bg:#13301f;--info:#86a8ff;--info-bg:#1a2540;
---s1:#3987e5;--s2:#d95926;--grid:#262c35}}
+--s1:#3987e5;--s2:#d95926;--s3:#199e70;--trk:#1d2b42;--free:#262c35;--grid:#262c35}}
 *{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:70px}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif}
 a{color:var(--accent)}
 .topbar{position:sticky;top:0;z-index:20;background:var(--card);border-bottom:1px solid var(--line)}
-.topbar .in{max-width:1180px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.topbar .in{max-width:1180px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .brand{display:flex;align-items:center;gap:10px;font-weight:750;font-size:17px;color:var(--ink);text-decoration:none}
 .logo{width:28px;height:28px;border-radius:8px;background:var(--accent);display:grid;place-items:center;color:#fff;font-size:14px}
 .host{color:var(--muted);font-weight:500;font-size:14px}
 .nav{display:flex;gap:4px;flex-wrap:wrap}
-.nav a{color:var(--muted);text-decoration:none;font-size:14px;font-weight:600;padding:6px 10px;border-radius:8px}
+.nav a{color:var(--muted);text-decoration:none;font-size:14px;font-weight:600;padding:6px 8px;border-radius:8px}
 .nav a:hover{background:var(--soft);color:var(--ink)}.nav a.on{background:var(--sel);color:var(--accent)}
 .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-left:auto}
 .wrap{max-width:1180px;margin:0 auto;padding:20px 20px 60px}
@@ -248,6 +496,58 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 .err{color:var(--crit);font-weight:600;margin:0 0 10px}
 pre.texte{margin:0;font:12.5px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
 footer{color:var(--muted);font-size:12.5px;text-align:center;margin-top:24px}
+/* page Matériel */
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
+a.stat{display:block;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;color:inherit;text-decoration:none;transition:border-color .15s;min-width:0}
+a.stat:hover{border-color:var(--muted)}
+.stat .l,.lbl{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em;font-weight:650}
+.stat .v{font-size:28px;font-weight:750;line-height:1.25;font-variant-numeric:tabular-nums}
+.stat .v small{font-size:13px;color:var(--muted);font-weight:500}
+.stat .s{font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stat svg{display:block;width:100%;height:28px;margin-top:6px}
+.spk{fill:none;stroke:var(--s1);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}.spd{fill:var(--s1);stroke:var(--card);stroke-width:2}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.bloc{border:1px solid var(--line);border-radius:12px;padding:14px 16px;min-width:0}
+.bh{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.bh b{font-size:16px}.tag{font-size:12px;color:var(--muted);background:var(--soft);border-radius:999px;padding:1px 8px;font-weight:600}
+.bh .badge{margin-left:auto;min-width:0}
+.big{font-size:24px;font-weight:750;font-variant-numeric:tabular-nums;line-height:1.2}.big small{font-size:13px;color:var(--muted);font-weight:500}
+.meter{height:8px;border-radius:999px;background:var(--trk);overflow:hidden;margin:8px 0 6px}
+.meter>i{display:block;height:100%;border-radius:999px;background:var(--s1);min-width:2px;transition:width .4s}
+.meter.warn{background:var(--warn-bg)}.meter.warn>i{background:var(--warn)}.meter.crit{background:var(--crit-bg)}.meter.crit>i{background:var(--crit)}
+.meter.fin{height:6px;margin:4px 0}
+.sub{font-size:13px;color:var(--muted)}.sub b{color:var(--ink);font-weight:600}
+.lignes{list-style:none;margin:10px 0 0;padding:0}
+.lignes li{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1.5fr) 5.5em;gap:10px;align-items:center;font-size:13px;padding:3px 0}
+.lignes.vol li{grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) 15em}
+.lignes li span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lignes li .num{color:var(--muted);font-variant-numeric:tabular-nums;text-align:right;min-width:62px}
+.membres{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.mb{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;border:1px solid var(--line);border-radius:999px;padding:2px 9px 2px 7px;background:var(--card);color:var(--ink);text-decoration:none}
+.mb:hover{border-color:var(--muted)}
+.ic{font-style:normal;font-weight:800;width:16px;height:16px;border-radius:50%;display:inline-grid;place-items:center;font-size:10px;color:#fff;flex:none}
+.ic.OK{background:var(--ok)}.ic.WARN{background:var(--warn)}.ic.CRIT{background:var(--crit)}.ic.INFO{background:var(--info)}
+.faits{display:flex;gap:18px;flex-wrap:wrap;margin-top:8px}
+.faits div{min-width:0}.faits .val{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+.raisons{font-size:12.5px;color:var(--muted);white-space:normal;margin-top:2px;max-width:420px}
+td.etat{white-space:normal}
+.modele{display:block;font-size:12px;color:var(--muted);max-width:260px;overflow:hidden;text-overflow:ellipsis}
+.segbar{display:flex;gap:2px;height:28px;margin:10px 0 8px}
+.segbar>i{display:block;height:100%;border-radius:4px;min-width:0}
+.c1{background:var(--s1)}.c2{background:var(--s2)}.c3{background:var(--s3)}.c0{background:var(--free)}
+.leg{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.leg div{font-size:12.5px;color:var(--muted);min-width:0}.leg b{display:block;color:var(--ink);font-size:15px;font-variant-numeric:tabular-nums}
+.leg .sq{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:0}
+.coeurs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px 14px;margin-top:10px}
+.coeurs .cl{font-size:12px;color:var(--muted);display:flex;justify-content:space-between;font-variant-numeric:tabular-nums}
+.rang{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-bottom:18px}.rang>.card{margin:0;min-width:0}
+h3.lbl{margin:18px 0 4px}
+.courbe{position:relative;margin-top:8px}
+.courbe svg{display:block;width:100%;height:auto}
+.courbe .tip{top:4px}
+.actualiser{font-size:12.5px;padding:3px 10px;margin-left:8px}
+@media (max-width:980px){.rang{grid-template-columns:1fr}.kpis,.grid2{grid-template-columns:repeat(2,minmax(0,1fr))}.leg{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:620px){.kpis,.grid2{grid-template-columns:1fr}.coeurs{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:980px){.hero{grid-template-columns:repeat(2,minmax(0,1fr))}.actions{margin-left:0}}
 @media (max-width:620px){ol.items li{grid-template-columns:1fr}}
 """
@@ -328,7 +628,7 @@ def barre(csrf, occupe, actif, der=None):
     """Barre de navigation commune à toutes les pages (collée en haut)."""
     dis = " disabled" if occupe else ""
     hote = der.get("hote", "") if der else socket.gethostname()
-    liens = [("/", "Tableau de bord", "tdb"), ("/#constats", "Constats", "constats"), ("/#historique", "Historique", "historique")]
+    liens = [("/", "Tableau de bord", "tdb"), ("/materiel", "Matériel", "materiel"), ("/#constats", "Constats", "constats"), ("/#historique", "Historique", "historique")]
     if der:
         liens.append(("/rapports/" + der["fichiers"]["html"], "Rapport complet", "rapport"))
     nav = "".join('<a href="{}"{}>{}</a>'.format(esc(h), ' class="on"' if k == actif else "", t) for h, t, k in liens)
@@ -472,6 +772,175 @@ if(!j&&e.en_cours){{location.reload();}}}}).catch(function(){{}});}},3000);}})()
     return page("Audite-moi — " + hote, "".join(out), nonce, nu=True)
 
 
+HTML_MATERIEL = """<div class="meta"><span>Processeur, mémoire et GPU en direct (toutes les 2 s) · disques et pools relevés toutes les 10 minutes, sans réveiller les disques en veille</span></div>
+<div class="kpis">
+<a class="stat" href="#cpu"><div class="l">Processeur</div><div class="v" id="k-cpu">—</div><div class="s" id="k-cpu-s">&nbsp;</div><svg id="k-cpu-g" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"></svg></a>
+<a class="stat" href="#memoire"><div class="l">Mémoire</div><div class="v" id="k-ram">—</div><div class="s" id="k-ram-s">&nbsp;</div><svg id="k-ram-g" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"></svg></a>
+<a class="stat" href="#gpu"><div class="l">GPU</div><div class="v" id="k-gpu">—</div><div class="s" id="k-gpu-s">&nbsp;</div><svg id="k-gpu-g" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"></svg></a>
+<a class="stat" href="#stockage"><div class="l">Stockage</div><div class="v" id="k-sto">—</div><div class="s" id="k-sto-s">&nbsp;</div><div class="s" id="k-sto-e">&nbsp;</div></a>
+</div>
+<div class="card" id="stockage"><h2>Stockage <span class="mini"><span id="st-age"></span><button type="button" class="actualiser" id="st-maj">Actualiser</button></span></h2>
+<div class="grid2" id="st-pools"></div><div id="st-vol"></div></div>
+<div class="card" id="disques"><h2>Disques <span class="mini">état SMART, du plus urgent au moins urgent dans chaque pool</span></h2><div class="tw" id="st-disques"></div></div>
+<div class="rang">
+<div class="card" id="cpu"><h2>Processeur <span class="mini" id="cpu-modele"></span></h2><div class="faits" id="cpu-faits"></div><div class="courbe" id="cpu-courbe"></div><div class="coeurs" id="cpu-coeurs"></div></div>
+<div class="card" id="memoire"><h2>Mémoire <span class="mini" id="ram-total"></span></h2><div class="segbar" id="ram-seg" role="img"></div><div class="leg" id="ram-leg"></div>
+<div class="sub" id="ram-swap"></div><div class="courbe" id="ram-courbe"></div><p class="sub">Le cache ZFS (ARC) et le cache système se libèrent tout seuls quand les applications ont besoin de mémoire : seule la part « Applications » compte vraiment.</p></div>
+</div>
+<div class="card" id="gpu"><h2>GPU <span class="mini">occupation, mémoire vidéo, température — utile pendant un transcodage</span></h2><div class="grid2" id="gpus"></div></div>
+"""
+
+JS_MATERIEL = r"""(function(){'use strict';
+var D=JSON.parse(document.getElementById('init').textContent),CSRF=(document.querySelector('input[name=csrf]')||{}).value||'';
+var $=function(i){return document.getElementById(i);},NF={};
+function nf(v,d){d=d==null?1:d;NF[d]=NF[d]||new Intl.NumberFormat('fr-FR',{maximumFractionDigits:d});return NF[d].format(v);}
+function h(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function oct(b){if(b==null)return '—';var u=['o','Ko','Mo','Go','To','Po'],i=0;while(Math.abs(b)>=1024&&i<5){b/=1024;i++;}return nf(b,(b>=100||i===0)?0:1)+' '+u[i];}
+function pc(v){return v==null?'—':nf(v,0)+' %';}
+function niv(p,w,c){return p>=c?'crit':p>=w?'warn':'';}
+function meter(p,cls,lab){p=Math.max(0,Math.min(100,p||0));return '<div class="meter '+(cls||'')+'" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+Math.round(p)+'" aria-label="'+h(lab)+'"><i data-w="'+p.toFixed(1)+'"></i></div>';}
+function largeurs(r){Array.prototype.forEach.call(r.querySelectorAll('[data-w]'),function(e){e.style.width=e.getAttribute('data-w')+'%';});}
+var ET={ok:['OK','✓','OK'],attention:['WARN','!','Attention'],critique:['CRIT','✕','Critique'],veille:['INFO','–','En veille'],inconnu:['INFO','?','Inconnu']};
+function badge(e){e=ET[e]||ET.inconnu;return '<span class="badge b-'+e[0]+'">'+e[2]+'</span>';}
+function icone(e){e=ET[e]||ET.inconnu;return '<i class="ic '+e[0]+'" aria-hidden="true">'+e[1]+'</i>';}
+function ilya(s){s=Math.max(0,Math.round(s));if(s<60)return 'à l’instant';if(s<3600)return 'il y a '+Math.round(s/60)+' min';if(s<172800)return 'il y a '+Math.round(s/3600)+' h';return 'il y a '+Math.round(s/86400)+' jours';}
+function duree(x){if(x==null)return '—';var a=x/8766;if(a>=1)return nf(a,1)+' an'+(a>=2?'s':'');var m=x/730.5;return m>=1?nf(m,0)+' mois':nf(x,0)+' h';}
+function faits(id,l){$(id).innerHTML=l.map(function(f){return '<div><div class="lbl">'+h(f[0])+'</div><div class="val">'+h(f[1])+'</div></div>';}).join('');}
+function spark(svg,v){v=v.filter(function(x){return x!=null;}).slice(-45);if(v.length<2){svg.innerHTML='';return;}
+  svg.innerHTML='<polyline class="spk" vector-effect="non-scaling-stroke" points="'+v.map(function(x,i){return (i/(v.length-1)*120).toFixed(1)+','+(26-Math.min(100,x)/100*24).toFixed(1);}).join(' ')+'"/>';}
+var FEN=180;
+function courbe(el,pts,nom,H){
+  var W=Math.max(280,Math.round(el.clientWidth||600)),ml=42,mr=10,mt=10,mb=22,now=D.maintenant;H=H||150;
+  var X=function(t){return ml+(1-(now-t)/FEN)*(W-ml-mr);},Y=function(v){return mt+(100-Math.min(100,Math.max(0,v)))/100*(H-mt-mb);};
+  var g='';[0,50,100].forEach(function(v){g+='<line class="gl" x1="'+ml+'" x2="'+(W-mr)+'" y1="'+Y(v)+'" y2="'+Y(v)+'"/><text class="ax" x="'+(ml-6)+'" y="'+(Y(v)+4)+'" text-anchor="end">'+v+' %</text>';});
+  g+='<text class="ax" x="'+ml+'" y="'+(H-5)+'">il y a 3 min</text><text class="ax" x="'+(W-mr)+'" y="'+(H-5)+'" text-anchor="end">maintenant</text>';
+  var p=pts.filter(function(q){return q.v!=null&&now-q.t<=FEN;}),l='';
+  if(p.length>1)l='<polyline class="ln ln1" points="'+p.map(function(q){return X(q.t).toFixed(1)+','+Y(q.v).toFixed(1);}).join(' ')+'"/>';
+  var z=p[p.length-1];if(z)l+='<circle class="pt pt1" cx="'+X(z.t).toFixed(1)+'" cy="'+Y(z.v).toFixed(1)+'" r="4"/>';
+  el.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+h(nom)+' sur les 3 dernières minutes : '+(z?pc(z.v):'pas encore de mesure')+'">'+g+l+
+    '<line class="cr" y1="'+mt+'" y2="'+(H-mb)+'" visibility="hidden"/><rect class="hit" x="'+ml+'" y="0" width="'+(W-ml-mr)+'" height="'+H+'"/></svg><div class="tip"></div>';
+  var svg=el.firstChild,cr=svg.querySelector('.cr'),hit=svg.querySelector('.hit'),tip=el.querySelector('.tip');
+  function show(cx){if(!p.length)return;var r=svg.getBoundingClientRect(),k=W/r.width,px=cx*k,b=p[0];
+    p.forEach(function(q){if(Math.abs(X(q.t)-px)<Math.abs(X(b.t)-px))b=q;});
+    var x=X(b.t),s=Math.round(now-b.t);cr.setAttribute('x1',x);cr.setAttribute('x2',x);cr.setAttribute('visibility','visible');
+    tip.innerHTML='<b></b><span></span>';tip.children[0].textContent=nom+' : '+pc(b.v);tip.children[1].textContent=s<3?'maintenant':'il y a '+(s<60?s+' s':Math.floor(s/60)+' min '+(s%60)+' s');
+    tip.style.display='block';var lf=x/k+12;if(lf+tip.offsetWidth>r.width)lf=x/k-tip.offsetWidth-12;tip.style.left=lf+'px';}
+  hit.addEventListener('mousemove',function(e){el._mx=e.clientX-svg.getBoundingClientRect().left;show(el._mx);});
+  hit.addEventListener('mouseleave',function(){el._mx=null;cr.setAttribute('visibility','hidden');tip.style.display='none';});
+  if(el._mx!=null)show(el._mx);
+}
+function principal(gs){return gs.filter(function(g){return g.marque==='AMD'||g.marque==='NVIDIA';})[0]||gs[0];}
+
+function direct(){
+  var d=D.direct||{},c=d.cpu||{},m=d.memoire,gs=d.gpus||[],Hs=D.historique||[];
+  /* tuiles */
+  $('k-cpu').innerHTML=c.pourcent==null?'—':nf(c.pourcent,0)+'<small> %</small>';
+  $('k-cpu-s').textContent=[c.temperature!=null?c.temperature+' °C':'',c.charge?'charge '+nf(c.charge[0],2):''].filter(Boolean).join(' · ')||' ';
+  spark($('k-cpu-g'),Hs.map(function(x){return x.cpu;}));
+  if(m){$('k-ram').innerHTML=nf(m.pourcent,0)+'<small> %</small>';$('k-ram-s').textContent=oct(m.applis)+' sur '+oct(m.total)+' (applications)';}
+  spark($('k-ram-g'),Hs.map(function(x){return x.ram;}));
+  var gp=principal(gs);
+  if(gp){$('k-gpu').innerHTML=gp.occupation==null?'—':nf(gp.occupation,0)+'<small> %</small>';$('k-gpu-s').textContent=gp.nom+(gp.temperature!=null?' · '+gp.temperature+' °C':'');
+    spark($('k-gpu-g'),Hs.map(function(x){return (x.gpu||{})[gp.id];}));}
+  else{$('k-gpu').textContent='—';$('k-gpu-s').textContent='Aucun GPU détecté';}
+  /* processeur */
+  var up=d.demarrage?(D.maintenant-d.demarrage)/3600:null;
+  $('cpu-modele').textContent=[c.modele,c.coeurs&&c.coeurs.length?c.coeurs.length+' cœurs logiques':'',up==null?'':'allumé depuis '+(up<48?nf(up,0)+' h':nf(up/24,0)+' jours')].filter(Boolean).join(' · ');
+  faits('cpu-faits',[['Utilisation',pc(c.pourcent)],['Température',c.temperature!=null?c.temperature+' °C':'—'],['Fréquence',c.frequence?nf(c.frequence/1000,2)+' GHz':'—'],
+    ['Charge 1 · 5 · 15 min',c.charge?c.charge.map(function(v){return nf(v,2);}).join(' · '):'—']]);
+  courbe($('cpu-courbe'),Hs.map(function(x){return {t:x.t,v:x.cpu};}),'Processeur');
+  var co=$('cpu-coeurs');co.innerHTML=(c.coeurs||[]).map(function(v,i){return '<div><div class="cl"><span>'+(i+1)+'</span><span>'+pc(v)+'</span></div>'+meter(v,'fin','Cœur '+(i+1))+'</div>';}).join('');largeurs(co);
+  /* mémoire */
+  if(m){
+    var parts=[['Applications',m.applis,'c1'],['Cache ZFS (ARC)',m.arc,'c2'],['Cache système',m.cache,'c3'],['Libre',m.libre,'c0']];
+    $('ram-total').textContent=oct(m.total)+' au total';
+    var sg=$('ram-seg');sg.setAttribute('aria-label',parts.map(function(p){return p[0]+' '+oct(p[1]);}).join(', '));
+    sg.innerHTML=parts.filter(function(p){return p[1]>0;}).map(function(p){return '<i class="'+p[2]+'" data-w="'+(100*p[1]/m.total).toFixed(2)+'" title="'+h(p[0]+' : '+oct(p[1]))+'"></i>';}).join('');largeurs(sg);
+    $('ram-leg').innerHTML=parts.map(function(p){return '<div><span class="sq '+p[2]+'"></span>'+h(p[0])+'<b>'+oct(p[1])+'</b>'+pc(100*p[1]/m.total)+'</div>';}).join('');
+    var sw=$('ram-swap');
+    if(m.swap_total>0){var sp=100*m.swap_utilise/m.swap_total;sw.innerHTML='Swap utilisé : <b>'+oct(m.swap_utilise)+'</b> sur '+oct(m.swap_total)+meter(sp,niv(sp,50,80)+' fin','Swap');largeurs(sw);}
+    else sw.textContent='Pas de swap configuré.';
+  }
+  courbe($('ram-courbe'),Hs.map(function(x){return {t:x.t,v:x.ram};}),'Mémoire des applications',120);
+  /* GPU */
+  var zone=$('gpus'),ids=gs.map(function(g){return g.id;}).join(',');
+  if(zone.getAttribute('data-ids')!==ids){zone.setAttribute('data-ids',ids);
+    zone.innerHTML=gs.length?gs.map(function(g){return '<div class="bloc" id="g-'+g.id+'"><div class="bh"><b>'+h(g.nom)+'</b><span class="tag">'+h([g.pilote,g.noeud?'/dev/dri/'+g.noeud:''].filter(Boolean).join(' · '))+'</span></div>'+
+      '<div data-r="occ"></div><div data-r="vram"></div><div class="faits" data-r="faits"></div><div class="courbe" data-r="courbe"></div></div>';}).join('')
+      :'<p class="empty">Aucun GPU trouvé dans /sys/class/drm.</p>';}
+  gs.forEach(function(g){var b=$('g-'+g.id);if(!b)return;var q=function(r){return b.querySelector('[data-r="'+r+'"]');};
+    if(g.occupation==null)q('occ').innerHTML='<div class="sub">'+(g.marque==='NVIDIA'?'Occupation non disponible sans les outils NVIDIA.':g.marque==='Intel'?'Occupation non disponible (pilote ou noyau trop ancien).':'Occupation non disponible.')+'</div>';
+    else{q('occ').innerHTML='<div class="sub">Occupation'+(g.estimation?' (estimée)':'')+' <b>'+pc(g.occupation)+'</b></div>'+meter(g.occupation,'','Occupation de '+g.nom);}
+    if(g.vram_totale){var vp=100*g.vram_utilisee/g.vram_totale;q('vram').innerHTML='<div class="sub">Mémoire vidéo <b>'+oct(g.vram_utilisee)+'</b> sur '+oct(g.vram_totale)+'</div>'+meter(vp,niv(vp,85,95),'Mémoire vidéo');}
+    else q('vram').innerHTML='';
+    largeurs(b);
+    var f=[];if(g.temperature!=null)f.push(['Température',g.temperature+' °C'+(g.jonction!=null?' (jonction '+g.jonction+' °C)':'')]);
+    if(g.puissance!=null)f.push(['Puissance',nf(g.puissance,0)+' W']);
+    if(g.frequence!=null)f.push(['Fréquence',nf(g.frequence,0)+(g.frequence_max?' / '+nf(g.frequence_max,0):'')+' MHz']);
+    q('faits').innerHTML=f.map(function(x){return '<div><div class="lbl">'+h(x[0])+'</div><div class="val">'+h(x[1])+'</div></div>';}).join('');
+    if(g.occupation!=null)courbe(q('courbe'),Hs.map(function(x){return {t:x.t,v:(x.gpu||{})[g.id]};}),'Occupation du GPU',110);});
+}
+
+var ROLE={cache:'cache',logs:'journal',spares:'secours',special:'spécial',dedup:'dédup.'};
+var RANG={critique:0,attention:1,inconnu:2,veille:3,ok:4};
+function age(){var r=D.releve;$('st-age').textContent=D.demande?'Relevé en cours… ':r?'Relevé '+ilya(D.maintenant-r.horodatage)+' ':'Aucun relevé ';var b=$('st-maj');b.disabled=!!D.demande;}
+function stockage(){
+  var r=D.releve;age();
+  var P=$('st-pools'),V=$('st-vol'),T=$('st-disques');
+  if(!r){P.innerHTML='<p class="empty">Pas encore de relevé des disques. Il est produit par le service <code>audite-moi-mesures</code> (toutes les 10 minutes) : cliquez sur « Actualiser », ou vérifiez <code>systemctl status audite-moi-mesures.timer</code>.</p>';V.innerHTML='';T.innerHTML='';$('k-sto').textContent='—';return;}
+  var ds={};(r.disques||[]).forEach(function(d){ds[d.nom]=d;});
+  var tot=0,lib=0,nC=0,nW=0;(r.disques||[]).forEach(function(d){if(d.etat==='critique')nC++;else if(d.etat==='attention')nW++;});
+  P.innerHTML=(r.pools||[]).map(function(p){
+    var t=p.taille||p.brut||0,u=p.utilise!=null?p.utilise:p.alloue,l=p.libre!=null?p.libre:t-u,pct=t?100*u/t:0,lv=niv(pct,80,90);tot+=t;lib+=l;
+    var e=p.etat&&p.etat!=='ONLINE'?'critique':p.disques_critiques?'critique':p.disques_attention?'attention':'ok';
+    var bd=p.etat&&p.etat!=='ONLINE'?'<span class="badge b-CRIT">'+h(p.etat)+'</span>':'<span class="badge b-'+ET[e][0]+'" title="État du pool et de ses disques">'+{ok:'Sain',attention:'À surveiller',critique:'Critique'}[e]+'</span>';
+    var tag=[p.type,{mirror:'miroir',simple:'sans redondance'}[p.disposition]||(p.disposition||'').toUpperCase()].filter(Boolean).join(' · ');
+    var jeux=(p.jeux||[]).map(function(j){return '<li><span title="'+h(j.nom)+'">'+h(j.nom)+'</span>'+meter(t?100*j.utilise/t:0,'fin','Part de '+j.nom)+'<span class="num">'+oct(j.utilise)+'</span></li>';}).join('');
+    var mb=(p.disques||[]).map(function(m){var d=ds[m.disque]||{};return '<a class="mb" href="#d-'+h(m.disque)+'" title="'+h((d.modele||'')+(d.raisons&&d.raisons.length?' — '+d.raisons.join(' ; '):''))+'">'+icone(d.etat||'inconnu')+h(m.disque)+(m.role!=='donnees'?' <span class="tag">'+h(ROLE[m.role]||m.role)+'</span>':'')+'</a>';}).join('');
+    return '<div class="bloc"><div class="bh"><b>'+h(p.nom)+'</b>'+(tag?'<span class="tag">'+h(tag)+'</span>':'')+bd+'</div>'+
+      '<div class="big">'+oct(l)+'<small> libres sur '+oct(t)+'</small></div>'+meter(pct,lv,'Remplissage du pool '+p.nom)+
+      '<div class="sub"><b>'+pc(pct)+'</b> utilisés ('+oct(u)+')'+(p.frag!=null?' · fragmentation '+p.frag+' %':'')+'</div>'+
+      (lv?'<div class="sub">'+(lv==='crit'?'Pool presque plein : libérez de la place ou agrandissez-le.':'Au-delà de 80 %, ZFS ralentit : prévoyez de la place.')+'</div>':'')+
+      (jeux?'<ul class="lignes" aria-label="Principaux jeux de données">'+jeux+'</ul>':'')+'<div class="membres">'+mb+'</div></div>';}).join('')||'<p class="empty">Aucun pool ZFS.</p>';
+  var vols=r.volumes||[];
+  V.innerHTML=vols.length?'<h3 class="lbl">Autres volumes</h3><ul class="lignes vol">'+vols.map(function(v){var pct=v.taille?100*v.utilise/v.taille:0;if(!(r.pools||[]).length){tot+=v.taille;lib+=v.libre;}
+    return '<li><span title="'+h(v.source)+'">'+h(v.point)+' <span class="tag">'+h(v.type)+'</span></span>'+meter(pct,niv(pct,85,95)+' fin','Remplissage de '+v.point)+'<span class="num">'+oct(v.libre)+' libres sur '+oct(v.taille)+'</span></li>';}).join('')+'</ul>':'';
+  largeurs(P);largeurs(V);
+  var dl=(r.disques||[]).slice().sort(function(a,b){return (a.pool||'~').localeCompare(b.pool||'~')||(RANG[a.etat]-RANG[b.etat])||a.nom.localeCompare(b.nom);});
+  T.innerHTML=dl.length?'<table><thead><tr><th>Disque</th><th>Type</th><th>Capacité</th><th>Pool</th><th class="num">Temp.</th><th class="num">En service</th><th class="num">Usure</th><th>État</th></tr></thead><tbody>'+
+    dl.map(function(d){var ra=(d.raisons||[]).slice();if(d.note)ra.push(d.note);if(d.veille)ra.unshift('En veille : valeurs du relevé '+ilya(D.maintenant-(d.mesure||r.horodatage))+' (le disque n’est pas réveillé)');
+      return '<tr id="d-'+h(d.nom)+'"><td><b>'+h(d.nom)+'</b><span class="modele" title="'+h(d.modele)+'">'+h(d.modele||'')+'</span></td><td>'+h(d.type||'—')+'</td><td>'+(d.taille?oct(d.taille):'—')+'</td>'+
+      '<td>'+h(d.pool||'—')+(d.role&&d.role!=='donnees'?' <span class="tag">'+h(ROLE[d.role]||d.role)+'</span>':'')+'</td><td class="num">'+(d.temperature!=null?d.temperature+' °C':'—')+'</td>'+
+      '<td class="num">'+duree(d.heures)+'</td><td class="num">'+(d.usure!=null?d.usure+' %':'—')+'</td><td class="etat">'+badge(d.veille&&d.etat==='ok'?'veille':d.etat)+
+      (ra.length?'<div class="raisons">'+ra.map(h).join('<br>')+'</div>':'')+'</td></tr>';}).join('')+'</tbody></table>':'<p class="empty">Aucun disque trouvé par smartctl.</p>';
+  $('k-sto').innerHTML=tot?oct(lib)+'<small> libres</small>':'—';
+  $('k-sto-s').textContent=tot?'sur '+oct(tot)+((r.pools||[]).length?' · '+r.pools.length+' pool(s) ZFS':''):' ';
+  $('k-sto-e').innerHTML=nC?icone('critique')+' '+nC+' disque(s) en état critique':nW?icone('attention')+' '+nW+' disque(s) à surveiller':(r.disques||[]).length?icone('ok')+' tous les disques sont sains':' ';
+}
+$('st-maj').addEventListener('click',function(){var b=this;b.disabled=true;
+  fetch('/mesurer',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'csrf='+encodeURIComponent(CSRF)})
+  .then(function(r){if(r.ok){D.demande=true;age();}else b.disabled=false;}).catch(function(){b.disabled=false;});});
+var occupe=false;
+function maj(){if(document.hidden||occupe)return;occupe=true;
+  fetch('/materiel.json',{credentials:'same-origin'}).then(function(r){if(r.status===401){location.href='/connexion';throw new Error('session');}return r.json();})
+  .then(function(n){var avant=D.releve?D.releve.horodatage:null,dem=D.demande;D=n;direct();if((D.releve?D.releve.horodatage:null)!==avant||D.demande!==dem)stockage();else age();})
+  .catch(function(){}).then(function(){occupe=false;});}
+direct();stockage();setInterval(maj,2000);document.addEventListener('visibilitychange',maj);
+})();"""
+
+
+def page_materiel(app, csrf, nonce):
+    hist = app.donnees.rapports()
+    der = hist[-1] if hist else None
+    etat = app.donnees.etat()
+    init = json.dumps(app.mesures.instantane(), ensure_ascii=False).replace("<", "\\u003c")
+    corps = (barre(csrf, etat["en_cours"] or etat["demande"], "materiel", der) + '<div class="wrap">' + HTML_MATERIEL +
+             '<footer>Audite-moi {v} · <a href="https://github.com/oliv2776/Audite-moi">GitHub</a></footer></div>'.format(v=VERSION) +
+             '<script type="application/json" id="init">{}</script><script nonce="{}">{}</script>'.format(init, nonce, JS_MATERIEL))
+    hote = der.get("hote", "") if der else socket.gethostname()
+    return page("Audite-moi — matériel — " + hote, corps, nonce, nu=True)
+
+
 def page_texte(donnees, csrf, nonce, nom, contenu):
     hist = donnees.rapports()
     der = hist[-1] if hist else None
@@ -569,7 +1038,7 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
             return self.envoyer(200, page_connexion("", nonce), csp=self.csp_page(nonce))
         s = self.session()
         if not s:
-            if chemin.path == "/etat.json":
+            if chemin.path in ("/etat.json", "/materiel.json"):
                 return self.envoyer(401, b'{"erreur":"non connecte"}', "application/json")
             return self.rediriger("/connexion")
         if chemin.path == "/":
@@ -580,6 +1049,10 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
             return self.envoyer(200, tableau_bord(self.app.donnees, s["csrf"], nonce, q.get("m", [""])[0], choix), csp=self.csp_page(nonce))
         if chemin.path == "/etat.json":
             return self.envoyer(200, json.dumps(self.app.donnees.etat()), "application/json; charset=utf-8")
+        if chemin.path == "/materiel":
+            return self.envoyer(200, page_materiel(self.app, s["csrf"], nonce), csp=self.csp_page(nonce))
+        if chemin.path == "/materiel.json":
+            return self.envoyer(200, json.dumps(self.app.mesures.instantane(), ensure_ascii=False), "application/json; charset=utf-8")
         if chemin.path.startswith("/rapports/"):
             return self.servir_rapport(urllib.parse.unquote(chemin.path[len("/rapports/"):]))
         if chemin.path.startswith("/texte/"):
@@ -651,6 +1124,13 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
         if chemin == "/deconnexion":
             self.app.fermer_session(s["jeton"])
             return self.rediriger("/connexion", {"Set-Cookie": "{}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0".format(COOKIE)})
+        if chemin == "/mesurer":
+            try:
+                self.app.mesures.demander()
+            except OSError as exc:
+                sys.stderr.write("demande de mesure impossible : {}\n".format(exc))
+                return self.envoyer(500, b'{"ok":false}', "application/json")
+            return self.envoyer(202, b'{"ok":true}', "application/json")
         if chemin == "/lancer":
             e = self.app.donnees.etat()
             if e["en_cours"] or e["demande"]:
@@ -668,6 +1148,7 @@ class Application:
     def __init__(self, conf):
         self.conf = conf
         self.donnees = Donnees(conf)
+        self.mesures = Mesures(conf)
         self.tls = bool(conf.get("tls_cert"))
         self._sessions = {}
         self._echecs = {}
@@ -738,6 +1219,7 @@ def main():
     Serveur.address_family = socket.AF_INET6 if ":" in hote else socket.AF_INET
     srv = Serveur((hote, int(conf["port"])), Gestionnaire)
     srv.app = app
+    app.mesures.demarrer()
     schema = "http"
     if app.tls:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

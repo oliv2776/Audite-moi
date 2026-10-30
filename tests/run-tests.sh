@@ -166,10 +166,31 @@ PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT" --no-color --quick --
 n=$(ls "$OUT"/rapport-*-[0-9]*.html | wc -l)
 [[ $n == 3 ]] && ok "seuls les 3 rapports les plus récents sont conservés" || ko "$n rapports conservés au lieu de 3"
 
+echo "▶ Relevé des disques et des pools (page Matériel)"
+M=$TMP/mesures.json; touch "$TMP/dem-mesurer"
+releve() { PATH="$ROOT/tests/mock/bin:$PATH" python3 "$ROOT/systemd/audite-moi-mesures" --sortie "$M" --demande "$TMP/dem-mesurer" --groupe root; }
+verifie() {   # verifie "description" 'expression jq'
+  if jq -e "$2" "$M" >/dev/null 2>&1; then ok "$1"; else ko "$1"; fi
+}
+releve && ok "relevé produit" || ko "le relevé a échoué"
+[[ -e $TMP/dem-mesurer ]] && ko "la demande de mesure n'a pas été effacée" || ok "demande de mesure effacée (pas de boucle)"
+[[ $(stat -c %a "$M") == 640 ]] && ok "relevé en mode 640" || ko "droits du relevé : $(stat -c %a "$M")"
+verifie "pool rapide : SSD en miroir, 83 % rempli" '.pools[] | select(.nom == "rapide" and .type == "SSD" and .disposition == "mirror" and .remplissage == 83)'
+verifie "pool stockage : HDD en RAIDZ1, espace utilisable" '.pools[] | select(.nom == "stockage" and .type == "HDD" and .disposition == "raidz1" and .libre == 10557207691264)'
+verifie "jeux de données sans les couches Docker" '[.pools[] | select(.nom == "rapide") | .jeux[].nom] == ["nextcloud", "docker"]'
+verifie "nvme0 : cache du pool stockage" '.disques[] | select(.nom == "nvme0" and .role == "cache" and .pool == "stockage" and .usure == 4)'
+verifie "sdd à surveiller (secteurs réalloués, CRC en hausse, erreurs ZFS)" '.disques[] | select(.nom == "sdd" and .etat == "attention" and (.raisons | length) == 3)'
+verifie "SSD : usure lue (sda 9 %)" '.disques[] | select(.nom == "sda" and .etat == "ok" and .usure == 9)'
+jq '(.disques[] | select(.nom == "sdd") | .crc_hausse) = 1000' "$M" > "$M.t" && mv "$M.t" "$M"
+releve; verifie "erreurs CRC anciennes et stables : simple note" '.disques[] | select(.nom == "sdd" and (.note | test("stables")) and (.raisons | length) == 2)'
+AUDITE_MOI_VEILLE=sdc releve
+verifie "disque en veille : pas réveillé, dernières valeurs gardées" '.disques[] | select(.nom == "sdc" and .veille == true and .temperature == 38 and .etat == "veille")'
+
 echo "▶ Interface web"
 if python3 "$ROOT/tests/test_web.py" > "$TMP/web.txt" 2>&1; then ok "tests de l'interface web ($(grep -oE 'Ran [0-9]+ tests' "$TMP/web.txt"))"
 else ko "tests de l'interface web"; tail -n 25 "$TMP/web.txt"; fi
 for f in "$ROOT"/install.sh "$ROOT"/uninstall.sh "$ROOT"/systemd/audite-moi-run "$SCRIPT"; do bash -n "$f" || ko "syntaxe : $f"; done
+python3 -c "import ast,sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]" "$ROOT/systemd/audite-moi-mesures" "$ROOT/web/audite-moi-web.py" && ok "syntaxe Python" || ko "syntaxe Python"
 if command -v shellcheck >/dev/null; then
   shellcheck -S warning "$SCRIPT" "$ROOT/install.sh" "$ROOT/uninstall.sh" "$ROOT/systemd/audite-moi-run" && ok "shellcheck sans avertissement" || ko "shellcheck"
 fi

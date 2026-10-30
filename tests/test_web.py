@@ -36,6 +36,41 @@ def rapport(dossier, nom, t, sante, secu):
         f.write("RAPPORT TEXTE <b>\n")
 
 
+def ecrire(chemin, texte):
+    os.makedirs(os.path.dirname(chemin), exist_ok=True)
+    with open(chemin, "w", encoding="utf-8") as f:
+        f.write(texte)
+
+
+def faux_proc(base, stat="cpu  100 0 100 800 0 0 0 0\ncpu0 50 0 50 400 0 0 0 0\ncpu1 50 0 50 400 0 0 0 0\n"):
+    p = os.path.join(base, "proc")
+    ecrire(os.path.join(p, "stat"), stat)
+    ecrire(os.path.join(p, "meminfo"), "MemTotal: 8000000 kB\nMemFree: 2000000 kB\nMemAvailable: 5000000 kB\nBuffers: 100000 kB\n"
+                                        "Cached: 900000 kB\nSReclaimable: 0 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n")
+    ecrire(os.path.join(p, "spl", "kstat", "zfs", "arcstats"), "13 1 0x01\nname type data\nsize 4 2048000000\n")
+    ecrire(os.path.join(p, "cpuinfo"), "model name\t: Intel(R) Core(TM) i5-13400\ncpu MHz\t\t: 2500.000\nmodel name\t: Intel(R) Core(TM) i5-13400\ncpu MHz\t\t: 3500.000\n")
+    ecrire(os.path.join(p, "loadavg"), "0.50 0.40 0.30 1/200 1234\n")
+    ecrire(os.path.join(p, "uptime"), "7200.00 1000.00\n")
+    return p
+
+
+def faux_sys(base):
+    s = os.path.join(base, "sys")
+    amd = os.path.join(base, "pci", "amd")
+    for f, v in (("vendor", "0x1002"), ("device", "0x7340"), ("gpu_busy_percent", "42"), ("mem_info_vram_used", "1073741824"),
+                 ("mem_info_vram_total", "8589934592"), ("hwmon/hwmon3/temp1_input", "55000"), ("hwmon/hwmon3/temp1_label", "edge"),
+                 ("hwmon/hwmon3/power1_average", "30000000")):
+        ecrire(os.path.join(amd, f), v)
+    os.makedirs(os.path.join(amd, "drm", "renderD128"))
+    os.makedirs(os.path.join(s, "class", "drm", "card1"))
+    os.symlink(amd, os.path.join(s, "class", "drm", "card1", "device"))
+    os.makedirs(os.path.join(s, "class", "drm", "card1-HDMI-A-1"))
+    ecrire(os.path.join(s, "class", "hwmon", "hwmon0", "name"), "coretemp")
+    ecrire(os.path.join(s, "class", "hwmon", "hwmon0", "temp1_input"), "47000")
+    ecrire(os.path.join(s, "class", "hwmon", "hwmon0", "temp1_label"), "Package id 0")
+    return s
+
+
 class TestInterface(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -47,8 +82,16 @@ class TestInterface(unittest.TestCase):
             f.write("ne doit pas sortir")
         rapport(os.path.join(base, "rapports"), "rapport-nas-test-20260101-1000", 1767258000, 55, 40)
         rapport(os.path.join(base, "rapports"), "rapport-nas-test-20260108-1000", 1767862800, 61, 47)
+        cls.proc, cls.sys = faux_proc(base), faux_sys(base)
+        with open(os.path.join(base, "etat", "mesures.json"), "w", encoding="utf-8") as f:
+            json.dump({"horodatage": int(time.time()) - 120, "volumes": [],
+                       "pools": [{"nom": "stockage<b>", "taille": 1000, "utilise": 850, "libre": 150, "etat": "ONLINE", "jeux": [],
+                                  "disques": [{"disque": "sda", "role": "donnees", "etat": "ONLINE", "erreurs": [0, 0, 0]}]}],
+                       "disques": [{"nom": "sda", "pool": "stockage<b>", "role": "donnees", "etat": "attention", "type": "HDD",
+                                    "modele": "Disque <i>test</i>", "raisons": ["3 erreur(s) CRC"]}]}, f)
         conf = dict(web.DEFAUTS, ecoute="127.0.0.1", port=0, mot_de_passe=web.hacher(MDP, iterations=1000),
-                    rapports=os.path.join(base, "rapports"), demandes=os.path.join(base, "demande"), etat=os.path.join(base, "etat"))
+                    rapports=os.path.join(base, "rapports"), demandes=os.path.join(base, "demande"), etat=os.path.join(base, "etat"),
+                    racine_proc=cls.proc, racine_sys=cls.sys, pci_ids=os.path.join(ICI, "fixtures", "pci.ids"))
         cls.srv = web.Serveur(("127.0.0.1", 0), web.Gestionnaire)
         cls.srv.app = web.Application(conf)
         cls.port = cls.srv.server_address[1]
@@ -167,6 +210,55 @@ class TestInterface(unittest.TestCase):
         r, t = self.req("GET", "/?rapport=../../etc/passwd", cookie=ck)
         self.assertEqual(r.status, 200)
         self.assertNotIn("ancien rapport", t)
+
+    def test_mesures_directes(self):
+        m = self.srv.app.mesures
+        m.echantillon()
+        ecrire(os.path.join(self.proc, "stat"), "cpu  250 0 250 900 0 0 0 0\ncpu0 150 0 150 400 0 0 0 0\ncpu1 100 0 100 500 0 0 0 0\n")
+        d = m.echantillon()
+        self.assertEqual(d["cpu"]["pourcent"], 75.0)               # 300 actifs sur 400
+        self.assertEqual(d["cpu"]["coeurs"], [100.0, 50.0])
+        self.assertEqual(d["cpu"]["temperature"], 47)
+        self.assertEqual(d["cpu"]["frequence"], 3000)
+        self.assertEqual(d["cpu"]["modele"], "Intel Core i5-13400")
+        mem = d["memoire"]
+        self.assertEqual(mem["arc"], 2048000000)
+        self.assertEqual(mem["applis"], (8000000 - 2000000 - 1000000) * 1024 - 2048000000)
+        self.assertEqual(len(d["gpus"]), 1)                          # card1-HDMI-A-1 (connecteur) ignoré
+        g = d["gpus"][0]
+        self.assertEqual((g["marque"], g["occupation"], g["temperature"], g["puissance"], g["noeud"]), ("AMD", 42, 55, 30.0, "renderD128"))
+        self.assertEqual(g["vram_totale"], 8589934592)
+        self.assertEqual(g["nom"], "AMD Radeon RX 5500/5500M / Pro 5500M")
+
+    def test_page_materiel(self):
+        r, _ = self.req("GET", "/materiel.json")
+        self.assertEqual(r.status, 401)
+        cookie = self.connexion()
+        r, t = self.req("GET", "/materiel", cookie=cookie)
+        self.assertEqual(r.status, 200)
+        nonce = re.search(r"script-src 'nonce-([^']+)'", r.getheader("Content-Security-Policy")).group(1)
+        self.assertIn('<script nonce="{}">'.format(nonce), t)
+        self.assertNotIn(' style="', t)
+        self.assertNotIn("<b>", t.split('id="init">')[1].split("</script>")[0])   # données échappées dans le JSON embarqué
+        self.assertIn('class="on">Matériel', t)
+        r, t = self.req("GET", "/materiel.json", cookie=cookie)
+        self.assertEqual(r.status, 200)
+        d = json.loads(t)
+        self.assertEqual(d["releve"]["pools"][0]["nom"], "stockage<b>")
+        self.assertIsNotNone(d["direct"]["cpu"]["pourcent"])
+        self.assertIn("demande", d)
+
+    def test_mesurer_csrf(self):
+        cookie = self.connexion()
+        r, _ = self.req("POST", "/mesurer", {"csrf": "faux"}, cookie=cookie)
+        self.assertEqual(r.status, 403)
+        _, t = self.req("GET", "/materiel", cookie=cookie)
+        csrf = re.search(r'name="csrf" value="([^"]+)"', t).group(1)
+        r, _ = self.req("POST", "/mesurer", {"csrf": csrf}, cookie=cookie)
+        self.assertEqual(r.status, 202)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp.name, "demande", "mesurer")))
+        _, t = self.req("GET", "/materiel.json", cookie=cookie)
+        self.assertTrue(json.loads(t)["demande"])
 
     def test_deconnexion(self):
         ck = self.connexion()

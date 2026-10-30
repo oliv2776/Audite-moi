@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""Audite-moi — relevé de l'état des disques et des pools (exécuté en root).
+
+Lancé toutes les 10 minutes par audite-moi-mesures.timer, ou à la demande de
+l'interface web (fichier /var/lib/audite-moi/demande/mesurer). Écrit un petit
+fichier JSON lu par la page « Matériel » de l'interface :
+  * pools ZFS : espace utilisable, état, erreurs, principaux jeux de données ;
+  * autres volumes (/, /boot…) ;
+  * disques : SMART (état, température, heures, secteurs, erreurs CRC, usure).
+
+Lecture seule. Les disques en veille ne sont PAS réveillés (smartctl -n standby) :
+leurs dernières valeurs connues sont conservées.
+"""
+import argparse
+import grp
+import json
+import os
+import re
+import subprocess
+import time
+
+SYS_BLOCK = os.environ.get("AUDITE_MOI_SYS_BLOCK", "/sys/block")
+FS_LOCAUX = {"ext2", "ext3", "ext4", "xfs", "btrfs", "vfat", "f2fs", "exfat"}
+ID_DOCKER = re.compile(r"/[0-9a-f]{64}(-init)?$")
+SEPT_JOURS = 7 * 86400
+
+
+def cmd(*args, timeout=60):
+    try:
+        p = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, p.stdout
+    except (OSError, subprocess.SubprocessError):
+        return 127, ""
+
+
+def entier(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def disque_de(chemin):
+    """/dev/sda1 → sda ; /dev/nvme0n1p4 → nvme0 (nom du contrôleur, comme smartctl --scan)."""
+    n = os.path.basename(os.path.realpath(chemin)) if chemin.startswith("/dev/disk/") else os.path.basename(chemin)
+    m = re.match(r"(nvme\d+)n\d+(p\d+)?$", n)
+    if m:
+        return m.group(1)
+    m = re.match(r"((?:sd|vd|hd|xvd)[a-z]+)\d*$", n)
+    return m.group(1) if m else n
+
+
+# --------------------------------------------------------------------- ZFS --
+def pools():
+    rc, out = cmd("zpool", "list", "-H", "-o", "name")
+    if rc != 0:
+        return [], {}
+    noms = [l.strip() for l in out.splitlines() if l.strip()]
+    datasets = {}
+    rc, out = cmd("zfs", "list", "-H", "-p", "-t", "filesystem,volume", "-o", "name,used,avail,refer,compressratio,encryption,mountpoint")
+    for l in out.splitlines():
+        c = l.split("\t")
+        if len(c) >= 3:
+            datasets[c[0]] = (entier(c[1]) or 0, entier(c[2]) or 0, c[6] if len(c) > 6 else "")
+    res, membres = [], {}
+    for nom in noms:
+        p = {"nom": nom}
+        rc, out = cmd("zpool", "list", "-H", "-p", "-o", "size,alloc,free,frag,cap,health,dedupratio", nom)
+        c = out.strip().split("\t")
+        if len(c) >= 6:
+            p.update(brut=entier(c[0]), alloue=entier(c[1]), frag=entier(c[3]), remplissage=entier(c[4]), etat=c[5])
+        racine = datasets.get(nom)
+        if racine:
+            p["utilise"], p["libre"] = racine[0], racine[1]
+            p["taille"] = racine[0] + racine[1]
+        enfants = [(n, v[0]) for n, v in datasets.items() if n.count("/") == 1 and n.startswith(nom + "/") and not ID_DOCKER.search(n)]
+        enfants.sort(key=lambda x: -x[1])
+        p["jeux"] = [{"nom": n.split("/", 1)[1], "utilise": u} for n, u in enfants[:6]]
+        if len(enfants) > 6:
+            p["jeux"].append({"nom": "autres ({})".format(len(enfants) - 6), "utilise": sum(u for _, u in enfants[6:])})
+        # membres du pool, rôle (données / cache / journal / secours) et erreurs
+        rc, out = cmd("zpool", "status", "-LP", nom)
+        role, disques, dispo = "donnees", [], []
+        for l in out.splitlines():
+            t = l.split()
+            if t and role == "donnees" and re.match(r"(mirror|raidz\d|draid\d?\S*)-\d+$", t[0]):
+                v = re.sub(r"-\d+$", "", t[0])
+                if v not in dispo:
+                    dispo.append(v)
+            if len(t) == 1 and t[0] in ("cache", "logs", "spares", "special", "dedup"):
+                role = t[0]
+                continue
+            if t and t[0].startswith("/dev/"):
+                d = disque_de(t[0])
+                err = [entier(x) or 0 for x in t[2:5]] if len(t) >= 5 else [0, 0, 0]
+                disques.append({"disque": d, "role": role, "etat": t[1] if len(t) > 1 else "", "erreurs": err})
+                membres[d] = {"pool": nom, "role": role, "erreurs": err, "etat_zfs": t[1] if len(t) > 1 else ""}
+        m = re.search(r"scan: (.*)", out)
+        p["scrub"] = m.group(1).strip() if m else ""
+        p["disques"] = disques
+        p["disposition"] = ", ".join(dispo) or ("simple" if disques else "")
+        res.append(p)
+    return res, membres
+
+
+def volumes():
+    vus, res = set(), []
+    try:
+        lignes = open("/proc/mounts", encoding="utf-8").read().splitlines()
+    except OSError:
+        return res
+    for l in lignes:
+        c = l.split()
+        if len(c) < 3 or c[2] not in FS_LOCAUX or not c[0].startswith("/dev/") or c[0] in vus:
+            continue
+        point = c[1].replace("\\040", " ")
+        if point.startswith(("/snap", "/var/lib/docker", "/run", "/sys", "/proc")):
+            continue
+        try:
+            s = os.statvfs(point)
+        except OSError:
+            continue
+        taille = s.f_blocks * s.f_frsize
+        if taille <= 0:
+            continue
+        vus.add(c[0])
+        libre = s.f_bavail * s.f_frsize
+        res.append({"point": point, "type": c[2], "source": c[0], "taille": taille, "utilise": taille - s.f_bfree * s.f_frsize, "libre": libre})
+    res.sort(key=lambda v: (v["point"] != "/", v["point"]))
+    return res
+
+
+# -------------------------------------------------------------------- SMART --
+def attr(d, *ids):
+    for a in (d.get("ata_smart_attributes") or {}).get("table", []) or []:
+        if a.get("id") in ids:
+            return a
+    return None
+
+
+def brut(d, *ids):
+    a = attr(d, *ids)
+    if not a:
+        return None
+    v = (a.get("raw") or {}).get("value")
+    return v if isinstance(v, int) else None
+
+
+def lire_disque(nom, info, membre, avant, maintenant):
+    chemin = info.get("name") or "/dev/" + nom
+    rc, out = cmd("smartctl", "-j", "-a", "-n", "standby,3", chemin, timeout=90)
+    try:
+        d = json.loads(out) if out.strip() else {}
+    except ValueError:
+        d = {}
+    r = {"nom": nom, "chemin": chemin, "pool": membre.get("pool"), "role": membre.get("role"), "mesure": maintenant}
+    if rc == 3 or "STANDBY" in json.dumps(d.get("smartctl", {}).get("messages", [])):
+        if avant:   # disque en veille : on garde le dernier relevé, sans le réveiller
+            r.update({k: v for k, v in avant.items() if k not in ("veille", "pool", "role")})
+            r["pool"], r["role"] = membre.get("pool"), membre.get("role")
+        r["veille"] = True
+        r.setdefault("etat", "veille")
+        if r["etat"] == "ok":
+            r["etat"] = "veille"
+        return r
+    if not d.get("device"):
+        r.update(etat="inconnu", raisons=["SMART illisible (disque USB, contrôleur RAID ?)"])
+        return r
+    nvme = (d.get("device", {}).get("protocol") == "NVMe") or d.get("device", {}).get("type") == "nvme"
+    rot = d.get("rotation_rate")
+    try:
+        bloc = nom + "n1" if nvme else nom
+        rot_sys = open(os.path.join(SYS_BLOCK, bloc, "queue", "rotational")).read().strip() == "1"
+    except OSError:
+        rot_sys = None
+    if nvme:
+        typ = "NVMe"
+    elif (isinstance(rot, int) and rot > 0) or (rot is None and rot_sys):
+        typ = "HDD"
+    else:
+        typ = "SSD"
+    taille = (d.get("user_capacity") or {}).get("bytes") or d.get("nvme_total_capacity")
+    if not taille and d.get("nvme_namespaces"):
+        taille = ((d["nvme_namespaces"][0].get("capacity") or {}).get("bytes"))
+    r.update(type=typ, modele=d.get("model_name") or d.get("model_family") or "", serie=d.get("serial_number", ""), taille=taille,
+             temperature=(d.get("temperature") or {}).get("current"), heures=(d.get("power_on_time") or {}).get("hours"),
+             smart_ok=(d.get("smart_status") or {}).get("passed"))
+    nv = d.get("nvme_smart_health_information_log") or {}
+    if nvme:
+        r.update(usure=nv.get("percentage_used"), erreurs_media=nv.get("media_errors"), reserve=nv.get("available_spare"))
+    else:
+        r.update(realloues=brut(d, 5), en_attente=brut(d, 197), irrecuperables=brut(d, 198), non_corrigees=brut(d, 187), crc=brut(d, 199))
+        if typ == "SSD":
+            a = attr(d, 177, 231, 233, 169)
+            r["usure"] = max(0, 100 - a["value"]) if a and isinstance(a.get("value"), int) and a["value"] <= 100 else None
+            if r["usure"] is None and brut(d, 202) is not None and brut(d, 202) <= 100:
+                r["usure"] = brut(d, 202)   # Crucial/Micron : pourcentage de vie consommé
+    # Historique des erreurs CRC : seule une HAUSSE récente est inquiétante (le compteur ne redescend jamais)
+    crc = r.get("crc")
+    hausse = (avant or {}).get("crc_hausse")
+    if crc:
+        if avant is None or (avant.get("crc") or 0) < crc:
+            hausse = maintenant if avant is not None else (hausse or maintenant)
+    r["crc_hausse"] = hausse
+
+    crit, att = [], []
+    if r["smart_ok"] is False:
+        crit.append("SMART annonce une défaillance : remplacez le disque")
+    if nvme:
+        if nv.get("critical_warning"):
+            crit.append("Alerte critique NVMe ({})".format(nv["critical_warning"]))
+        if isinstance(nv.get("available_spare"), int) and isinstance(nv.get("available_spare_threshold"), int) \
+                and nv["available_spare"] <= nv["available_spare_threshold"]:
+            crit.append("Réserve de cellules épuisée ({} %)".format(nv["available_spare"]))
+        if nv.get("media_errors"):
+            att.append("{} erreur(s) de support".format(nv["media_errors"]))
+    for cle, txt, liste in (("en_attente", "secteur(s) en attente de réallocation", crit), ("irrecuperables", "secteur(s) irrécupérable(s)", crit),
+                            ("realloues", "secteur(s) réalloué(s)", att), ("non_corrigees", "erreur(s) non corrigée(s)", att)):
+        if r.get(cle):
+            liste.append("{} {}".format(r[cle], txt))
+    if crc:
+        if hausse and maintenant - hausse < SEPT_JOURS:
+            att.append("{} erreur(s) CRC, en hausse : câble SATA ou connecteur à vérifier".format(crc))
+        else:
+            r["note"] = "{} erreur(s) CRC anciennes, stables depuis plus de 7 jours".format(crc)
+    t = r.get("temperature")
+    if isinstance(t, int):
+        lim = {"HDD": (50, 60), "SSD": (70, 80), "NVMe": (70, 80)}[typ]
+        if t >= lim[1]:
+            crit.append("Température très élevée ({} °C)".format(t))
+        elif t >= lim[0]:
+            att.append("Température élevée ({} °C)".format(t))
+    u = r.get("usure")
+    if isinstance(u, int):
+        if u >= 95:
+            crit.append("Usure {} % : fin de vie".format(u))
+        elif u >= 80:
+            att.append("Usure {} %".format(u))
+    e = membre.get("erreurs") or [0, 0, 0]
+    if any(e):
+        att.append("Erreurs ZFS sur ce disque (lecture {}, écriture {}, somme de contrôle {})".format(*e))
+    if membre.get("etat_zfs") and membre["etat_zfs"] not in ("ONLINE", "AVAIL", "INUSE"):
+        crit.append("État dans le pool : {}".format(membre["etat_zfs"]))
+    r["etat"] = "critique" if crit else "attention" if att else "ok"
+    r["raisons"] = crit + att
+    return r
+
+
+def disques(membres, precedent, maintenant):
+    rc, out = cmd("smartctl", "--scan-open", "-j")
+    try:
+        scan = json.loads(out).get("devices", [])
+    except ValueError:
+        scan = []
+    avant = {d["nom"]: d for d in precedent.get("disques", []) if isinstance(d, dict) and d.get("nom")}
+    res, vus = [], set()
+    for info in scan:
+        nom = os.path.basename(info.get("name", ""))
+        if not nom or nom in vus:
+            continue
+        vus.add(nom)
+        res.append(lire_disque(nom, info, membres.get(nom, {}), avant.get(nom), maintenant))
+    res.sort(key=lambda d: (d.get("pool") is None, d.get("pool") or "", d.get("role") != "donnees", d["nom"]))
+    return res
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Relevé des disques et des pools pour l'interface d'Audite-moi")
+    ap.add_argument("--sortie", default="/var/lib/audite-moi/etat/mesures.json")
+    ap.add_argument("--demande", default="/var/lib/audite-moi/demande/mesurer")
+    ap.add_argument("--groupe", default="audite-moi")
+    a = ap.parse_args()
+    try:
+        os.remove(a.demande)   # sinon audite-moi-mesures.path relancerait la mesure en boucle
+    except OSError:
+        pass
+    maintenant = int(time.time())
+    try:
+        precedent = json.load(open(a.sortie, encoding="utf-8"))
+    except (OSError, ValueError):
+        precedent = {}
+    p, membres = pools()
+    res = {"horodatage": maintenant, "pools": p, "volumes": volumes(), "disques": disques(membres, precedent, maintenant)}
+    for pool in res["pools"]:
+        etats = [d.get("etat") for d in res["disques"] if d.get("pool") == pool["nom"]]
+        types = {d.get("type") for d in res["disques"] if d.get("pool") == pool["nom"] and d.get("role") == "donnees" and d.get("type")}
+        pool["type"] = types.pop() if len(types) == 1 else ("mixte" if types else "")
+        pool["disques_critiques"] = etats.count("critique")
+        pool["disques_attention"] = etats.count("attention")
+    tmp = a.sortie + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(res, f, ensure_ascii=False, indent=1)
+    try:
+        os.chown(tmp, 0, grp.getgrnam(a.groupe).gr_gid)
+    except (KeyError, OSError):
+        pass
+    os.replace(tmp, a.sortie)
+
+
+if __name__ == "__main__":
+    main()

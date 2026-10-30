@@ -61,10 +61,23 @@ Options utiles : `--port 9000`, `--ecoute 192.168.1.10`, `--sans-web` (script + 
 - une barre de navigation toujours visible : **Tableau de bord**, **Constats**, **Historique**, **Rapport complet**, et les boutons **▶ Lancer un audit** (complet, quelques minutes) / **Audit rapide** (sans Lynis, Trivy, scan du réseau local ni recherche des fichiers SUID), avec le déroulement affiché en direct ;
 - les notes **Santé** / **Sécurité** et les compteurs (critiques, avertissements, OK, infos) sont **cliquables** : un clic n'affiche que les constats correspondants (ex. Sécurité + Critiques), un second clic annule ;
 - la liste des **constats** se filtre aussi par catégorie, niveau, section ou mot-clé (ex. « ssh », « jellyfin ») ; par défaut elle montre ce qu'il faut corriger, du plus urgent au moins urgent, avec la correction à appliquer ;
+- la page **Matériel** (voir ci-dessous) ;
 - **évolution des notes** et **historique** : un clic sur une date affiche cet ancien audit dans le tableau de bord ;
 - le **rapport complet** (avec un bouton « ← Tableau de bord » et les mêmes filtres cliquables), sa version texte et le JSON.
 
 ![Évolution des notes](docs/evolution.png)
+
+### Page « Matériel »
+
+Un tableau de bord de l'état du serveur, mis à jour en direct :
+
+- **Stockage** : pour chaque pool ZFS, l'espace **réellement utilisable** restant (parité déduite), le remplissage (orange au-delà de 80 %, seuil où ZFS ralentit ; rouge au-delà de 90 %), les principaux jeux de données et l'état de chaque disque membre ; les autres volumes (`/`, `/boot`…).
+- **Disques** : état SMART de chaque disque (OK, à surveiller, critique) avec la raison en clair (secteurs réalloués ou en attente, erreurs CRC **en hausse**, température, usure des SSD/NVMe, erreurs ZFS), sa température et son âge. Les erreurs CRC anciennes et stables ne sont plus signalées comme un problème.
+- **Processeur** (charge totale et par cœur, température, fréquence), **mémoire** (applications, cache ZFS, cache système, swap) et **GPU** (occupation, mémoire vidéo, température, puissance, fréquence ; Intel : occupation estimée), avec l'historique des 3 dernières minutes, pratique pour suivre un transcodage.
+
+Processeur, mémoire et GPU sont lus en direct par l'interface (sans droits particuliers). Les disques sont relevés en root par `audite-moi-mesures.timer` toutes les 10 minutes, ou tout de suite avec le bouton **Actualiser** ; les disques en veille ne sont **jamais réveillés** (leurs dernières valeurs restent affichées).
+
+![Page Matériel](docs/materiel.png)
 
 ### En ligne de commande
 
@@ -178,7 +191,7 @@ sudo tests/run-tests.sh --reel   # + une exécution réelle (lecture seule) sur 
 ```
 audite-moi.sh            le script d'audit (bash)
 web/audite-moi-web.py    l'interface web (Python 3, sans dépendance)
-systemd/                 services : audit (.service/.path/.timer) et interface web
+systemd/                 services : audit (.service/.path/.timer), relevé des disques (audite-moi-mesures) et interface web
 install.sh, uninstall.sh
 tests/                   simulations, données d'exemple et tests
 ```

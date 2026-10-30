@@ -1,0 +1,6 @@
+# extrait de pci.ids (tests)
+1002  Advanced Micro Devices, Inc. [AMD/ATI]
+	7340  Navi 14 [Radeon RX 5500/5500M / Pro 5500M]
+		1002 0b0c  Radeon RX 5500 XT
+8086  Intel Corporation
+	a780  Raptor Lake-S GT1 [UHD Graphics 770]

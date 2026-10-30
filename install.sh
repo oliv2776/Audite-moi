@@ -74,6 +74,7 @@ etape "Fichiers du programme"
 install -m 755 "$SRC/audite-moi.sh" /usr/local/sbin/audite-moi
 install -d -m 755 "$LIB"
 install -m 755 "$SRC/systemd/audite-moi-run" "$LIB/audite-moi-run"
+install -m 755 "$SRC/systemd/audite-moi-mesures" "$LIB/audite-moi-mesures"
 install -m 755 "$SRC/web/audite-moi-web.py" "$LIB/audite-moi-web.py"
 echo "/usr/local/sbin/audite-moi, $LIB/"
 
@@ -213,13 +214,18 @@ fi
 
 etape "Services systemd"
 install -m 644 "$SRC/systemd/audite-moi.service" "$SRC/systemd/audite-moi.path" "$SRC/systemd/audite-moi.timer" /etc/systemd/system/
-((WEB)) && install -m 644 "$SRC/systemd/audite-moi-web.service" /etc/systemd/system/
+((WEB)) && install -m 644 "$SRC/systemd/audite-moi-web.service" "$SRC/systemd/audite-moi-mesures.service" \
+  "$SRC/systemd/audite-moi-mesures.timer" "$SRC/systemd/audite-moi-mesures.path" /etc/systemd/system/
 if ((SYSTEMD)); then
   systemctl daemon-reload
   systemctl enable --now audite-moi.path >/dev/null
   if ((MINUTEUR)); then systemctl enable --now audite-moi.timer >/dev/null; echo "Audit complet automatique : chaque lundi vers 7 h 30"
   else systemctl disable --now audite-moi.timer >/dev/null 2>&1 || true; fi
   if ((WEB)); then
+    # relevé des disques pour la page « Matériel » : toutes les 10 min et à la demande
+    systemctl enable --now audite-moi-mesures.timer audite-moi-mesures.path >/dev/null
+    systemctl start --no-block audite-moi-mesures.service
+    echo "Relevé des disques (page Matériel) : toutes les 10 minutes"
     systemctl enable audite-moi-web.service >/dev/null
     systemctl restart audite-moi-web.service
     sleep 1

@@ -1,0 +1,9 @@
+[Unit]
+Description=Audite-moi : relevé des disques demandé par l'interface web
+
+[Path]
+PathExists=/var/lib/audite-moi/demande/mesurer
+Unit=audite-moi-mesures.service
+
+[Install]
+WantedBy=multi-user.target

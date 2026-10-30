@@ -1,0 +1,18 @@
+[Unit]
+Description=Audite-moi : relevé des disques et des pools (page Matériel)
+Documentation=https://github.com/oliv2776/Audite-moi
+After=zfs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/audite-moi/audite-moi-mesures
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=10min
+# Lecture seule : smartctl et zpool ont besoin de root, mais rien n'est modifié
+ProtectSystem=strict
+ReadWritePaths=/var/lib/audite-moi/etat /var/lib/audite-moi/demande
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes

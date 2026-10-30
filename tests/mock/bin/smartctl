@@ -3,5 +3,7 @@
 F=$AUDITE_MOI_FIX/smart
 if [[ " $* " == *" --scan-open "* ]]; then cat "$F/scan.json"; exit 0; fi
 dev=${*: -1}; f="$F/${dev##*/}.json"
+# disque simulé en veille (smartctl -n standby,3 ne le réveille pas)
+if [[ " ${AUDITE_MOI_VEILLE:-} " == *" ${dev##*/} "* && $* == *standby* ]]; then echo '{"smartctl":{"exit_status":3,"messages":[{"string":"Device is in STANDBY mode, exit(3)","severity":"information"}]}}'; exit 3; fi
 [[ -f $f ]] || { echo '{}'; exit 2; }
 cat "$f"; exit "$(jq -r '.smartctl.exit_status' "$f")"
