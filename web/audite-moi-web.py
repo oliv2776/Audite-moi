@@ -1934,7 +1934,7 @@ class Serveur(http.server.ThreadingHTTPServer):
         # Refuser proprement les connexions excédentaires évite l'épuisement mémoire.
         if not self._places.acquire(blocking=False):
             try:
-                request.sendall(b"HTTP/1.1 503 Service Unavailable\\r\\nConnection: close\\r\\nContent-Length: 0\\r\\n\\r\\n")
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
             except OSError:
                 pass
             self.shutdown_request(request)
@@ -1953,7 +1953,7 @@ class Serveur(http.server.ThreadingHTTPServer):
 
     def handle_error(self, request, client_address):
         exc = sys.exc_info()[1]
-        sys.stderr.write("{} erreur : {}\\n".format(client_address[0] if client_address else "?", exc))
+        sys.stderr.write("{} erreur : {}\n".format(client_address[0] if client_address else "?", exc))
 
 
 def charger_conf(chemin):
