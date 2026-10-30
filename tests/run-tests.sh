@@ -407,6 +407,20 @@ else
   ko "échec de journalctl noyau : indisponibilité non distinguée"
 fi
 
+echo "▶ Journaux SSH indisponibles"
+OUT_SSH=$TMP/rapports-ssh-indisponibles
+AUTH_SSH=$TMP/auth-logs-absents
+mkdir -p "$OUT_SSH" "$AUTH_SSH"
+AUDITE_MOI_JOURNAL_SSH_ECHEC=1 AUDITE_MOI_AUTH_LOG_DIR="$AUTH_SSH" PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_SSH" --config "$TMP/audit.conf" --no-color --quick > "$TMP/ssh-indisponible.txt" 2>&1 || true
+JS=$(ls "$OUT_SSH"/rapport-*.json 2>/dev/null | head -n 1)
+if [[ -n $JS ]] \
+   && jq -e '.constats[] | select(.titre == "Journaux SSH indisponibles")' "$JS" >/dev/null \
+   && ! jq -e '.constats[] | select(.titre == "Aucune tentative de connexion SSH échouée (7 jours)")' "$JS" >/dev/null; then
+  ok "échec de journalctl et absence de auth.log : journaux SSH signalés indisponibles, sans faux RAS"
+else
+  ko "échec de collecte SSH : indisponibilité non distinguée"
+fi
+
 [[ -n ${GARDER:-} ]] && { cp -r "$OUT" "$GARDER"; echo "Rapports copiés dans $GARDER"; }
 echo
 if ((fail)); then echo "Des tests ont échoué."; exit 1; fi
