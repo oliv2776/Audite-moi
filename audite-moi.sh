@@ -856,7 +856,7 @@ check_zfs() {
       "Vérifiez le chargement du module ZFS et les journaux : `sudo zpool status` et `journalctl -k -b`"
     return
   fi
-  if (("${#POOLS[@]}" == 0)); then
+  if ((${#POOLS[@]} == 0)); then
     crit "Aucun pool ZFS importé" "Aucun pool n'est importé : les données des pools ne sont pas accessibles." \
       "`sudo zpool import` pour lister les pools disponibles, puis `sudo zpool import <nom>`"
     return
