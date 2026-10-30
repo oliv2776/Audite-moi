@@ -174,6 +174,8 @@ class TestInterface(unittest.TestCase):
         self.assertEqual(r.status, 403)
         r, _ = self.req("POST", "/lancer", {"mode": "rapide", "csrf": csrf}, cookie=ck, entetes={"Origin": "https://pirate.example"})
         self.assertEqual(r.status, 403)
+        r, _ = self.req("POST", "/lancer", {"mode": "rapide", "csrf": csrf}, cookie=ck, entetes={"Origin": "http://[adresse-invalide"})
+        self.assertEqual(r.status, 403)
         r, _ = self.req("POST", "/lancer", {"mode": "rapide", "csrf": csrf}, cookie=ck)
         self.assertEqual(r.status, 303)
         f = os.path.join(self.tmp.name, "demande", "lancer")
@@ -232,6 +234,25 @@ class TestInterface(unittest.TestCase):
         corps = {"k{}".format(i): "v" for i in range(65)}
         r, _ = self.req("POST", "/connexion", corps)
         self.assertEqual(r.status, 400)
+
+    def test_limite_connexions_simultanees(self):
+        class ServeurSature(web.Serveur):
+            MAX_THREADS = 0
+
+        srv = ServeurSature(("127.0.0.1", 0), web.Gestionnaire)
+        fil = threading.Thread(target=srv.serve_forever, daemon=True)
+        fil.start()
+        try:
+            c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+            c.request("GET", "/")
+            r = c.getresponse()
+            self.assertEqual(r.status, 503)
+            self.assertEqual(r.read(), b"")
+            c.close()
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            fil.join(timeout=2)
 
     def test_navigation(self):
         ck = self.connexion()
