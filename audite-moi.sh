@@ -457,12 +457,19 @@ check_systeme() {
   fi
 
   if have systemctl; then
-    local failed; failed=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i ~ /\./) {print $i; break}}')
-    if [[ -n $failed ]]; then
-      warn "Service(s) systemd en échec : $(tr '\n' ' ' <<< "$failed")" "$(systemctl --failed --no-legend --plain 2>/dev/null)" \
-        "\`systemctl status <service>\` et \`journalctl -u <service> -b\` ; une fois réglé : \`sudo systemctl reset-failed\`"
+    local failed failed_raw failed_rc
+    failed_raw=$(systemctl --failed --no-legend --plain 2>/dev/null)
+    failed_rc=$?
+    if ((failed_rc != 0)); then
+      info "Contrôle des services systemd indisponible" "La commande systemctl --failed a échoué (code $failed_rc) ; impossible de conclure sur l'état des services."
     else
-      ok "Aucun service systemd en échec"
+      failed=$(awk '{for (i = 1; i <= NF; i++) if ($i ~ /\./) {print $i; break}}' <<< "$failed_raw")
+      if [[ -n $failed ]]; then
+        warn "Service(s) systemd en échec : $(tr '\n' ' ' <<< "$failed")" "$failed_raw" \
+          "\`systemctl status <service>\` et \`journalctl -u <service> -b\` ; une fois réglé : \`sudo systemctl reset-failed\`"
+      else
+        ok "Aucun service systemd en échec"
+      fi
     fi
   fi
 

@@ -112,6 +112,14 @@ expect WARN "Partages Samba accessibles sans mot de passe"
 expect WARN "sharenfs=on"
 expect WARN "La box redirige des ports vers ce serveur (UPnP)"
 expect WARN "Service(s) systemd en échec"
+# Une erreur de systemctl ne doit pas être interprétée comme l'absence de services en échec.
+OUT_SYSTEMCTL=$TMP/rapports-systemctl-indisponible
+AUDITE_MOI_SYSTEMCTL_FAILED_ECHEC=1 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_SYSTEMCTL" --config "$TMP/audit.conf" --no-color --quick >/dev/null 2>&1
+JS=$(ls "$OUT_SYSTEMCTL"/rapport-*.json 2>/dev/null | head -n 1)
+jq -e '.constats[] | select(.niveau == "INFO" and .titre == "Contrôle des services systemd indisponible")' "$JS" >/dev/null \
+  && ok "systemctl en erreur : contrôle signalé indisponible" || ko "systemctl en erreur : état indéterminé attendu"
+jq -e '.constats[] | select(.titre == "Aucun service systemd en échec")' "$JS" >/dev/null \
+  && ko "systemctl en erreur ne doit pas annoncer aucun échec" || ok "pas de fausse conclusion sur les services systemd"
 expect OK   "Sauvegardes planifiées détectées"
 expect OK   "Onduleur eaton en ligne"
 expect INFO "Indice de durcissement Lynis : 64/100"
