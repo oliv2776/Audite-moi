@@ -311,6 +311,27 @@ if [[ ${1:-} == --reel ]]; then
   [[ -s $TMP/reel.err ]] && { ko "erreurs :"; head -20 "$TMP/reel.err"; } || ok "aucune erreur sur la sortie d'erreur"
 fi
 
+echo "▶ Inventaire ZFS indisponible ou vide"
+OUT_ZFS=$TMP/rapports-zfs-indisponible
+mkdir -p "$OUT_ZFS"
+AUDITE_MOI_ZPOOL_ECHEC=1 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_ZFS" --config "$TMP/audit.conf" --no-color --quick > "$TMP/zfs-indisponible.txt" 2>&1 || true
+JZ=$(ls "$OUT_ZFS"/rapport-*.json 2>/dev/null | head -n 1)
+if [[ -n $JZ ]] && jq -e '.constats[] | select(.titre == "Inventaire ZFS indisponible")' "$JZ" >/dev/null \
+   && ! jq -e '.constats[] | select(.titre == "Aucun pool ZFS importé")' "$JZ" >/dev/null; then
+  ok "échec de zpool list : pas de fausse alerte « aucun pool importé »"
+else
+  ko "échec de zpool list : inventaire indisponible non distingué"
+fi
+OUT_ZFS_VIDE=$TMP/rapports-zfs-vide
+mkdir -p "$OUT_ZFS_VIDE"
+AUDITE_MOI_ZPOOL_VIDE=1 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_ZFS_VIDE" --config "$TMP/audit.conf" --no-color --quick > "$TMP/zfs-vide.txt" 2>&1 || true
+JV=$(ls "$OUT_ZFS_VIDE"/rapport-*.json 2>/dev/null | head -n 1)
+if [[ -n $JV ]] && jq -e '.constats[] | select(.titre == "Aucun pool ZFS importé")' "$JV" >/dev/null; then
+  ok "inventaire valide vide : absence de pool signalée"
+else
+  ko "inventaire valide vide : absence de pool non signalée"
+fi
+
 [[ -n ${GARDER:-} ]] && { cp -r "$OUT" "$GARDER"; echo "Rapports copiés dans $GARDER"; }
 echo
 if ((fail)); then echo "Des tests ont échoué."; exit 1; fi
