@@ -1,6 +1,6 @@
 # Audite-moi
 
-**Bilan de santé et audit de sécurité pour un NAS sous Ubuntu**, avec une interface web : pools ZFS, disques, conteneurs Docker et applications qu'ils hébergent, transcodage GPU (iGPU Intel/AMD + carte graphique AMD/NVIDIA), tunnels Cloudflare, services publiés vus depuis Internet, routeur OPNsense, réseau local, SSH, pare-feu, mises à jour, sauvegardes…
+**Bilan de santé et audit de sécurité pour un NAS sous Ubuntu, son réseau et ses noms de domaine**, avec une interface web : vulnérabilités connues, pools ZFS, disques, conteneurs Docker et applications qu'ils hébergent, transcodage GPU (iGPU Intel/AMD + carte graphique AMD/NVIDIA), tunnels Cloudflare, services publiés vus depuis Internet, routeur OPNsense, réseau local, SSH, pare-feu, mises à jour, sauvegardes…
 
 Chaque audit produit un rapport classé par priorité (**critique**, **attention**, **OK**, **info**), avec pour chaque problème la commande ou le réglage à appliquer, et deux notes sur 100 : **Santé** et **Sécurité**.
 
@@ -25,8 +25,11 @@ Chaque audit produit un rapport classé par priorité (**critique**, **attention
 - **Tunnels Cloudflare** : connexion du tunnel (point de contrôle `/ready`), version de cloudflared, services d'origine injoignables, noms d'hôte publiés et conteneurs ciblés, Cloudflare Access, services aussi joignables sans passer par le tunnel.
 - **Vu d'Internet** : chaque nom d'hôte publié est testé comme le ferait un visiteur, en passant par Cloudflare : IP de la maison qui fuit dans le DNS (nom non proxifié, DNS dynamique), Cloudflare Access actif ou non, application qui répond **sans authentification**, version obsolète, fichiers sensibles téléchargeables (`.git`, `.env`, dossiers de données), HSTS, HTTPS forcé, TLS obsolète.
 - **Applications auto-hébergées, de l'intérieur** : les applications courantes sont reconnues parmi les conteneurs Docker et prises en compte : comptes administrateurs sans double authentification, liens de partage publics sans mot de passe ni expiration, avertissements de sécurité, mode debug, protection anti-brute-force qui ne voit pas les vraies adresses IP derrière le tunnel, accès sans identifiant, mises à jour en attente.
-- **Routeur OPNsense** (clé API en lecture) : redirections de ports vers le réseau local, règles WAN, interface d'administration exposée, UPnP, SSH du routeur, double authentification, mises à jour en attente, détection d'intrusion.
-- **Réseau local** (scan `nmap` de tous les sous-réseaux) : inventaire des appareils, services risqués (Telnet, FTP, RDP, VNC, API Docker, bases de données, caméras…), nouveaux appareils depuis le scan précédent.
+- **Vulnérabilités connues**, classées par risque réel : failles corrigées par les mises à jour en attente (base [OSV.dev](https://osv.dev)), failles des images Docker (Trivy) et des services de chaque appareil du réseau, d'après la version détectée par nmap (base [NVD](https://nvd.nist.gov)). Chaque faille est croisée avec le catalogue [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) des failles **réellement exploitées**, sa probabilité d'exploitation ([EPSS](https://www.first.org/epss/)) et l'exposition (Internet, réseau local).
+- **Vue depuis Internet** : ce que les scanners d'Internet voient de votre adresse publique (IPv4 et IPv6) : ports ouverts, failles associées, adresse signalée comme compromise ([Shodan InternetDB](https://internetdb.shodan.io), gratuit et sans compte).
+- **Domaines** (à renseigner dans l'interface) : expiration et verrou de transfert, DNSSEC, CAA, protection contre l'usurpation des e-mails (SPF, DKIM, DMARC, MTA-STS, ou domaine sans e-mail correctement fermé), **sous-domaines** trouvés dans les journaux publics de certificats (crt.sh) : sous-domaine **pouvant être repris** (il pointe vers un service supprimé), adresse de la maison qui fuit, adresse interne publiée, certificats HTTPS expirés ou invalides.
+- **Routeur OPNsense** (clé API en lecture) : redirections de ports vers le réseau local, règles WAN, **cloisonnement** (un réseau « invités », « IoT » ou « caméras » qui peut joindre les autres réseaux internes), interface d'administration exposée, UPnP, SSH du routeur, double authentification, mises à jour en attente, détection d'intrusion.
+- **Réseau local** (scan `nmap` de tous les sous-réseaux, avec les versions des services) : inventaire des appareils, interfaces d'administration en HTTP non chiffré, services risqués (Telnet, FTP, RDP, VNC, API Docker, bases de données, caméras…), nouveaux appareils depuis le scan précédent.
 - **Mises à jour** : correctifs de sécurité en attente, mises à jour automatiques, fin de support d'Ubuntu.
 - **Comptes et SSH** : UID 0, mots de passe vides, sudo sans mot de passe, groupe docker, clés SSH, configuration de sshd, tentatives de connexion depuis Internet, fail2ban / CrowdSec.
 - **Pare-feu** : UFW, ports Docker qui **contournent UFW**, bases de données exposées, Samba (SMB1, partages invités), NFS, redirections UPnP de la box.
@@ -36,6 +39,10 @@ Chaque audit produit un rapport classé par priorité (**critique**, **attention
 - **Analyses complémentaires** si installées : [Lynis](https://cisofy.com/lynis/), [Trivy](https://trivy.dev) (vulnérabilités des images), rkhunter.
 
 Le script est en **lecture seule** : il ne modifie rien sur le serveur. Les secrets (jetons, mots de passe) sont masqués dans les rapports.
+
+**Ce qui part vers Internet** (désactivable dans **Réglages › Vulnérabilités** et **Réglages › Domaines**) : les noms et versions des paquets à mettre à jour (OSV.dev), les versions des services du réseau (NVD), des numéros de failles (EPSS), votre adresse IP publique (Shodan InternetDB), vos noms de domaine (DNS public de Cloudflare, RDAP, crt.sh). Rien d'autre : ni rapport, ni configuration, ni nom de machine. Les réponses sont gardées en cache (`/var/lib/audite-moi/cache`, 1 à 7 jours).
+
+**Limites assumées.** Les failles des appareils sont déduites du **numéro de version annoncé** : un correctif rétroporté par le fabricant peut ne pas le changer (faux positif possible, signalé comme tel). Sans clé API NVD, la base limite le débit : les versions sont vérifiées petit à petit d'un audit à l'autre (une clé gratuite accélère tout). La vue depuis Internet est celle de Shodan, qui peut dater de quelques jours. Le cloisonnement est vérifié **d'après les règles** d'OPNsense, pas par un essai depuis le réseau isolé (il faudrait une sonde dans ce réseau). Les identifiants par défaut des appareils ne sont **pas** essayés : cela peut bloquer des comptes ou déclencher des alarmes.
 
 ## D'où viennent les contrôles
 
@@ -47,6 +54,9 @@ Les contrôles reprennent des référentiels reconnus, adaptés à un NAS domest
 | [CIS Docker Benchmark](https://www.cisecurity.org/benchmark/docker) v1.7.0 | conteneurs privilégiés, socket Docker, capacités, montages sensibles, réseau *host*, ports publiés, API Docker |
 | [ANSSI-BP-028 v2.0](https://cyber.gouv.fr/sites/default/files/document/fr_np_linux_configuration-v2.0.pdf) et [recommandations (Open)SSH](https://cyber.gouv.fr/sites/default/files/2014/01/NT_OpenSSH.pdf) | durcissement Linux (R8, R9, R12, R31, R39, R45, R50, R54, R56, R61, R62, R73, R79, R80…), SSH (R17, R21, R22, R28…) |
 | [OWASP](https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html) | sécurité Docker, fichiers sensibles exposés (WSTG-CONF-04), HSTS |
+| [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog), [FIRST EPSS](https://www.first.org/epss/) | priorité des failles connues : exploitées activement, probabilité d'exploitation |
+| RFC de l'IETF | messagerie : SPF (7208), DKIM (6376), DMARC (7489), MTA-STS (8461), TLS-RPT (8460), MX nul (7505) ; DNS : DNSSEC (4033), CAA (8659) |
+| [OWASP WSTG-CONF-10](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/10-Test_for_Subdomain_Takeover) | sous-domaines pouvant être repris |
 | Statistiques SMART de [Backblaze](https://www.backblaze.com/blog/hard-drive-smart-stats/) | attributs qui annoncent une panne (5, 187, 188, 197, 198) |
 | Documentation officielle | applications auto-hébergées reconnues (double authentification, proxy de confiance, durcissement), Cloudflare (Access, proxy, versions de cloudflared), Oracle/TrueNAS (remplissage ZFS), Ubuntu, Microsoft (SMB1), US-CERT (règle 3-2-1) |
 
@@ -78,7 +88,7 @@ Options utiles : `--port 9000`, `--ecoute 192.168.1.10`, `--sans-web` (script + 
 
 ### Interface web
 
-- une **barre latérale** sur toutes les pages : **Tableau de bord**, **Constats** (avec le nombre de problèmes à corriger), **Matériel**, **Corrections**, **Historique**, **Rapport complet**, **Réglages**, le choix du thème (automatique, clair ou sombre) et les boutons **Lancer un audit** (complet, quelques minutes) / **Audit rapide** (sans Lynis, Trivy, scan du réseau local ni recherche des fichiers SUID), avec le déroulement affiché en direct ; sur téléphone, elle s'ouvre avec le bouton **Menu** ;
+- une **barre latérale** sur toutes les pages : **Tableau de bord**, **Constats** (avec le nombre de problèmes à corriger), **Matériel**, **Inventaire**, **Corrections**, **Historique**, **Rapport complet**, **Réglages**, le choix du thème (automatique, clair ou sombre) et les boutons **Lancer un audit** (complet, quelques minutes) / **Audit rapide** (sans Lynis, Trivy, scan du réseau local ni recherche des fichiers SUID), avec le déroulement affiché en direct ; sur téléphone, elle s'ouvre avec le bouton **Menu** ;
 - le **tableau de bord** résume l'essentiel : notes **Santé** / **Sécurité**, compteurs, ce qu'il faut corriger en priorité, état des alertes, de la planification, des disques et des pools, évolution des notes ;
 - les notes et les compteurs sont **cliquables** : un clic n'affiche que les constats correspondants (ex. Sécurité + Critiques), un second clic annule ;
 - la liste des **constats** se filtre aussi par catégorie, niveau, section ou mot-clé (ex. « ssh », « zfs ») ; par défaut elle montre ce qu'il faut corriger, du plus urgent au moins urgent, avec la correction à appliquer ;
@@ -86,10 +96,13 @@ Options utiles : `--port 9000`, `--ecoute 192.168.1.10`, `--sans-web` (script + 
 - **« C'est voulu… »** : un constat que vous assumez (avec votre raison) ne compte plus dans la note ni dans les alertes ; il reste visible, marqué « Accepté », et l'on peut revenir en arrière ;
 - **corrections en un clic** pour certains problèmes (voir plus bas), avec leur journal et leur annulation (page **Corrections**) ;
 - la page **Matériel** (voir ci-dessous) ;
+- la page **Inventaire** : ce serveur, ce qu'Internet voit de votre adresse, vos domaines et leurs sous-domaines, chaque conteneur et chaque appareil du réseau, avec son exposition (Internet, réseau local) et ses failles connues ;
 - **évolution des notes** et **historique** : un clic sur une date affiche les constats de cet ancien audit ;
 - le **rapport complet** (avec un bouton « ← Tableau de bord » et les mêmes filtres cliquables), sa version texte et le JSON.
 
 ![Évolution des notes](docs/evolution.png)
+
+![Inventaire](docs/inventaire.png)
 
 ### Page « Matériel »
 
@@ -156,6 +169,8 @@ La page **Réglages** regroupe, en onglets, tout ce qui se configurait auparavan
 |---|---|
 | **Seuils** | niveaux « attention » / « critique » des contrôles de santé (voir ci-dessous) |
 | **Réseau** | test des services publiés depuis Internet, noms d'hôte supplémentaires, scan du réseau local et réseaux à scanner |
+| **Domaines** | vos noms de domaine, sélecteurs DKIM (facultatif), recherche des sous-domaines |
+| **Vulnérabilités** | recherche des failles connues, détection des versions sur le réseau, vue depuis Internet, clé API NVD (facultative) |
 | **Sauvegardes** | preuves de sauvegarde à vérifier (tableau éditable, voir « Vérifier les sauvegardes ») |
 | **OPNsense** | adresse, clé et secret de l'API, vérification du certificat ; test de la connexion, effacement de la clé |
 | **Telegram** | jeton du bot (la conversation est trouvée toute seule), alertes activées ou non, lien vers l'interface dans les messages ; message de test, désactivation |
@@ -288,7 +303,7 @@ sudo ./uninstall.sh --purge  # supprime tout
 
 ## Tests
 
-Les tests rejouent l'audit sur un NAS simulé (faux `zpool`, `docker`, `smartctl`, `journalctl`… dans `tests/mock/bin`) et testent l'interface web :
+Les tests rejouent l'audit sur un NAS simulé (faux `zpool`, `docker`, `smartctl`, `journalctl`… dans `tests/mock/bin`), avec des réponses simulées des services publics (`tests/http_simule.py` : aucun accès réseau), et testent l'interface web :
 
 ```bash
 sudo tests/run-tests.sh          # scénario simulé + interface web + shellcheck
@@ -300,7 +315,8 @@ sudo tests/run-tests.sh --reel   # + une exécution réelle (lecture seule) sur 
 ```
 audite-moi.sh            le script d'audit (bash)
 seuils.json              seuils par défaut et bornes (modifiables dans l'interface)
-references.json          référentiels associés aux constats (CIS, ANSSI, OWASP…)
+references.json          référentiels associés aux constats (CIS, ANSSI, OWASP, RFC, CISA KEV…)
+audite-moi-analyse.py    vulnérabilités connues, vue depuis Internet et domaines (Python, appelé par l'audit)
 web/audite-moi-web.py    l'interface web (Python 3, sans dépendance)
 systemd/                 services : audit (.service/.path/.timer), relevé des disques, des connexions et alertes
                          (audite-moi-mesures), corrections (audite-moi-corriger), réglages modifiés depuis

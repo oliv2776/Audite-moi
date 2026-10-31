@@ -80,6 +80,7 @@ install -m 755 "$SRC/systemd/audite-moi-mesures" "$LIB/audite-moi-mesures"
 install -m 755 "$SRC/systemd/audite-moi-corriger" "$LIB/audite-moi-corriger"
 install -m 755 "$SRC/systemd/audite-moi-configurer" "$LIB/audite-moi-configurer"
 install -m 644 "$SRC/seuils.json" "$SRC/references.json" "$LIB/"
+install -m 755 "$SRC/audite-moi-analyse.py" "$LIB/audite-moi-analyse.py"
 install -m 755 "$SRC/web/audite-moi-web.py" "$LIB/audite-moi-web.py"
 echo "/usr/local/sbin/audite-moi, $LIB/"
 
@@ -91,6 +92,7 @@ fi
 install -d -o root -g audite-moi -m 750 "$VAR" "$ETC"
 install -d -o root -g audite-moi -m 2750 "$VAR/rapports" "$VAR/etat"
 install -d -o root -g audite-moi -m 2770 "$VAR/demande" "$VAR/reglages"
+install -d -o root -g root -m 700 "$VAR/cache"   # réponses des bases de vulnérabilités, DNS et certificats (audite-moi-analyse)
 echo "$VAR/{rapports,etat,demande,reglages}"
 
 etape "Réglages des contrôles réseau"
@@ -138,6 +140,21 @@ TELEGRAM_CHAT_ID=""
 ALERTES=oui
 # Adresse de l'interface ajoutée aux messages (lien cliquable depuis le réseau local)
 INTERFACE_URL=""
+EOC
+grep -q '^DOMAINES=' "$CONF" || cat >> "$CONF" <<'EOC'
+
+# Domaines à surveiller (DNS, messagerie, sous-domaines, certificats) — modifiable dans l'interface (Réglages > Domaines)
+DOMAINES=""
+DKIM_SELECTEURS=""
+SOUS_DOMAINES=oui
+EOC
+grep -q '^VULNERABILITES=' "$CONF" || cat >> "$CONF" <<'EOC'
+
+# Vulnérabilités connues (OSV, NVD, CISA KEV, EPSS) et vue depuis Internet (Shodan InternetDB) — Réglages > Vulnérabilités
+VULNERABILITES=oui
+VERSIONS_LAN=oui
+INTERNETDB=oui
+NVD_API_KEY=""
 EOC
 
 conf_set() {   # conf_set CLÉ valeur : remplace (ou ajoute) la ligne dans audit.conf

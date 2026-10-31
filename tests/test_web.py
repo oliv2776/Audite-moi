@@ -503,7 +503,7 @@ class TestInterface(unittest.TestCase):
                        "telegram": {"jeton_defini": True, "chat_id": "42", "alertes": True, "interface_url": ""},
                        "planification": {"actif": True, "frequence": "hebdomadaire", "jour": "lun", "jour_mois": 1, "heure": "07:20", "garder": 60},
                        "interface": {}}, f)
-        for onglet in ("controles", "sauvegardes", "opnsense", "telegram", "planification", "interface"):
+        for onglet in ("controles", "domaines", "vulnerabilites", "sauvegardes", "opnsense", "telegram", "planification", "interface"):
             r, t = self.req("GET", "/reglages/" + onglet, cookie=cookie)
             self.assertEqual(r.status, 200, onglet)
             self.assertIn('aria-current="page">', t)
@@ -538,6 +538,14 @@ class TestInterface(unittest.TestCase):
         self.assertTrue(json.loads(t)["fait"])
         _, t = self.req("GET", "/reglages/controles?r=" + ident, cookie=cookie)
         self.assertIn("Enregistré &lt;b&gt;", t)
+        # domaines : saisie validée avant envoi
+        r, t = self.req("POST", "/reglages/domaines", {"csrf": csrf, "domaines": "exemple.fr pas_un_domaine", "mot_de_passe": MDP}, cookie=cookie)
+        self.assertEqual(r.status, 400)
+        self.assertIn("hôte invalide : pas_un_domaine", t)
+        r, _ = self.req("POST", "/reglages/domaines", {"csrf": csrf, "domaines": "exemple.fr", "sous_domaines": "oui", "mot_de_passe": MDP}, cookie=cookie)
+        self.assertEqual(r.status, 303)
+        self.assertEqual(json.load(open(dem))["valeurs"], {"domaines": "exemple.fr", "selecteurs": "", "sous_domaines": "oui"})
+        os.remove(dem)
         # test Telegram : sans mot de passe, rien n'est modifié
         r, _ = self.req("POST", "/reglages/telegram-tester", {"csrf": csrf}, cookie=cookie)
         self.assertEqual(r.status, 303)
@@ -562,6 +570,33 @@ class TestInterface(unittest.TestCase):
         r, _ = self.req("POST", "/reglages/controles", dict(base, csrf="faux", mot_de_passe=MDP), cookie=cookie)
         self.assertEqual(r.status, 403)
         self.srv.app._echecs.clear()
+
+    def test_inventaire(self):
+        cookie = self.connexion()
+        _, t = self.req("GET", "/inventaire", cookie=cookie)
+        self.assertIn("pas encore d’inventaire", t)
+        f = os.path.join(self.tmp.name, "rapports", "rapport-nas-test-20260108-1000.json")
+        d = json.load(open(f))
+        d["inventaire"] = {"serveur": {"hote": "nas-test", "ip": ["192.168.1.10"], "ip_publique": "203.0.113.7"},
+                           "internet": [{"ip": "203.0.113.7", "ports": [22], "vulns": ["CVE-2023-9999"]}],
+                           "conteneurs": [{"nom": "web<b>", "image": "boa:1", "etat": "running", "ports": ["0.0.0.0:80 → 80/tcp"], "internet": True}],
+                           "images": [{"image": "boa:1", "critiques": 1, "hautes": 0, "exploitees": ["CVE-2023-9999"]}],
+                           "appareils": [{"ip": "192.168.20.5", "nom": "camera", "fabricant": "", "expose": ["192.168.20.5:80"], "services": [
+                               {"port": 80, "service": "http", "produit": "Boa", "version": "0.94", "failles": 2, "exploitees": ["CVE-2023-9999"]}]}],
+                           "domaines": [{"domaine": "exemple.fr", "expiration_jours": 20, "verrou": False, "dnssec": False, "mx": [], "spf": [], "dmarc": [],
+                                         "sous_domaines": [{"nom": "vieux.exemple.fr", "ips": [], "cname": "x.herokuapp.com", "alerte": "prise"}]}]}
+        json.dump(d, open(f, "w"))
+        try:
+            _, t = self.req("GET", "/inventaire", cookie=cookie)
+            self.assertIn('<a href="/inventaire" aria-current="page">', t)
+            self.assertIn("web&lt;b&gt;", t)                        # échappé
+            self.assertIn("reprise possible", t)
+            self.assertIn('<div class="v">1</div><div class="l">Failles exploitées activement', t)
+            self.assertIn("Boa 0.94", t)
+            self.assertNotIn('style="', t)
+        finally:
+            del d["inventaire"]
+            json.dump(d, open(f, "w"))
 
     def test_deconnexion(self):
         ck = self.connexion()
