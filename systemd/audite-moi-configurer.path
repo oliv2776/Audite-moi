@@ -1,0 +1,9 @@
+[Unit]
+Description=Audite-moi : réglages modifiés depuis l'interface web
+
+[Path]
+PathExists=/var/lib/audite-moi/demande/configurer
+Unit=audite-moi-configurer.service
+
+[Install]
+WantedBy=multi-user.target

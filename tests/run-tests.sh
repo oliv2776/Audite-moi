@@ -312,10 +312,12 @@ if python3 "$ROOT/tests/test_web.py" > "$TMP/web.txt" 2>&1; then ok "tests de l'
 else ko "tests de l'interface web"; tail -n 25 "$TMP/web.txt"; fi
 if python3 "$ROOT/tests/test_mesures.py" > "$TMP/mesures.txt" 2>&1; then ok "tests de robustesse de l'inventaire SMART"
 else ko "tests de robustesse de l'inventaire SMART"; tail -n 25 "$TMP/mesures.txt"; fi
+if python3 "$ROOT/tests/test_configurer.py" > "$TMP/configurer.txt" 2>&1; then ok "tests du service de réglages (validation, secrets, journal)"
+else ko "tests du service de réglages"; tail -n 25 "$TMP/configurer.txt"; fi
 if python3 "$ROOT/tests/test_corriger.py" > "$TMP/corriger.txt" 2>&1; then ok "tests de sécurité du moteur de correction"
 else ko "tests du moteur de correction"; tail -n 25 "$TMP/corriger.txt"; fi
 for f in "$ROOT"/install.sh "$ROOT"/uninstall.sh "$ROOT"/systemd/audite-moi-run "$SCRIPT"; do bash -n "$f" || ko "syntaxe : $f"; done
-python3 -c "import ast,sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]" "$ROOT/systemd/audite-moi-mesures" "$ROOT/web/audite-moi-web.py" && ok "syntaxe Python" || ko "syntaxe Python"
+python3 -c "import ast,sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]" "$ROOT/systemd/audite-moi-mesures" "$ROOT/systemd/audite-moi-configurer" "$ROOT/web/audite-moi-web.py" && ok "syntaxe Python" || ko "syntaxe Python"
 if command -v shellcheck >/dev/null; then
   shellcheck -S warning "$SCRIPT" "$ROOT/install.sh" "$ROOT/uninstall.sh" "$ROOT/systemd/audite-moi-run" && ok "shellcheck sans avertissement" || ko "shellcheck"
   # SC2006 est de niveau « style » : sans ce contrôle, un `…` non échappé dans un

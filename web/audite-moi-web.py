@@ -37,7 +37,7 @@ import time
 import urllib.parse
 from datetime import datetime
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 COOKIE = "audite_moi_session"
 ITERATIONS = 600_000
 NOM_RAPPORT = re.compile(r"^rapport-[A-Za-z0-9._-]+-\d{8}-\d{4}\.(html|txt|json)$")
@@ -255,6 +255,36 @@ class Donnees:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(demande, f)
         os.replace(tmp, os.path.join(d, "corriger"))
+
+    # -- réglages du serveur (appliqués par audite-moi-configurer, root)
+    def configuration(self):
+        d = self._json_etat("configuration.json", {})
+        return d if d.get("controles") else None
+
+    def journal_configuration(self):
+        return self._json_etat("configuration-journal.json", [])
+
+    def resultat_configuration(self):
+        return self._json_etat("configuration-resultat.json", {})
+
+    def _json_etat(self, nom, defaut):
+        try:
+            with open(os.path.join(self.conf["etat"], nom), encoding="utf-8") as f:
+                d = json.load(f)
+            return d if isinstance(d, type(defaut)) else defaut
+        except (OSError, ValueError):
+            return defaut
+
+    def configuration_en_attente(self):
+        return os.path.exists(os.path.join(self.conf["demandes"], "configurer"))
+
+    def demander_configuration(self, demande):
+        d = self.conf["demandes"]
+        tmp = os.path.join(d, ".configurer.{}".format(secrets.token_hex(4)))
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(demande, f)
+        os.chmod(tmp, 0o600)          # peut contenir un secret (jeton, clé API) : root seul la lit
+        os.replace(tmp, os.path.join(d, "configurer"))
 
     def alertes(self):
         try:
@@ -571,36 +601,97 @@ class Mesures:
 
 # ------------------------------------------------------------------ gabarits --
 CSS = """
-:root{--bg:#f4f5f7;--card:#fff;--ink:#1b1f27;--muted:#5d6675;--line:#e3e6eb;--soft:#f0f2f5;--accent:#2f5fd0;--accent-ink:#fff;--sel:#e7eefc;
---crit:#c4352f;--crit-bg:#fdecea;--warn:#a35f00;--warn-bg:#fff3dd;--ok:#1d7a4c;--ok-bg:#e4f4ea;--info:#3461c1;--info-bg:#e9effc;
---s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--trk:#dbe7f8;--free:#e6e8ec;--grid:#e8eaee;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--ink:#e7eaee;--muted:#9aa3af;--line:#29303a;--soft:#1e232b;--accent:#5b86f0;--sel:#1c2a48;
---crit:#ff7b72;--crit-bg:#3a1d1d;--warn:#f2b24c;--warn-bg:#382a12;--ok:#4cc38a;--ok-bg:#13301f;--info:#86a8ff;--info-bg:#1a2540;
---s1:#3987e5;--s2:#d95926;--s3:#199e70;--trk:#1d2b42;--free:#262c35;--grid:#262c35}}
-*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:70px}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif}
-a{color:var(--accent)}
-.topbar{position:sticky;top:0;z-index:20;background:var(--card);border-bottom:1px solid var(--line)}
-.topbar .in{max-width:1180px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.brand{display:flex;align-items:center;gap:10px;font-weight:750;font-size:17px;color:var(--ink);text-decoration:none}
-.logo{width:28px;height:28px;border-radius:8px;background:var(--accent);display:grid;place-items:center;color:#fff;font-size:14px}
-.host{color:var(--muted);font-weight:500;font-size:14px}
-.nav{display:flex;gap:2px;flex-wrap:wrap}
-.nav a{color:var(--muted);text-decoration:none;font-size:14px;font-weight:600;padding:6px 7px;border-radius:8px}
-.nav a:hover{background:var(--soft);color:var(--ink)}.nav a.on{background:var(--sel);color:var(--accent)}
-.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-left:auto}
-.wrap{max-width:1180px;margin:0 auto;padding:20px 20px 60px}
-button,.btn{font:inherit;font-size:14px;font-weight:600;border-radius:9px;padding:7px 13px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer;text-decoration:none;display:inline-block}
-button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+:root{--bg:#f6f5f1;--card:#fff;--ink:#1d232b;--muted:#6a7280;--line:#e4e2db;--soft:#f1efea;--accent:#2557b8;--accent-ink:#fff;--sel:#e6edf9;
+--crit:#a3312b;--crit-bg:#f9e3e1;--warn:#9a5b00;--warn-bg:#fbf0dc;--ok:#2c6e3f;--ok-bg:#e1f1e5;--info:#2f5b8a;--info-bg:#e3ecf6;
+--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--trk:#dfe7f5;--free:#e7e5df;--grid:#e9e7e1;--r:10px;
+--sb-w:248px;--sb-bg:#1b3c78;--sb-ink:#e6edfa;--sb-muted:#a9bde3;--sb-hover:rgba(255,255,255,.08);--sb-active:rgba(255,255,255,.15);--sb-mark:#9fc2ff;--sb-line:rgba(255,255,255,.13);
+--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14171b;--card:#1c2026;--ink:#e8e6e1;--muted:#9aa1ab;--line:#2c3139;--soft:#232830;--accent:#7ea6f2;--accent-ink:#0d1526;--sel:#1f2a3d;
+--crit:#e27a72;--crit-bg:#3a2220;--warn:#e0a64d;--warn-bg:#33291a;--ok:#79c08d;--ok-bg:#1e3024;--info:#8db4e0;--info-bg:#1f2a37;
+--s1:#3987e5;--s2:#d95926;--s3:#199e70;--trk:#1f2b40;--free:#2a2f37;--grid:#2a2f37;--sb-bg:#10151d;--sb-ink:#dfe5ee;--sb-muted:#8d97a6;--sb-mark:#7ea6f2;--sb-line:rgba(255,255,255,.08);color-scheme:dark}}
+:root[data-theme=dark]{--bg:#14171b;--card:#1c2026;--ink:#e8e6e1;--muted:#9aa1ab;--line:#2c3139;--soft:#232830;--accent:#7ea6f2;--accent-ink:#0d1526;--sel:#1f2a3d;
+--crit:#e27a72;--crit-bg:#3a2220;--warn:#e0a64d;--warn-bg:#33291a;--ok:#79c08d;--ok-bg:#1e3024;--info:#8db4e0;--info-bg:#1f2a37;
+--s1:#3987e5;--s2:#d95926;--s3:#199e70;--trk:#1f2b40;--free:#2a2f37;--grid:#2a2f37;--sb-bg:#10151d;--sb-ink:#dfe5ee;--sb-muted:#8d97a6;--sb-mark:#7ea6f2;--sb-line:rgba(255,255,255,.08);color-scheme:dark}
+*{box-sizing:border-box}[hidden]{display:none!important}html{scroll-behavior:smooth;scroll-padding-top:20px}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+h1{font-size:1.6rem;margin:0 0 .2rem;letter-spacing:-.01em;line-height:1.25}
+h2{font-size:1.1rem;margin:0 0 .75rem;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+h2 .mini{margin-left:auto;font-size:.82rem;color:var(--muted);font-weight:500}
+.muted{color:var(--muted)}.small{font-size:.85rem}
+/* coque : barre latérale + contenu */
+.ico{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.brand{display:flex;align-items:center;gap:.6rem;font-weight:700;font-size:1.12rem;color:var(--ink)}
+.brand:hover{text-decoration:none}
+.logo{width:26px;height:26px;border-radius:7px;background:var(--accent);display:grid;place-items:center;flex:none}
+.logo svg{width:16px;height:16px;fill:none;stroke:#fff;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.sidebar{position:fixed;inset:0 auto 0 0;width:var(--sb-w);z-index:20;display:flex;flex-direction:column;padding:1.1rem .8rem .8rem;overflow-y:auto;background:var(--sb-bg);color:var(--sb-ink)}
+.sidebar .brand,.mobilebar .brand{color:#fff}
+.sidebar .logo,.mobilebar .logo{background:rgba(255,255,255,.16)}
+.sb-head{display:flex;align-items:center;padding:0 .45rem}
+.sb-host{padding:.15rem .45rem 0 2.75rem;font-size:.8rem;color:var(--sb-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-audit{margin:1rem .2rem .9rem;display:grid;gap:.4rem}
+.sb-audit form{margin:0}
+.sb-audit button{width:100%;justify-content:center}
+.sb-audit .btn-lancer{background:#fff;color:var(--sb-bg);border-color:#fff}
+.sb-audit .btn-rapide{background:transparent;color:var(--sb-ink);border-color:var(--sb-line);font-weight:500;font-size:.84rem;padding:.32rem .6rem}
+.sb-audit .btn-rapide:hover:not(:disabled){background:var(--sb-hover)}
+.sb-audit .encours{display:flex;align-items:center;gap:.5rem;padding:.5rem .65rem;border-radius:8px;background:var(--sb-active);font-size:.88rem;color:#fff}
+.sb-audit .encours .spin{border-color:var(--sb-mark);border-right-color:transparent;margin:0}
+.sb-nav{display:flex;flex-direction:column;gap:2px}
+.sb-nav a{position:relative;display:flex;align-items:center;gap:.7rem;padding:.48rem .65rem;border-radius:8px;color:var(--sb-ink);font-size:.93rem;font-weight:500}
+.sb-nav a .ico{opacity:.8}
+.sb-nav a:hover{background:var(--sb-hover);text-decoration:none}
+.sb-nav a[aria-current=page]{background:var(--sb-active);color:#fff}.sb-nav a[aria-current=page] .ico{opacity:1}
+.sb-nav a[aria-current=page]::before{content:"";position:absolute;left:-.8rem;top:.45rem;bottom:.45rem;width:3px;border-radius:0 3px 3px 0;background:var(--sb-mark)}
+.cpt{margin-left:auto;min-width:1.5em;padding:0 .42em;border-radius:999px;background:#d8473d;color:#fff;font-size:.72rem;line-height:1.5;text-align:center;font-weight:700}
+.cpt.w{background:#c98a1c}
+.sb-group{margin:1.1rem .65rem .3rem;font-size:.76rem;font-weight:600;color:var(--sb-muted);text-transform:none}
+.sb-foot{margin-top:auto;padding-top:.7rem;border-top:1px solid var(--sb-line);display:flex;flex-direction:column;gap:.45rem}
+.sb-row{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:0 .2rem}
+.sb-theme select{width:auto;padding:.28rem .5rem;font-size:.82rem;color:var(--sb-ink);border:1px solid var(--sb-line);border-radius:6px;background:rgba(255,255,255,.06);cursor:pointer}
+.sb-theme select option{color:var(--ink);background:var(--card)}
+.sb-logout{display:inline-flex;align-items:center;gap:.4rem;padding:.3rem .45rem;border:0;border-radius:6px;background:none;color:var(--sb-muted);font:inherit;font-size:.85rem;cursor:pointer;font-weight:500}
+.sb-logout .ico{width:16px;height:16px}.sb-logout:hover{color:#fff;background:var(--sb-hover)}
+.sidebar a:focus-visible,.sidebar button:focus-visible,.sidebar select:focus-visible,.mobilebar button:focus-visible{outline:2px solid var(--sb-mark);outline-offset:1px}
+.sb-close,.mobilebar,.sb-backdrop{display:none}
+body.with-nav .content{margin-left:var(--sb-w)}
+.content{min-width:0}
+main{max-width:1200px;margin:0 auto;padding:1.75rem 2rem 3rem}
+.page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:1rem;margin-bottom:1.25rem;flex-wrap:wrap}
+.page-head .sous{color:var(--muted);margin:0}
+.page-head .sous b{color:var(--ink);font-weight:600}
+.page-head .actions{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
+@media (max-width:900px){
+body.with-nav .content{margin-left:0}
+main{padding:1.1rem 1rem 2.5rem}
+.mobilebar{display:flex;position:sticky;top:0;z-index:15;align-items:center;gap:.8rem;padding:.55rem .9rem;background:var(--sb-bg);color:var(--sb-ink)}
+.menu-btn{display:inline-flex;align-items:center;gap:.45rem;padding:.42rem .7rem;border:0;border-radius:8px;background:rgba(255,255,255,.1);color:var(--sb-ink);font:inherit;font-weight:600;font-size:.9rem;cursor:pointer}
+.mobile-pb{margin-left:auto;color:var(--sb-ink);font-size:.86rem;font-weight:600;white-space:nowrap}
+.sb-close{display:inline-flex;margin-left:auto;padding:.35rem;border:0;border-radius:8px;background:none;color:var(--sb-ink);cursor:pointer}
+.js .sidebar{transform:translateX(-100%);visibility:hidden;transition:transform .2s ease,visibility 0s linear .2s}
+.js body.nav-open .sidebar{transform:none;visibility:visible;transition:transform .2s ease;box-shadow:0 0 48px rgba(0,0,0,.35)}
+.js body.nav-open{overflow:hidden}
+.js .sb-backdrop:not([hidden]){display:block;position:fixed;inset:0;z-index:19;background:rgba(8,12,20,.45)}
+html:not(.js) .sidebar{position:static;width:auto}
+h1{font-size:1.35rem}}
+@media (prefers-reduced-motion:reduce){.js .sidebar,.js body.nav-open .sidebar{transition:none}}
+/* éléments communs */
+button,.btn{display:inline-flex;align-items:center;gap:.35rem;font:inherit;font-size:.9rem;font-weight:600;border-radius:8px;padding:.48rem .95rem;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer;white-space:nowrap;line-height:1.3}
+.btn:hover{text-decoration:none}
+button:hover:not(:disabled),.btn:hover{border-color:var(--muted)}
+button.primary,.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button.primary:hover:not(:disabled),.btn.primary:hover{filter:brightness(1.08);border-color:var(--accent)}
+button.danger{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 40%,transparent)}
+button.sm,.btn.sm{padding:.25rem .6rem;font-size:.8rem}
 button:disabled{opacity:.5;cursor:not-allowed}
-button:hover:not(:disabled),.btn:hover{filter:brightness(1.06)}
 form.inline{display:inline}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin:0 0 18px}
-h2{font-size:18px;margin:0 0 12px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
-h2 .mini{margin-left:auto;font-size:12.5px;color:var(--muted);font-weight:500}
-.banner{border-radius:12px;padding:12px 16px;margin:0 0 18px;border:1px solid var(--line);background:var(--card)}
-.banner.run{border-left:4px solid var(--info)}.banner.okb{border-left:4px solid var(--ok)}.banner.warnb{border-left:4px solid var(--warn)}
-.banner pre{margin:10px 0 0;max-height:240px;overflow:auto;background:var(--soft);border-radius:8px;padding:10px;font:12px/1.45 var(--mono);white-space:pre-wrap}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:1.1rem 1.2rem;margin:0 0 1rem}
+.banner{border-radius:var(--r);padding:.7rem 1rem;margin:0 0 1rem;border:1px solid transparent;background:var(--info-bg);color:var(--ink)}
+.banner.run{background:var(--info-bg)}.banner.okb{background:var(--ok-bg);color:var(--ok)}.banner.warnb{background:var(--warn-bg);color:var(--warn);border-color:color-mix(in srgb,var(--warn) 25%,transparent)}
+.banner.errb{background:var(--crit-bg);color:var(--crit)}
+.banner a{color:inherit;text-decoration:underline}
+.banner pre{margin:10px 0 0;max-height:240px;overflow:auto;background:var(--card);border-radius:8px;padding:10px;font:12px/1.45 var(--mono);white-space:pre-wrap;color:var(--ink)}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--info);border-right-color:transparent;border-radius:50%;animation:r 1s linear infinite;margin-right:8px;vertical-align:-1px}
 @keyframes r{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.spin{animation:none}html{scroll-behavior:auto}}
@@ -664,9 +755,6 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 .tip b{display:block;margin-bottom:2px}
 .empty{color:var(--muted)}
 .cache{display:none!important}
-.login{max-width:380px;margin:12vh auto 0}
-.login .brand{margin-bottom:14px}.login button{width:100%}
-.login input{width:100%;font:inherit;padding:10px 12px;border-radius:9px;border:1px solid var(--line);background:var(--soft);color:var(--ink);margin:6px 0 14px}
 .err{color:var(--crit);font-weight:600;margin:0 0 10px}
 pre.texte{margin:0;font:12.5px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
 footer{color:var(--muted);font-size:12.5px;text-align:center;margin-top:24px}
@@ -766,17 +854,90 @@ ul.prev li{grid-template-columns:minmax(0,10em) minmax(0,1fr)}
 .lbl+.legend{margin-top:6px}
 @media (max-width:980px){.rang{grid-template-columns:1fr}.kpis,.grid2{grid-template-columns:repeat(2,minmax(0,1fr))}.leg{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:620px){.kpis,.grid2{grid-template-columns:1fr}.coeurs{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:980px){.hero{grid-template-columns:repeat(2,minmax(0,1fr))}.actions{margin-left:0}}
 @media (max-width:620px){ol.items li{grid-template-columns:1fr}}
 select{max-width:100%}
-@media (max-width:700px){
-.topbar{position:static}.topbar .in{padding:8px 12px;gap:8px}
-.brand{width:100%}
-.nav{width:100%;gap:2px 0}.nav a{white-space:nowrap;font-size:13.5px;padding:5px 7px}
-.actions{width:100%;flex-wrap:nowrap}.actions form{flex:0 1 auto}
-.topbar .actions button{font-size:13px;padding:6px 10px;white-space:nowrap}
-.wrap{padding-left:12px;padding-right:12px}
-}
+/* harmonisation (style Oubliez-moi) */
+.tile,a.stat{border-radius:var(--r);padding:1rem 1.1rem}
+.tile .l,.stat .l{text-transform:none;letter-spacing:0;font-size:.85rem;font-weight:500}
+.tile .v,.stat .v{font-size:1.9rem;font-weight:700;letter-spacing:-.02em}
+.kpi{border-left:0}.kpi .v{color:var(--c)}.k-OK .v{color:var(--ink)}
+.tile[aria-pressed=true]{outline:2px solid var(--accent);outline-offset:-1px;background:var(--sel)}
+a.tile,button.tile{display:block;color:inherit;white-space:normal;font-weight:inherit;line-height:1.5}a.tile.score,button.tile.score{display:flex}a.tile:hover{text-decoration:none;border-color:var(--muted)}
+.grid2c+.card{margin-top:1rem}
+@media (max-width:1440px){.hero{grid-template-columns:repeat(4,minmax(0,1fr))}.hero .score{grid-column:span 2}}
+.tile .v{white-space:nowrap}
+@media (max-width:620px){.hero{grid-template-columns:repeat(2,minmax(0,1fr));gap:.6rem}.hero .score{grid-column:span 1;gap:8px;padding:.8rem}.hero .grade{width:36px;height:36px;font-size:19px}
+.tile .v,.stat .v{font-size:1.6rem}.page-head .actions .btn{padding:.35rem .7rem;font-size:.84rem}.grid2c{grid-template-columns:minmax(0,1fr)}}
+.skip{position:absolute;left:-999px;top:.75rem;z-index:50;background:var(--card);color:var(--ink);padding:.5rem .8rem;border-radius:8px}.skip:focus{left:.75rem}
+.badge{min-width:74px;font-size:.74rem;font-weight:650;padding:.12rem .55rem;text-transform:none;letter-spacing:0;border:1px solid transparent}
+.bh .badge,ul.res .badge,td .badge{min-width:0}
+select,input[type=search],input[type=text],input[type=password],input[type=number],input[type=url],input[type=time],textarea{font:inherit;font-size:.92rem;padding:.5rem .7rem;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+input:focus,select:focus,textarea:focus{outline:2px solid color-mix(in srgb,var(--accent) 45%,transparent);border-color:var(--accent)}
+.seg{border-radius:8px;background:var(--soft)}
+.seg button{border:0;border-radius:0;font-weight:600}
+.seg button:hover:not(:disabled){border-color:transparent;color:var(--ink)}
+.count button{padding:2px 8px}
+.fix{border-left-color:var(--accent);border-radius:0 8px 8px 0}
+.lienbtn{display:inline;font-weight:500}
+button.corr{border-color:var(--accent);color:var(--accent);background:var(--card)}button.corr{white-space:normal;text-align:left}ol.items li>div{min-width:0}
+footer{padding:1.5rem 0 0}
+.sec{background:var(--soft)}
+.grid2c{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:1rem;align-items:start}
+.grid2c>.card{margin:0}
+.hero{gap:1rem;margin-bottom:1rem}
+.kpis{gap:1rem;margin-bottom:1rem}
+/* tableau de bord */
+ul.prio{list-style:none;margin:0;padding:0}
+ul.prio li{display:flex;gap:.7rem;align-items:flex-start;padding:.6rem 0;border-top:1px solid var(--line)}
+ul.prio li:first-child{border-top:0;padding-top:0}
+ul.prio .badge{min-width:74px;text-align:center;margin-top:1px}
+ul.prio .t{font-weight:600;overflow-wrap:anywhere}ul.prio .s{display:block;color:var(--muted);font-size:.84rem}
+.voir{display:inline-block;margin-top:.7rem;font-weight:600}
+dl.kv{display:grid;grid-template-columns:max-content 1fr;gap:.4rem 1rem;margin:0}
+dl.kv dt{color:var(--muted)}dl.kv dd{margin:0;overflow-wrap:anywhere}
+.pastille{display:inline-flex;align-items:center;gap:.35rem;font-size:.82rem;font-weight:600;padding:.1rem .55rem;border-radius:999px;background:var(--soft);color:var(--muted)}
+.pastille.ok{background:var(--ok-bg);color:var(--ok)}.pastille.warn{background:var(--warn-bg);color:var(--warn)}.pastille.crit{background:var(--crit-bg);color:var(--crit)}
+/* onglets et formulaires (Réglages) */
+.tabs{display:flex;gap:.25rem;border-bottom:1px solid var(--line);margin-bottom:1.25rem;overflow-x:auto;scrollbar-width:thin}
+.tabs a{border-bottom:2px solid transparent;margin-bottom:-1px;padding:.6rem .8rem;font-weight:600;color:var(--muted);white-space:nowrap;display:flex;align-items:center;gap:.45rem}
+.tabs a:hover{color:var(--ink);text-decoration:none}
+.tabs a[aria-current=page]{color:var(--ink);border-bottom-color:var(--accent)}
+.tabs .dot{width:8px;height:8px;border-radius:50%;background:var(--line)}
+.tabs .dot.ok{background:var(--ok)}.tabs .dot.warn{background:var(--warn)}.tabs .dot.bad{background:var(--crit)}
+.etroit{max-width:780px}
+.champ{margin:0 0 1rem}
+.champ>label,.champ>.lab{display:block;font-weight:600;font-size:.9rem;margin:0 0 .3rem}
+.champ .hint,.hint{font-weight:400;color:var(--muted);font-size:.83rem}
+.champ input[type=text],.champ input[type=password],.champ input[type=url],.champ input[type=number],.champ input[type=time],.champ select,.champ textarea{width:100%}
+.champ input.court{width:9rem}
+.champ p.hint{margin:.3rem 0 0}
+.check{display:flex;gap:.55rem;align-items:flex-start;font-weight:500;font-size:.92rem;margin:0 0 .9rem;cursor:pointer}
+.check input{margin:.2rem 0 0;width:auto;accent-color:var(--accent)}
+.check .hint{display:block}
+.row2{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 1rem}
+.savebar{position:sticky;bottom:0;z-index:3;background:var(--bg);box-shadow:0 -8px 16px -12px rgba(0,0,0,.25);padding:.75rem 0;margin-top:.5rem;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:.8rem;flex-wrap:wrap}
+.card .savebar{position:static;background:none;box-shadow:none;padding:.8rem 0 0;margin-top:.6rem}
+.savebar .mdp{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.savebar .mdp label{font-size:.88rem;font-weight:600}
+.savebar .mdp input{width:14rem}
+.savebar .btns{display:flex;gap:.5rem;margin-left:auto}
+.etat-ligne{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
+.secret{display:inline-flex;align-items:center;gap:.35rem;font-size:.83rem;color:var(--ok);font-weight:600}
+.secret.non{color:var(--muted)}
+table.edit td{padding:.35rem .35rem;vertical-align:middle;white-space:normal}
+table.edit input,table.edit select{width:100%}
+table.edit td.h input{width:5.5rem}
+.erreurs{margin:0 0 1rem}
+.zone-danger{border-color:color-mix(in srgb,var(--crit) 35%,var(--line))}
+ol.etapes{padding-left:1.3rem;margin:.4rem 0 1rem}ol.etapes li{margin-bottom:.35rem}ol.etapes li::marker{font-weight:700;color:var(--accent)}
+/* connexion */
+.login{max-width:380px;margin:12vh auto 0;padding:0 1rem}
+.login .brand{margin-bottom:1rem;justify-content:center}
+.login .card{padding:1.4rem 1.4rem 1.2rem}
+.login label{display:block;font-weight:600;font-size:.9rem;margin:0 0 .3rem}
+.login input{width:100%;margin:0 0 1rem}
+.login button{width:100%;justify-content:center}
+@media (max-width:620px){ol.items li{grid-template-columns:1fr}.savebar .mdp input{width:100%}.savebar .btns{margin-left:0}}
 """
 
 GRADE = lambda s: "A" if s >= 90 else "B" if s >= 75 else "C" if s >= 60 else "D" if s >= 40 else "E"
@@ -793,14 +954,6 @@ def fmt(s):
     s = esc(s or "")
     s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
     return s.replace("\n", "<br>")
-
-
-def page(titre, corps, nonce, nu=False):
-    return """<!DOCTYPE html>
-<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex"><title>{t}</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232f5fd0'/%3E%3Cpath d='M4 8.5l2.5 2.5L12 5' stroke='white' stroke-width='2' fill='none'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="{css}"></head><body>{c}</body></html>""".format(t=esc(titre), css=statique("app.css"), c=corps if nu else '<div class="wrap">' + corps + "</div>")
 
 
 def graphique(hist, nonce):
@@ -851,21 +1004,473 @@ h.addEventListener('mousemove',mv);h.addEventListener('mouseleave',function(){{x
 """.format(W=W, H=H, g="".join(g), s="".join(series), mt=mt, yb=H - mb, ml=ml, hw=W - ml - mr, data=data.replace("</", "<\\/"), n=nonce)
 
 
-def barre(csrf, occupe, actif, der=None):
-    """Barre de navigation commune à toutes les pages (collée en haut)."""
-    dis = " disabled" if occupe else ""
-    hote = der.get("hote", "") if der else socket.gethostname()
-    liens = [("/", "Tableau de bord", "tdb"), ("/materiel", "Matériel", "materiel"), ("/#constats", "Constats", "constats"), ("/#historique", "Historique", "historique")]
-    if der:
-        liens.append(("/rapports/" + der["fichiers"]["html"], "Rapport", "rapport"))
-    liens.append(("/reglages", "Réglages", "reglages"))
-    nav = "".join('<a href="{}"{}>{}</a>'.format(esc(h), ' class="on"' if k == actif else "", t) for h, t, k in liens)
-    return """<header class="topbar"><div class="in"><a class="brand" href="/"><span class="logo">✓</span>Audite-moi <span class="host">{h}</span></a>
-<nav class="nav">{nav}</nav><div class="actions">
-<form class="inline" method="post" action="/lancer"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="mode" value="complet"><button class="primary"{d} title="Audit complet (quelques minutes)">▶ Lancer un audit</button></form>
-<form class="inline" method="post" action="/lancer"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="mode" value="rapide"><button{d} title="Sans Lynis, Trivy, scan du réseau local ni recherche des fichiers SUID">Audit rapide</button></form>
-<form class="inline" method="post" action="/deconnexion"><input type="hidden" name="csrf" value="{c}"><button title="Se déconnecter">Déconnexion</button></form>
-</div></div></header>""".format(h=esc(hote), nav=nav, c=esc(csrf), d=dis)
+ICONES = {
+    "tdb": '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="4.5" rx="1.5"/><rect x="13.5" y="11" width="7" height="9.5" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/>',
+    "constats": '<path d="M12 3.5 19.5 6v5.5c0 4.4-3.1 7.9-7.5 9-4.4-1.1-7.5-4.6-7.5-9V6z"/><path d="m9 12 2.2 2.2L15.5 10"/>',
+    "materiel": '<rect x="3.5" y="4" width="17" height="6.5" rx="1.5"/><rect x="3.5" y="13.5" width="17" height="6.5" rx="1.5"/><path d="M7 7.25h.01M7 16.75h.01M11 7.25h6M11 16.75h6"/>',
+    "corrections": '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.2L4 16.8 7.2 20l5.3-5.3a4 4 0 0 0 5.2-5.4l-2.4 2.4-2.6-.6-.6-2.6z"/>',
+    "historique": '<path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3.5 4.5V9H8"/><path d="M12 7.5V12l3 2"/>',
+    "rapport": '<path d="M6.5 3.5h7l4 4v13h-11z"/><path d="M13.5 3.5v4h4M9 12h6M9 15.5h6"/>',
+    "reglages": '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
+    "deconnexion": '<path d="M14 4.5h4A1.5 1.5 0 0 1 19.5 6v12a1.5 1.5 0 0 1-1.5 1.5h-4"/><path d="m10 8-4 4 4 4M6 12h9"/>',
+    "menu": '<path d="M4 7h16M4 12h16M4 17h16"/>',
+    "fermer": '<path d="M6 6l12 12M18 6 6 18"/>',
+    "lancer": '<path d="M7 5.5v13l11-6.5z"/>',
+}
+LOGO = '<span class="logo"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 8.5l2.5 2.5L12 5"/></svg></span>'
+
+
+def icone(nom):
+    return '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{}</svg>'.format(ICONES[nom])
+
+
+def page(titre, corps, nonce, nu=False, classe=""):
+    # Le thème choisi (clair / sombre) est appliqué avant l'affichage pour éviter un flash.
+    return """<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex"><title>{t}</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232557b8'/%3E%3Cpath d='M4 8.5l2.5 2.5L12 5' stroke='white' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="{css}">
+<script nonce="{n}">document.documentElement.classList.add('js');try{{var t=localStorage.getItem('audite-moi-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;}}catch(e){{}}</script>
+<script src="{app}" defer></script></head><body{cl}>{c}</body></html>""".format(
+        t=esc(titre), css=statique("app.css"), app=statique("app.js"), n=nonce, cl=' class="{}"'.format(classe) if classe else "",
+        c=corps if nu else '<main>' + corps + "</main>")
+
+
+JS_APP = r"""(function(){'use strict';
+var html=document.documentElement,body=document.body;
+/* thème : auto (système), clair ou sombre, mémorisé dans ce navigateur */
+var th=document.getElementById('theme');
+if(th){var v='auto';try{v=localStorage.getItem('audite-moi-theme')||'auto';}catch(e){}
+  th.value=(v==='light'||v==='dark')?v:'auto';
+  th.addEventListener('change',function(){var x=th.value;if(x==='auto')delete html.dataset.theme;else html.dataset.theme=x;
+    try{localStorage.setItem('audite-moi-theme',x);}catch(e){}});}
+/* menu en tiroir sur petit écran */
+var btn=document.querySelector('.menu-btn'),sb=document.getElementById('sidebar'),fond=document.querySelector('.sb-backdrop'),fer=document.querySelector('.sb-close');
+function tiroir(o){body.classList.toggle('nav-open',o);btn.setAttribute('aria-expanded',String(o));fond.hidden=!o;
+  if(o){(sb.querySelector('a[aria-current]')||sb.querySelector('a')).focus();}else btn.focus();}
+if(btn&&sb&&fond&&fer){btn.addEventListener('click',function(){tiroir(true);});fer.addEventListener('click',function(){tiroir(false);});
+  fond.addEventListener('click',function(){tiroir(false);});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&body.classList.contains('nav-open'))tiroir(false);});}
+/* audit ou correction en cours : suivi, puis rechargement à la fin */
+var att=body.dataset.attente;
+if(att){var j=document.getElementById('journal');
+  setInterval(function(){fetch('/etat.json',{credentials:'same-origin'}).then(function(r){if(r.status===401){location.href='/connexion';throw 0;}return r.json();}).then(function(e){
+    if(!e.en_cours&&!e.demande&&!e.correction){location.assign(att==='correction'?'/corrections?m=fin':location.pathname);return;}
+    if(j&&e.journal){j.textContent=e.journal;j.scrollTop=j.scrollHeight;}
+    if(!j&&e.en_cours&&location.pathname==='/'&&att==='demande'){location.reload();}}).catch(function(){});},2500);}
+/* réglage du serveur en cours d'application : on attend le résultat */
+var cfg=document.querySelector('[data-attente-config]');
+if(cfg){var id=cfg.dataset.attenteConfig,n=0;
+  var t=setInterval(function(){n++;fetch('/reglages/resultat.json?id='+encodeURIComponent(id),{credentials:'same-origin'}).then(function(r){
+    if(r.status===401){clearInterval(t);location.href='/connexion?m=redemarre';throw 0;}return r.json();}).then(function(e){
+    if(e.fait){clearInterval(t);location.replace(location.pathname+'?r='+encodeURIComponent(id));}
+    else if(n>60){clearInterval(t);cfg.textContent='Le réglage n’a pas été pris en charge : vérifiez « systemctl status audite-moi-configurer.path » sur le serveur.';cfg.className='banner warnb';}}).catch(function(){});},1500);}
+/* Planification : n'afficher que le champ utile (jour de la semaine ou du mois) */
+var fr=document.getElementById('p-frequence');
+if(fr){var maj=function(){document.getElementById('c-jour').hidden=fr.value!=='hebdomadaire';document.getElementById('c-jour-mois').hidden=fr.value!=='mensuel';};
+  fr.addEventListener('change',maj);maj();}
+/* Sauvegardes : ajouter une ligne */
+var aj=document.getElementById('ajout-ligne');
+if(aj){aj.addEventListener('click',function(){var tb=document.querySelector('#sauvegardes tbody'),l=tb.querySelectorAll('tr'),
+  der=l[l.length-1],n=l.length;if(n>=30)return;var c=der.cloneNode(true);
+  Array.prototype.forEach.call(c.querySelectorAll('input,select'),function(x){x.name=x.name.replace(/_\d+$/,'_'+n);if(x.tagName==='INPUT')x.value='';});
+  tb.appendChild(c);c.querySelector('input').focus();});}
+})();"""
+
+
+def barre_laterale(csrf, actif, ctx):
+    etat = ctx["etat"]
+    if etat["en_cours"]:
+        audit = '<div class="encours"><span class="spin"></span>Audit {} en cours…</div>'.format(esc(etat.get("mode") or ""))
+    else:
+        dis = " disabled" if etat["demande"] else ""
+        audit = ('<form method="post" action="/lancer"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="mode" value="complet">'
+                 '<button class="btn-lancer"{d} title="Audit complet (quelques minutes)">{i}Lancer un audit</button></form>'
+                 '<form method="post" action="/lancer"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="mode" value="rapide">'
+                 '<button class="btn-rapide"{d} title="Sans Lynis, Trivy, scan du réseau local ni recherche des fichiers SUID">Audit rapide</button></form>').format(
+                     c=esc(csrf), d=dis, i=icone("lancer"))
+    pb = ctx["a_corriger"]
+    cpt = '<span class="cpt{}" title="{} critique(s), {} à surveiller">{}</span>'.format(
+        "" if pb[0] else " w", pb[0], pb[1], pb[0] + pb[1]) if pb[0] + pb[1] else ""
+
+    def lien(href, ico, texte, cle, extra=""):
+        return '<a href="{}"{}>{}<span>{}</span>{}</a>'.format(esc(href), ' aria-current="page"' if cle == actif else "", icone(ico), texte, extra)
+
+    der = ctx["der"]
+    rapport = lien("/rapports/" + der["fichiers"]["html"], "rapport", "Rapport complet", "rapport") if der else ""
+    return """<a class="skip" href="#contenu">Aller au contenu</a>
+<div class="mobilebar"><button type="button" class="menu-btn" aria-controls="sidebar" aria-expanded="false">{menu}<span>Menu</span></button>
+<a class="brand" href="/">{logo}<span>Audite-moi</span></a>{mpb}</div>
+<aside class="sidebar" id="sidebar" aria-label="Navigation principale">
+<div class="sb-head"><a class="brand" href="/">{logo}<span>Audite-moi</span></a><button type="button" class="sb-close" aria-label="Fermer le menu">{fermer}</button></div>
+<div class="sb-host" title="Serveur audité">{hote}</div>
+<div class="sb-audit">{audit}</div>
+<nav class="sb-nav">{tdb}{constats}{materiel}
+<p class="sb-group" id="nav-suivi">Suivi</p><div role="group" aria-labelledby="nav-suivi">{corr}{hist}{rapport}</div></nav>
+<div class="sb-foot"><nav class="sb-nav" aria-label="Configuration">{regl}</nav>
+<div class="sb-row"><label class="sb-theme"><span class="cache">Thème</span><select id="theme" aria-label="Thème"><option value="auto">Thème auto</option><option value="light">Thème clair</option><option value="dark">Thème sombre</option></select></label></div>
+<div class="sb-row"><form method="post" action="/deconnexion" class="inline"><input type="hidden" name="csrf" value="{c}"><button class="sb-logout">{deco}<span>Déconnexion</span></button></form></div></div>
+</aside><div class="sb-backdrop" hidden></div>""".format(
+        menu=icone("menu"), logo=LOGO, fermer=icone("fermer"), deco=icone("deconnexion"), hote=esc(ctx["hote"]), audit=audit, c=esc(csrf),
+        mpb='<a class="mobile-pb" href="/constats">{} à corriger</a>'.format(pb[0] + pb[1]) if pb[0] + pb[1] else "",
+        tdb=lien("/", "tdb", "Tableau de bord", "tdb"), constats=lien("/constats", "constats", "Constats", "constats", cpt),
+        materiel=lien("/materiel", "materiel", "Matériel", "materiel"), corr=lien("/corrections", "corrections", "Corrections", "corrections"),
+        hist=lien("/historique", "historique", "Historique", "historique"), rapport=rapport, regl=lien("/reglages", "reglages", "Réglages", "reglages"))
+
+
+def contexte(donnees, choix=""):
+    """Ce dont toutes les pages ont besoin : rapports, état de l'audit, problèmes à corriger (barre latérale)."""
+    hist = donnees.rapports()
+    etat = donnees.etat()
+    der = hist[-1] if hist else None
+    brut = der
+    if choix:
+        brut = next((d for d in hist if d["_fichier"] == choix), der)
+    vu = donnees.vue_rapport(brut) if brut else None
+    vu_der = vu if brut is der else (donnees.vue_rapport(der) if der else None)
+    a_corriger = (0, 0)
+    if vu_der:
+        a_corriger = (vu_der["compteurs"].get("CRIT", 0), vu_der["compteurs"].get("WARN", 0))
+    return {"hist": hist, "etat": etat, "der": der, "brut": brut, "vu": vu, "est_dernier": brut is der, "a_corriger": a_corriger,
+            "hote": der.get("hote", "") if der else socket.gethostname()}
+
+
+def evolution(donnees, ctx):
+    """Nouveaux problèmes et problèmes résolus depuis l'audit précédent."""
+    hist, brut, vu = ctx["hist"], ctx["brut"], ctx["vu"]
+    if not vu or brut not in hist or hist.index(brut) == 0:
+        return None, set(), []
+    prec = donnees.vue_rapport(hist[hist.index(brut) - 1])
+    pv, pp = problemes_vus(vu), problemes_vus(prec)
+    return prec, {k for k in pv if k not in pp}, [pp[k] for k in pp if k not in pv]
+
+
+def coque(donnees, csrf, nonce, actif, titre, corps, ctx=None, sous_titre="", actions="", titre_onglet=None):
+    """Page complète : barre latérale, en-tête (titre, sous-titre, actions) et contenu."""
+    ctx = ctx or contexte(donnees)
+    etat = ctx["etat"]
+    attente = "correction" if etat.get("correction") else "audit" if etat["en_cours"] else "demande" if etat["demande"] else ""
+    prochain = donnees.prochain_audit()
+    tete = '<div class="page-head"><div><h1>{}</h1>{}</div>{}</div>'.format(
+        titre, '<p class="sous">{}</p>'.format(sous_titre) if sous_titre else "", '<div class="actions">{}</div>'.format(actions) if actions else "")
+    pied = '<footer>Audite-moi {v}{p} · <a href="https://github.com/oliv2776/Audite-moi">GitHub</a></footer>'.format(
+        v=VERSION, p=" · prochain audit automatique : " + esc(prochain) if prochain else "")
+    html_ = barre_laterale(csrf, actif, ctx) + '<div class="content"><main id="contenu">' + tete + corps + pied + "</main></div>"
+    page_ = page("{} — Audite-moi — {}".format(titre_onglet or re.sub(r"<[^>]+>", "", titre), ctx["hote"]), html_, nonce, nu=True, classe="with-nav")
+    if attente:
+        page_ = page_.replace('<body class="with-nav">', '<body class="with-nav" data-attente="{}">'.format(attente), 1)
+    return page_
+
+
+def bannieres_etat(ctx, message, csrf=""):
+    etat, out = ctx["etat"], []
+    if etat["en_cours"]:
+        depuis = int((time.time() - (etat["depuis"] or time.time())) // 60)
+        out.append('<div class="banner run" id="etat"><span class="spin"></span><b>Audit {m} en cours</b> depuis {d} min — la page se mettra à jour à la fin.<pre id="journal">{j}</pre></div>'
+                   .format(m=esc(etat["mode"] or ""), d=depuis, j=esc(etat["journal"])))
+    elif etat["bloque"]:
+        out.append('<div class="banner warnb"><b>La demande d’audit n’a pas été prise en charge.</b> Vérifiez sur le serveur : <code>systemctl status audite-moi.path audite-moi.service</code></div>')
+    elif etat["demande"]:
+        out.append('<div class="banner run" id="etat"><span class="spin"></span>Demande enregistrée, démarrage imminent…</div>')
+    elif message in MESSAGES and not etat.get("correction"):
+        out.append('<div class="banner {}">{}</div>'.format(*MESSAGES[message]))
+    if etat.get("correction"):
+        out.append('<div class="banner run"><span class="spin"></span>Correction en cours d’application…</div>')
+    if ctx["vu"] and not ctx["est_dernier"]:
+        out.append('<div class="banner warnb">Vous consultez un <b>ancien rapport</b> ({}). <a href="{}">Revenir au dernier audit</a></div>'.format(
+            esc(ctx["vu"].get("date", "")), "/constats"))
+    return "".join(out)
+
+
+def filtre(**k):
+    st = {"cat": "", "niv": "PB", "sec": "", "q": ""}
+    st.update(k)
+    return "/constats#f=" + urllib.parse.quote(json.dumps(st, separators=(",", ":")))
+
+
+def tuiles(vu, liens=False):
+    n, c = vu["notes"], vu["compteurs"]
+    orig = vu.get("notes_origine") or {}
+    t = []
+    for lib, k, cat in (("Santé", "sante", "sante"), ("Sécurité", "securite", "secu")):
+        aide = "Avec vos acceptations" if orig.get(k, {}).get("score", n[k]["score"]) != n[k]["score"] else ("Voir les constats" if liens else "Cliquer pour filtrer")
+        interieur = ('<span class="grade g-{g}">{g}</span><div><div class="l">{l}</div><div class="v">{v}<small> / 100</small></div><span class="h">{h}</span></div>'
+                     .format(g=esc(n[k]["lettre"]), l=lib, v=esc(n[k]["score"]), h=aide))
+        if liens:
+            t.append('<a class="tile score" href="{}">{}</a>'.format(esc(filtre(cat=cat)), interieur))
+        else:
+            t.append('<button type="button" class="tile score" data-f="cat:{}" aria-pressed="false" title="N’afficher que les contrôles « {} »">{}</button>'.format(cat, lib, interieur))
+    for k, lib in (("CRIT", "Critiques"), ("WARN", "À surveiller"), ("OK", "Contrôles OK"), ("INFO", "Informations")):
+        interieur = '<div class="v">{}</div><div class="l">{}</div>'.format(esc(c.get(k, 0)), lib)
+        if liens:
+            t.append('<a class="tile kpi k-{}" href="{}">{}</a>'.format(k, esc(filtre(niv=k)), interieur))
+        else:
+            t.append('<button type="button" class="tile kpi k-{k}" data-f="niv:{k}" aria-pressed="false">{i}</button>'.format(k=k, i=interieur))
+    return '<div class="hero">{}</div>'.format("".join(t))
+
+
+def sous_titre_audit(vu):
+    return "Audit du <b>{d}</b> · mode {m} · {os} · durée {s} s".format(
+        d=esc(vu.get("date", "")), m=esc(vu.get("mode", "")), os=esc(vu.get("os", "")), s=esc(vu.get("duree_s", "?")))
+
+
+def boutons_rapport(vu):
+    f = vu["fichiers"]
+    return ('<a class="btn" href="/rapports/{h}">Rapport complet</a><a class="btn" href="/texte/{t}">Version texte</a>'
+            '<a class="btn" href="/rapports/{j}">JSON</a>').format(h=esc(f["html"]), t=esc(f["txt"]), j=esc(f["json"]))
+
+
+def aucun_rapport():
+    return ('<div class="card"><h2>Aucun rapport pour l’instant</h2><p class="muted">Lancez un premier audit avec le bouton « Lancer un audit » '
+            'de la barre de gauche : un audit complet prend quelques minutes.</p></div>')
+
+
+def planif_courte(donnees, prochain):
+    conf = donnees.configuration()
+    p = (conf or {}).get("planification") or {}
+    if conf and not p.get("actif"):
+        return '<span class="pastille warn">Désactivé</span>'
+    if prochain:
+        return "prochain le {}".format(esc(prochain))
+    return esc(description_planning(p)) if p else '<span class="pastille">Inconnu</span>'
+
+
+def tableau_bord(app, csrf, nonce, message):
+    donnees = app.donnees
+    ctx = contexte(donnees)
+    vu = ctx["vu"]
+    out = [bannieres_etat(ctx, message)]
+    if not vu:
+        out.append(aucun_rapport())
+        return coque(donnees, csrf, nonce, "tdb", "Tableau de bord", "".join(out), ctx, "Santé et sécurité du serveur")
+    prec, nouveaux, resolus = evolution(donnees, ctx)
+    if prec is not None:
+        if nouveaux or resolus:
+            det = ""
+            if resolus:
+                det = '<details class="d"><summary>Voir les problèmes résolus</summary><ul class="res">{}</ul></details>'.format(
+                    "".join('<li><span class="badge b-OK">Résolu</span> {}</li>'.format(fmt(x["titre"])) for x in resolus[:40]))
+            lien = ' <a href="{}">Afficher les nouveaux</a>'.format(esc(filtre(niv="NEW"))) if nouveaux else ""
+            out.append('<div class="banner evol">Depuis l’audit du {d} : <b>{n} nouveau(x) problème(s)</b>{l} · <b>{r} résolu(s)</b>{det}</div>'.format(
+                d=esc(prec.get("date", "")), n=len(nouveaux), l=lien, r=len(resolus), det=det))
+        else:
+            out.append('<div class="banner evol">Rien de nouveau depuis l’audit du {} : aucun problème apparu ni résolu.</div>'.format(esc(prec.get("date", ""))))
+    out.append(tuiles(vu, liens=True))
+
+    # À corriger en priorité
+    secs = vu.get("sections", {})
+    pbs = sorted([c for c in vu.get("constats", []) if c.get("niveau") in ("CRIT", "WARN") and not c.get("accepte")],
+                 key=lambda x: (ORDRE.get(x.get("niveau"), 9), x["cle"] not in nouveaux))
+    if pbs:
+        lis = "".join('<li><span class="badge b-{n}">{nf}</span><div><span class="t">{t}</span><span class="s">{s}{nv}</span></div></li>'.format(
+            n=esc(x["niveau"]), nf=NIV_FR.get(x["niveau"], ""), t=fmt(x["titre"]),
+            s=esc((secs.get(x.get("section", ""), {}) or {}).get("titre", x.get("section", ""))), nv=" · nouveau" if x["cle"] in nouveaux else "")
+            for x in pbs[:7])
+        prio = '<ul class="prio">{}</ul><a class="voir" href="/constats">Voir les {} constats à corriger →</a>'.format(lis, len(pbs))
+    else:
+        prio = '<p class="muted">Aucun problème à corriger : bravo. Les points d’information restent consultables dans <a href="/constats">Constats</a>.</p>'
+    gauche = '<div class="card"><h2>À corriger en priorité</h2>{}</div>'.format(prio)
+
+    # Surveillance : alertes, planification, matériel, corrections
+    al = donnees.alertes()
+    if al.get("erreur"):
+        tg = '<span class="pastille warn">Échec d’envoi le {}</span>'.format(esc(datetime.fromtimestamp(al["erreur"]).strftime("%d/%m à %H:%M")))
+    elif al.get("actif"):
+        tg = '<span class="pastille ok">Actives</span>'
+    else:
+        tg = '<span class="pastille">Non configurées</span> <a href="/reglages/telegram">Configurer</a>'
+    prochain = donnees.prochain_audit()
+    kv = [("Alertes Telegram", tg),
+          ("Audit automatique", '{} <a href="/reglages/planification">Modifier</a>'.format(planif_courte(donnees, prochain)))]
+    mes = (app.mesures.stockage() or {}).get("releve") or {}
+    dq = mes.get("disques") or []
+    if dq:
+        nc = sum(1 for d in dq if d.get("etat") == "critique")
+        nw = sum(1 for d in dq if d.get("etat") == "attention")
+        p = ('<span class="pastille crit">{} critique(s)</span> '.format(nc) if nc else "") + \
+            ('<span class="pastille warn">{} à surveiller</span> '.format(nw) if nw else "") + \
+            ('<span class="pastille ok">{} sain(s)</span>'.format(len(dq) - nc - nw) if len(dq) - nc - nw else "")
+        if mes.get("smart_scan_ok") is False:
+            p = '<span class="pastille warn">Relevé SMART indisponible</span>'
+        kv.append(("Disques", p + ' <a href="/materiel#disques">Détail</a>'))
+    pools = [x for x in (mes.get("pools") or []) if x.get("taille")]
+    if pools:
+        seuil_a, seuil_c = app.seuils.effectifs().get("pool_attention", 80), app.seuils.effectifs().get("pool_critique", 90)
+        txt = []
+        for x in pools:
+            pct = 100.0 * x["utilise"] / x["taille"]
+            cl = "crit" if pct >= seuil_c else "warn" if pct >= seuil_a else "ok"
+            txt.append('<span class="pastille {}">{} {:.0f} %</span>'.format(cl, esc(x["nom"]), pct))
+        kv.append(("Pools ZFS", " ".join(txt)))
+    journal = donnees.corrections()
+    if journal:
+        e = journal[-1]
+        kv.append(("Dernière correction", '{} — {} <a href="/corrections">Journal</a>'.format(
+            esc(e.get("libelle", "")), esc(datetime.fromtimestamp(e.get("date", 0)).strftime("%d/%m à %H:%M")))))
+    surv = '<div class="card"><h2>Surveillance</h2><dl class="kv">{}</dl></div>'.format("".join("<dt>{}</dt><dd>{}</dd>".format(a, b) for a, b in kv))
+    evol = '<div class="card"><h2>Évolution des notes <span class="mini"><a href="/historique">Historique</a></span></h2>{}</div>'.format(graphique(ctx["hist"], nonce))
+    out.append('<div class="grid2c">{}{}</div>{}'.format(gauche, surv, evol))
+    return coque(donnees, csrf, nonce, "tdb", "Tableau de bord", "".join(out), ctx, sous_titre_audit(vu), boutons_rapport(vu))
+
+
+def page_constats(app, csrf, nonce, message, choix=""):
+    donnees = app.donnees
+    ctx = contexte(donnees, choix)
+    vu, brut, est_dernier = ctx["vu"], ctx["brut"], ctx["est_dernier"]
+    out = [bannieres_etat(ctx, message)]
+    if not vu:
+        out.append(aucun_rapport())
+        return coque(donnees, csrf, nonce, "constats", "Constats", "".join(out), ctx)
+    prec, nouveaux, _ = evolution(donnees, ctx)
+    out.append(tuiles(vu))
+    journal = donnees.corrections()
+    faites = {}
+    for e in journal:
+        if e.get("ok") and e.get("type") in TYPES_CORRECTION and not e.get("annule") and e.get("date", 0) >= vu.get("horodatage", 0):
+            faites[(e["type"], e.get("cible"))] = e
+    secs = vu.get("sections", {})
+    constats = sorted(vu.get("constats", []), key=lambda x: (ORDRE.get(x.get("niveau"), 9) if not x.get("accepte") else 5))
+    lis, vues = [], []
+    nb_acc = 0
+    for x in constats:
+        sid = x.get("section", "")
+        info = secs.get(sid, {})
+        court = info.get("court") or info.get("titre", sid)
+        if sid not in vues:
+            vues.append(sid)
+        niv = "ACC" if x.get("accepte") else x.get("niveau")
+        nb_acc += niv == "ACC"
+        msg = ""
+        if x.get("accepte"):
+            msg += '<div class="msgd acc">Accepté ({}) : {}</div>'.format(NIV_FR.get(x.get("niveau"), ""), fmt(x["accepte"]))
+        if x.get("detail"):
+            d = x["detail"]
+            if x["niveau"] in ("CRIT", "WARN") or len(d) > 160 or "\n" in d:
+                msg += '<details class="d"><summary>Détail</summary><div class="det">{}</div></details>'.format(fmt(d))
+            else:
+                msg += '<div class="msgd">{}</div>'.format(fmt(d))
+        fx = '<div class="fix">{}</div>'.format(fmt(x["correctif"])) if x.get("correctif") and not x.get("accepte") else ""
+        refs = [r for r in (x.get("references") or []) if isinstance(r, dict) and str(r.get("url", "")).startswith("https://")]
+        if refs:
+            fx += '<div class="refs">Références : {}</div>'.format(" · ".join(
+                '<a href="{u}" title="{t}" target="_blank" rel="noopener noreferrer">{s} {i}</a>'.format(
+                    u=esc(r["url"]), t=esc(r.get("titre", "")), s=esc(r.get("source", "")), i=esc(r.get("id", ""))) for r in refs))
+        acts = []
+        if est_dernier and not x.get("accepte"):
+            for i, a in enumerate(x.get("actions") or []):
+                if a.get("type") not in TYPES_CORRECTION:
+                    continue
+                e = faites.get((a["type"], a.get("cible")))
+                if e:
+                    acts.append('<span class="fait">✓ {} — corrigé le {}</span>'.format(esc(a.get("libelle", "")), esc(datetime.fromtimestamp(e["date"]).strftime("%d/%m à %H:%M"))))
+                    continue
+                acts.append('<button type="button" class="corr" data-dlg="corriger" data-cle="{k}" data-i="{i}" data-rapport="{r}" data-titre="{t}" '
+                            'data-texte="Cette commande sera exécutée sur le serveur, en root. Elle pourra être annulée depuis la page Corrections." '
+                            'data-cmd="{cmd}" data-avert="{av}">Corriger : {l}</button>'.format(
+                                k=esc(x["cle"]), i=i, r=esc(brut["_fichier"]), t=esc(a.get("libelle", "")), cmd=esc(a.get("apercu", "")),
+                                av=esc(AVERTISSEMENTS.get(a["type"], "")), l=esc(a.get("libelle", ""))))
+        if est_dernier and x.get("niveau") != "OK":
+            if x.get("accepte"):
+                acts.append('<form class="inline" method="post" action="/accepter"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="cle" value="{k}">'
+                            '<input type="hidden" name="retirer" value="1"><button class="lienbtn">Ne plus accepter</button></form>'.format(c=esc(csrf), k=esc(x["cle"])))
+            elif x.get("niveau") in ("CRIT", "WARN", "INFO"):
+                acts.append('<button type="button" class="lienbtn" data-dlg="accepter" data-cle="{k}" data-titre="Accepter : {t}" '
+                            'data-texte="Le constat restera visible, avec votre raison, mais ne comptera plus comme un problème ni dans la note, et ne déclenchera plus d’alerte. Vous pourrez revenir en arrière.">'
+                            'C’est voulu…</button>'.format(k=esc(x["cle"]), t=esc(x["titre"][:120])))
+        acts_html = '<div class="acts">{}</div>'.format("".join(acts)) if acts else ""
+        nv = x["cle"] in nouveaux
+        lis.append('<li data-niv="{n}" data-cat="{cat}" data-sec="{sid}" data-nouveau="{nv}"><div><span class="badge b-{n}">{nf}</span>{tag}</div><div>'
+                   '<button type="button" class="sec" data-sec="{sid}" title="N’afficher que cette section">{s}</button><span class="ttl">{t}</span>{msg}{fx}{acts}</div></li>'.format(
+                       n=esc(niv), cat=esc(info.get("categorie", "")), sid=esc(sid), nf="Accepté" if niv == "ACC" else NIV_FR.get(niv, ""),
+                       nv="1" if nv else "0", tag='<span class="nouv">Nouveau</span>' if nv else "",
+                       s=esc(court), t=fmt(x["titre"]), msg=msg, fx=fx, acts=acts_html))
+    opts = "".join('<option value="{}">{}</option>'.format(esc(s), esc(secs.get(s, {}).get("titre", s))) for s in vues)
+    seg_cat = "".join('<button type="button" data-v="{}">{}</button>'.format(v, t) for v, t in (("", "Toutes"), ("sante", "Santé"), ("secu", "Sécurité")))
+    niveaux = [("PB", "À corriger"), ("CRIT", "Critiques"), ("WARN", "Attention")]
+    if nouveaux:
+        niveaux.append(("NEW", "Nouveaux"))
+    niveaux += [("OK", "OK"), ("INFO", "Info")]
+    if nb_acc:
+        niveaux.append(("ACC", "Acceptés"))
+    niveaux.append(("", "Tout"))
+    seg_niv = "".join('<button type="button" data-v="{}">{}</button>'.format(v, t) for v, t in niveaux)
+    out.append("""<div class="card" id="constats"><h2>Liste des constats <span class="mini">par défaut : ce qu’il faut corriger, du plus urgent au moins urgent</span></h2>
+<div class="filters"><div class="seg" data-g="cat" role="group" aria-label="Catégorie">{sc}</div><div class="seg" data-g="niv" role="group" aria-label="Niveau">{sn}</div>
+<select id="fsec" aria-label="Section"><option value="">Toutes les sections</option>{o}</select><input id="fq" type="search" placeholder="Rechercher (ex. ssh, zfs, docker…)" aria-label="Rechercher"></div>
+<div class="count" id="fcount"><span></span><button type="button" id="freset" class="cache">Réinitialiser les filtres</button></div>
+<ol class="items" id="items">{li}</ol><p class="vide cache" id="fvide">Aucun constat ne correspond à ces filtres.</p></div>""".format(
+        sc=seg_cat, sn=seg_niv, o=opts, li="".join(lis)))
+    out.append('<script src="{}" defer></script>'.format(statique("filtres.js")))
+    out.append(DIALOGUE.format(csrf=esc(csrf)))
+    out.append('<script src="{}" defer></script>'.format(statique("dialogue.js")))
+    return coque(donnees, csrf, nonce, "constats", "Constats", "".join(out), ctx,
+                 "{} constats · {}".format(len(constats), sous_titre_audit(vu)), boutons_rapport(vu))
+
+
+def page_corrections(app, csrf, nonce, message):
+    donnees = app.donnees
+    ctx = contexte(donnees)
+    etat = ctx["etat"]
+    journal = donnees.corrections()
+    out = [bannieres_etat(ctx, message)]
+    if not journal and not etat.get("correction"):
+        out.append('<div class="card"><p class="muted">Aucune correction pour l’instant. Les problèmes qui peuvent être corrigés en un clic portent un bouton '
+                   '« Corriger » dans <a href="/constats">Constats</a> : la commande exacte est affichée, le mot de passe redemandé, et chaque correction peut être annulée ici.</p></div>')
+    else:
+        rows = []
+        annulees = {e.get("cible") for e in journal if e.get("type") == "annulation" and e.get("ok")}
+        for e in reversed(journal[-50:]):
+            if e.get("type") == "refus":
+                badge = '<span class="badge b-WARN">Refusée</span>'
+            elif e.get("type") == "annulation":
+                badge = '<span class="badge b-INFO">Effectuée</span>' if e.get("ok") else '<span class="badge b-CRIT">Échec</span>'
+            elif e.get("annule") or e.get("id") in annulees:
+                badge = '<span class="badge b-ACC">Annulée</span>'
+            else:
+                k, t = ETAT_CORR[bool(e.get("ok"))]
+                badge = '<span class="badge b-{}">{}</span>'.format(k, t)
+            bouton = ""
+            if e.get("ok") and e.get("annulation") and not e.get("annule") and e.get("type") in TYPES_CORRECTION:
+                cmd = "\n".join(" ".join(x) for x in e["annulation"])
+                bouton = ('<button type="button" class="lienbtn" data-dlg="annuler" data-id="{i}" data-titre="Annuler : {l}" data-cmd="{c}" '
+                          'data-texte="Cette commande remet le réglage tel qu’il était avant la correction.">Annuler</button>').format(
+                              i=esc(e["id"]), l=esc(e.get("libelle", "")), c=esc(cmd))
+            sortie = '<details class="d"><summary>Commandes et sortie</summary><pre class="sortie">{}</pre></details>'.format(
+                esc("\n".join(e.get("commandes") or []) + ("\n\n" if e.get("commandes") else "") + (e.get("sortie") or ""))) if (e.get("sortie") or e.get("commandes")) else ""
+            rows.append('<tr><td>{d}</td><td class="etat"><b>{l}</b>{s}</td><td>{b}</td><td>{a}</td></tr>'.format(
+                d=esc(datetime.fromtimestamp(e.get("date", 0)).strftime("%d/%m/%Y %H:%M")), l=esc(e.get("libelle", "")), s=sortie, b=badge, a=bouton))
+        attente = '<p class="sub"><span class="spin"></span>Une correction est en cours…</p>' if etat.get("correction") else ""
+        out.append('<div class="card" id="corrections">{}<div class="tw"><table><thead><tr><th>Date</th><th>Correction</th><th>Résultat</th><th></th></tr></thead>'
+                   '<tbody>{}</tbody></table></div></div>'.format(attente, "".join(rows)))
+        out.append(DIALOGUE.format(csrf=esc(csrf)))
+        out.append('<script src="{}" defer></script>'.format(statique("dialogue.js")))
+    return coque(donnees, csrf, nonce, "corrections", "Corrections", "".join(out), ctx,
+                 "Appliquées depuis l’interface, en root, avec votre mot de passe · chacune peut être annulée")
+
+
+def page_historique(app, csrf, nonce):
+    donnees = app.donnees
+    ctx = contexte(donnees)
+    hist = ctx["hist"]
+    out = []
+    if not hist:
+        out.append(aucun_rapport())
+    else:
+        out.append('<div class="card" id="evolution"><h2>Évolution des notes</h2>{}</div>'.format(graphique(hist, nonce)))
+        rows = []
+        for d in reversed(hist[-60:]):
+            n_, c_, f_ = d["notes"], d["compteurs"], d["fichiers"]
+            rows.append("<tr><td><a href='/constats?rapport={j}' title='Afficher les constats de ce rapport'>{date}</a></td><td>{mode}</td>"
+                        "<td><span class='pill'><i class='g-{gs}'>{gs}</i>{s}</span></td><td><span class='pill'><i class='g-{gc}'>{gc}</i>{c}</span></td>"
+                        "<td class='num'>{cr}</td><td class='num'>{w}</td><td><a href='/rapports/{h}'>rapport</a> · <a href='/texte/{t}'>texte</a></td></tr>".format(
+                            j=esc(d["_fichier"]), date=esc(d.get("date", "")), mode=esc(d.get("mode", "")), gs=esc(n_["sante"]["lettre"]), s=esc(n_["sante"]["score"]),
+                            gc=esc(n_["securite"]["lettre"]), c=esc(n_["securite"]["score"]), cr=esc(c_.get("CRIT", 0)), w=esc(c_.get("WARN", 0)),
+                            h=esc(f_["html"]), t=esc(f_["txt"])))
+        out.append('<div class="card" id="historique"><h2>Rapports <span class="mini">cliquez sur une date pour afficher ses constats</span></h2><div class="tw"><table><thead><tr><th>Date</th><th>Mode</th><th>Santé</th><th>Sécurité</th>'
+                   '<th class="num">Critiques</th><th class="num">À surveiller</th><th>Fichiers</th></tr></thead><tbody>{}</tbody></table></div></div>'.format("".join(rows)))
+    return coque(donnees, csrf, nonce, "historique", "Historique", "".join(out), ctx,
+                 "{} rapport(s) conservé(s) · <a href=\"/reglages/planification\">conservation et planification</a>".format(len(hist)))
 
 
 JS_FILTRES = """(function(){
@@ -933,14 +1538,14 @@ AVERTISSEMENTS = {
 MESSAGES = {"lance": ("okb", "Demande enregistrée : l’audit démarre dans quelques secondes."),
             "occupe": ("warnb", "Un audit est déjà en cours ou en attente."),
             "erreur": ("warnb", "Impossible d’enregistrer la demande (droits du dossier de demandes ?)."),
-            "correction": ("okb", "Correction demandée : elle est appliquée dans quelques secondes (résultat dans « Corrections » ci-dessous)."),
+            "correction": ("okb", "Correction demandée : elle est appliquée dans quelques secondes, le résultat s’affichera ci-dessous."),
             "corr-occupe": ("warnb", "Une correction est déjà en cours : réessayez dans quelques secondes."),
             "corr-invalide": ("warnb", "Cette correction n’est plus disponible : relancez un audit."),
             "mdp": ("warnb", "Mot de passe incorrect : rien n’a été modifié."),
             "bloque": ("warnb", "Trop d’essais de mot de passe : réessayez dans 15 minutes."),
             "accepte": ("okb", "Constat accepté : il ne compte plus dans la note (recalculée ici, puis par le prochain audit)."),
             "retire": ("okb", "Le constat compte de nouveau comme un problème."),
-            "fin": ("okb", "Correction traitée : voyez le résultat dans « Corrections » ci-dessous. L’audit suivant confirmera que le problème a disparu.")}
+            "fin": ("okb", "Correction traitée : voyez le résultat ci-dessous. L’audit suivant confirmera que le problème a disparu.")}
 ETAT_CORR = {True: ("OK", "Réussie"), False: ("CRIT", "Échec")}
 
 
@@ -948,218 +1553,7 @@ def problemes_vus(v):
     return {c["cle"]: c for c in v.get("constats", []) if c.get("niveau") in ("CRIT", "WARN") and not c.get("accepte")}
 
 
-def tableau_bord(donnees, csrf, nonce, message, choix=""):
-    hist = donnees.rapports()
-    etat = donnees.etat()
-    occupe = etat["en_cours"] or etat["demande"]
-    der = hist[-1] if hist else None
-    brut = der
-    if choix:
-        brut = next((d for d in hist if d["_fichier"] == choix), der)
-    vu = donnees.vue_rapport(brut) if brut else None
-    est_dernier = brut is der
-    journal = donnees.corrections()
-    out = [barre(csrf, occupe, "tdb", der), '<div class="wrap">']
-
-    if etat["en_cours"]:
-        depuis = int((time.time() - (etat["depuis"] or time.time())) // 60)
-        out.append('<div class="banner run" id="etat"><span class="spin"></span><b>Audit {m} en cours</b> depuis {d} min — la page se mettra à jour à la fin.<pre id="journal">{j}</pre></div>'
-                   .format(m=esc(etat["mode"] or ""), d=depuis, j=esc(etat["journal"])))
-    elif etat["bloque"]:
-        out.append('<div class="banner warnb"><b>La demande d’audit n’a pas été prise en charge.</b> Vérifiez sur le serveur : <code>systemctl status audite-moi.path audite-moi.service</code></div>')
-    elif etat["demande"]:
-        out.append('<div class="banner run" id="etat"><span class="spin"></span>Demande enregistrée, démarrage imminent…</div>')
-    elif message in MESSAGES and not etat.get("correction"):
-        out.append('<div class="banner {}">{}</div>'.format(*MESSAGES[message]))
-    if etat.get("correction"):
-        out.append('<div class="banner run"><span class="spin"></span>Correction en cours d’application…</div>')
-
-    if not vu:
-        out.append('<div class="card"><h2>Aucun rapport pour l’instant</h2><p class="empty">Lancez un premier audit avec le bouton « Lancer un audit » en haut à droite (un audit complet prend quelques minutes).</p></div>')
-    else:
-        if not est_dernier:
-            out.append('<div class="banner warnb">Vous consultez un <b>ancien rapport</b> ({}). <a href="/">Revenir au dernier audit</a></div>'.format(esc(vu.get("date", ""))))
-        n, c, f = vu["notes"], vu["compteurs"], vu["fichiers"]
-        al = donnees.alertes()
-        if al.get("erreur"):
-            alt = '<span class="ab warn">Alertes Telegram : échec d’envoi le {}</span>'.format(esc(datetime.fromtimestamp(al["erreur"]).strftime("%d/%m à %H:%M")))
-        elif al.get("actif"):
-            alt = '<span class="ab ok">Alertes Telegram actives</span>'
-        else:
-            alt = '<span class="ab" title="sudo ./install.sh --configurer-telegram">Alertes Telegram non configurées</span>'
-        out.append('<div class="meta"><span>Audit du <b>{d}</b> · mode {m} · {os} · durée {s} s</span>{alt}<a class="btn" href="/rapports/{h}">Rapport complet</a><a class="btn" href="/texte/{t}">Version texte</a><a class="btn" href="/rapports/{j}">JSON</a></div>'.format(
-            d=esc(vu.get("date", "")), m=esc(vu.get("mode", "")), os=esc(vu.get("os", "")), s=esc(vu.get("duree_s", "?")), alt=alt,
-            h=esc(f["html"]), t=esc(f["txt"]), j=esc(f["json"])))
-
-        # Évolution depuis l'audit précédent
-        nouveaux = set()
-        i_vu = hist.index(brut)
-        if i_vu > 0:
-            prec = donnees.vue_rapport(hist[i_vu - 1])
-            pv, pp = problemes_vus(vu), problemes_vus(prec)
-            nouveaux = {k for k in pv if k not in pp}
-            resolus = [pp[k] for k in pp if k not in pv]
-            if nouveaux or resolus:
-                det = ""
-                if resolus:
-                    det = '<details class="d"><summary>Voir les problèmes résolus</summary><ul class="res">{}</ul></details>'.format(
-                        "".join('<li><span class="badge b-OK">Résolu</span> {}</li>'.format(fmt(x["titre"])) for x in resolus[:40]))
-                bouton = ' <button type="button" class="lienbtn" data-voir-nouveaux>Afficher les nouveaux</button>' if nouveaux else ""
-                out.append('<div class="banner evol">Depuis l’audit du {d} : <b>{n} nouveau(x) problème(s)</b>{b} · <b>{r} résolu(s)</b>{det}</div>'.format(
-                    d=esc(prec.get("date", "")), n=len(nouveaux), b=bouton, r=len(resolus), det=det))
-            else:
-                out.append('<div class="banner evol">Rien de nouveau depuis l’audit du {} : aucun problème apparu ni résolu.</div>'.format(esc(prec.get("date", ""))))
-
-        tiles = []
-        orig = vu.get("notes_origine") or {}
-        for lib, k, cat in (("Santé", "sante", "sante"), ("Sécurité", "securite", "secu")):
-            tiles.append('<button type="button" class="tile score" data-f="cat:{cat}" aria-pressed="false" title="N’afficher que les contrôles « {l} »"><span class="grade g-{g}">{g}</span>'
-                         '<div><div class="l">{l}</div><div class="v">{v}<small> / 100</small></div><span class="h">{h}</span></div></button>'
-                         .format(cat=cat, g=esc(n[k]["lettre"]), l=lib, v=esc(n[k]["score"]),
-                                 h="Avec vos acceptations" if orig.get(k, {}).get("score", n[k]["score"]) != n[k]["score"] else "Cliquer pour filtrer"))
-        for k, lib in (("CRIT", "critiques"), ("WARN", "avertissements"), ("OK", "contrôles OK"), ("INFO", "informations")):
-            tiles.append('<button type="button" class="tile kpi k-{k}" data-f="niv:{k}" aria-pressed="false"><div class="v">{v}</div><div class="l">{l}</div></button>'
-                         .format(k=k, v=esc(c.get(k, 0)), l=lib))
-        out.append('<div class="hero">{}</div>'.format("".join(tiles)))
-
-        # corrections déjà appliquées (depuis ce rapport) : (type, cible) → entrée du journal
-        faites = {}
-        for e in journal:
-            if e.get("ok") and e.get("type") in TYPES_CORRECTION and not e.get("annule") and e.get("date", 0) >= vu.get("horodatage", 0):
-                faites[(e["type"], e.get("cible"))] = e
-        secs = vu.get("sections", {})
-        constats = sorted(vu.get("constats", []), key=lambda x: (ORDRE.get(x.get("niveau"), 9) if not x.get("accepte") else 5))
-        lis, vues = [], []
-        nb_acc = 0
-        for x in constats:
-            sid = x.get("section", "")
-            info = secs.get(sid, {})
-            court = info.get("court") or info.get("titre", sid)
-            if sid not in vues:
-                vues.append(sid)
-            niv = "ACC" if x.get("accepte") else x.get("niveau")
-            nb_acc += niv == "ACC"
-            msg = ""
-            if x.get("accepte"):
-                msg += '<div class="msgd acc">Accepté ({}) : {}</div>'.format(NIV_FR.get(x.get("niveau"), ""), fmt(x["accepte"]))
-            if x.get("detail"):
-                d = x["detail"]
-                if x["niveau"] in ("CRIT", "WARN") or len(d) > 160 or "\n" in d:
-                    msg += '<details class="d"><summary>Détail</summary><div class="det">{}</div></details>'.format(fmt(d))
-                else:
-                    msg += '<div class="msgd">{}</div>'.format(fmt(d))
-            fx = '<div class="fix">{}</div>'.format(fmt(x["correctif"])) if x.get("correctif") and not x.get("accepte") else ""
-            refs = [r for r in (x.get("references") or []) if isinstance(r, dict) and str(r.get("url", "")).startswith("https://")]
-            if refs:
-                fx += '<div class="refs">Références : {}</div>'.format(" · ".join(
-                    '<a href="{u}" title="{t}" target="_blank" rel="noopener noreferrer">{s} {i}</a>'.format(
-                        u=esc(r["url"]), t=esc(r.get("titre", "")), s=esc(r.get("source", "")), i=esc(r.get("id", ""))) for r in refs))
-            acts = []
-            if est_dernier and not x.get("accepte"):
-                for i, a in enumerate(x.get("actions") or []):
-                    if a.get("type") not in TYPES_CORRECTION:
-                        continue
-                    e = faites.get((a["type"], a.get("cible")))
-                    if e:
-                        acts.append('<span class="fait">✓ {} — corrigé le {}</span>'.format(esc(a.get("libelle", "")), esc(datetime.fromtimestamp(e["date"]).strftime("%d/%m à %H:%M"))))
-                        continue
-                    acts.append('<button type="button" class="corr" data-dlg="corriger" data-cle="{k}" data-i="{i}" data-rapport="{r}" data-titre="{t}" '
-                                'data-texte="Cette commande sera exécutée sur le serveur, en root. Elle pourra être annulée depuis la liste des corrections." '
-                                'data-cmd="{cmd}" data-avert="{av}">Corriger : {l}</button>'.format(
-                                    k=esc(x["cle"]), i=i, r=esc(brut["_fichier"]), t=esc(a.get("libelle", "")), cmd=esc(a.get("apercu", "")),
-                                    av=esc(AVERTISSEMENTS.get(a["type"], "")), l=esc(a.get("libelle", ""))))
-            if est_dernier and x.get("niveau") != "OK":
-                if x.get("accepte"):
-                    acts.append('<form class="inline" method="post" action="/accepter"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="cle" value="{k}">'
-                                '<input type="hidden" name="retirer" value="1"><button class="lienbtn">Ne plus accepter</button></form>'.format(c=esc(csrf), k=esc(x["cle"])))
-                elif x.get("niveau") in ("CRIT", "WARN", "INFO"):
-                    acts.append('<button type="button" class="lienbtn" data-dlg="accepter" data-cle="{k}" data-titre="Accepter : {t}" '
-                                'data-texte="Le constat restera visible, avec votre raison, mais ne comptera plus comme un problème ni dans la note, et ne déclenchera plus d’alerte. Vous pourrez revenir en arrière.">'
-                                'C’est voulu…</button>'.format(k=esc(x["cle"]), t=esc(x["titre"][:120])))
-            acts_html = '<div class="acts">{}</div>'.format("".join(acts)) if acts else ""
-            nv = x["cle"] in nouveaux
-            lis.append('<li data-niv="{n}" data-cat="{cat}" data-sec="{sid}" data-nouveau="{nv}"><div><span class="badge b-{n}">{nf}</span>{tag}</div><div>'
-                       '<button type="button" class="sec" data-sec="{sid}" title="N’afficher que cette section">{s}</button><span class="ttl">{t}</span>{msg}{fx}{acts}</div></li>'.format(
-                           n=esc(niv), cat=esc(info.get("categorie", "")), sid=esc(sid), nf="Accepté" if niv == "ACC" else NIV_FR.get(niv, ""),
-                           nv="1" if nv else "0", tag='<span class="nouv">Nouveau</span>' if nv else "",
-                           s=esc(court), t=fmt(x["titre"]), msg=msg, fx=fx, acts=acts_html))
-        opts = "".join('<option value="{}">{}</option>'.format(esc(s), esc(secs.get(s, {}).get("titre", s))) for s in vues)
-        seg_cat = "".join('<button type="button" data-v="{}">{}</button>'.format(v, t) for v, t in (("", "Toutes"), ("sante", "Santé"), ("secu", "Sécurité")))
-        niveaux = [("PB", "À corriger"), ("CRIT", "Critiques"), ("WARN", "Attention")]
-        if nouveaux:
-            niveaux.append(("NEW", "Nouveaux"))
-        niveaux += [("OK", "OK"), ("INFO", "Info")]
-        if nb_acc:
-            niveaux.append(("ACC", "Acceptés"))
-        niveaux.append(("", "Tout"))
-        seg_niv = "".join('<button type="button" data-v="{}">{}</button>'.format(v, t) for v, t in niveaux)
-        out.append("""<div class="card" id="constats"><h2>Constats <span class="mini">par défaut : ce qu’il faut corriger, du plus urgent au moins urgent</span></h2>
-<div class="filters"><div class="seg" data-g="cat" role="group" aria-label="Catégorie">{sc}</div><div class="seg" data-g="niv" role="group" aria-label="Niveau">{sn}</div>
-<select id="fsec" aria-label="Section"><option value="">Toutes les sections</option>{o}</select><input id="fq" type="search" placeholder="Rechercher (ex. ssh, zfs, jellyfin…)" aria-label="Rechercher"></div>
-<div class="count" id="fcount"><span></span><button type="button" id="freset" class="cache">Réinitialiser les filtres</button></div>
-<ol class="items" id="items">{li}</ol><p class="vide cache" id="fvide">Aucun constat ne correspond à ces filtres.</p></div>""".format(
-            sc=seg_cat, sn=seg_niv, o=opts, li="".join(lis)))
-        out.append('<script src="{}" defer></script>'.format(statique("filtres.js")))
-
-    # Journal des corrections
-    if journal or etat.get("correction"):
-        rows = []
-        annulees = {e.get("cible") for e in journal if e.get("type") == "annulation" and e.get("ok")}
-        for e in reversed(journal[-25:]):
-            if e.get("type") == "refus":
-                badge = '<span class="badge b-WARN">Refusée</span>'
-            elif e.get("type") == "annulation":
-                badge = '<span class="badge b-INFO">Effectuée</span>' if e.get("ok") else '<span class="badge b-CRIT">Échec</span>'
-            elif e.get("annule") or e.get("id") in annulees:
-                badge = '<span class="badge b-ACC">Annulée</span>'
-            else:
-                k, t = ETAT_CORR[bool(e.get("ok"))]
-                badge = '<span class="badge b-{}">{}</span>'.format(k, t)
-            bouton = ""
-            if e.get("ok") and e.get("annulation") and not e.get("annule") and e.get("type") in TYPES_CORRECTION:
-                cmd = "\n".join(" ".join(x) for x in e["annulation"])
-                bouton = ('<button type="button" class="lienbtn" data-dlg="annuler" data-id="{i}" data-titre="Annuler : {l}" data-cmd="{c}" '
-                          'data-texte="Cette commande remet le réglage tel qu’il était avant la correction.">Annuler</button>').format(
-                              i=esc(e["id"]), l=esc(e.get("libelle", "")), c=esc(cmd))
-            sortie = '<details class="d"><summary>Commandes et sortie</summary><pre class="sortie">{}</pre></details>'.format(
-                esc("\n".join(e.get("commandes") or []) + ("\n\n" if e.get("commandes") else "") + (e.get("sortie") or ""))) if (e.get("sortie") or e.get("commandes")) else ""
-            rows.append('<tr><td>{d}</td><td class="etat"><b>{l}</b>{s}</td><td>{b}</td><td>{a}</td></tr>'.format(
-                d=esc(datetime.fromtimestamp(e.get("date", 0)).strftime("%d/%m/%Y %H:%M")), l=esc(e.get("libelle", "")), s=sortie, b=badge, a=bouton))
-        attente = '<p class="sub"><span class="spin"></span>Une correction est en cours…</p>' if etat.get("correction") else ""
-        out.append('<div class="card" id="corrections"><h2>Corrections <span class="mini">appliquées depuis l’interface · chacune peut être annulée</span></h2>{}'
-                   '<div class="tw"><table><thead><tr><th>Date</th><th>Correction</th><th>Résultat</th><th></th></tr></thead><tbody>{}</tbody></table></div></div>'.format(attente, "".join(rows)))
-
-    out.append('<div class="card" id="evolution"><h2>Évolution des notes</h2>{}</div>'.format(graphique(hist, nonce)))
-
-    if hist:
-        rows = []
-        for d in reversed(hist[-60:]):
-            n_, c_, f_ = d["notes"], d["compteurs"], d["fichiers"]
-            cur = ' class="cur"' if brut is d else ""
-            rows.append("<tr{cur}><td><a href='/?rapport={j}#constats' title='Afficher ce rapport dans le tableau de bord'>{date}</a></td><td>{mode}</td>"
-                        "<td><span class='pill'><i class='g-{gs}'>{gs}</i>{s}</span></td><td><span class='pill'><i class='g-{gc}'>{gc}</i>{c}</span></td>"
-                        "<td class='num'>{cr}</td><td class='num'>{w}</td><td><a href='/rapports/{h}'>rapport</a> · <a href='/texte/{t}'>texte</a></td></tr>".format(
-                            cur=cur, j=esc(d["_fichier"]), date=esc(d.get("date", "")), mode=esc(d.get("mode", "")), gs=esc(n_["sante"]["lettre"]), s=esc(n_["sante"]["score"]),
-                            gc=esc(n_["securite"]["lettre"]), c=esc(n_["securite"]["score"]), cr=esc(c_.get("CRIT", 0)), w=esc(c_.get("WARN", 0)),
-                            h=esc(f_["html"]), t=esc(f_["txt"])))
-        out.append('<div class="card" id="historique"><h2>Historique <span class="mini">{} rapport(s) · cliquez sur une date pour l’afficher</span></h2><div class="tw"><table><thead><tr><th>Date</th><th>Mode</th><th>Santé</th><th>Sécurité</th>'
-                   '<th>Critiques</th><th>Avert.</th><th>Fichiers</th></tr></thead><tbody>{}</tbody></table></div></div>'.format(len(hist), "".join(rows)))
-
-    prochain = donnees.prochain_audit()
-    out.append('<footer>Audite-moi {v}{p} · <a href="https://github.com/oliv2776/Audite-moi">GitHub</a></footer></div>'.format(
-        v=VERSION, p=" · prochain audit automatique : " + esc(prochain) if prochain else ""))
-    out.append(DIALOGUE.format(csrf=esc(csrf)))
-    out.append('<script src="{}" defer></script>'.format(statique("dialogue.js")))
-    if occupe or etat.get("correction"):
-        out.append("""<script nonce="{n}">(function(){{var j=document.getElementById('journal');
-setInterval(function(){{fetch('/etat.json',{{credentials:'same-origin'}}).then(function(r){{return r.json();}}).then(function(e){{
-if(!e.en_cours&&!e.demande&&!e.correction){{location.assign({c}?'/?m=fin#corrections':'/');return;}} if(j&&e.journal){{j.textContent=e.journal;j.scrollTop=j.scrollHeight;}}
-if(!j&&e.en_cours){{location.reload();}}}}).catch(function(){{}});}},2500);}})();</script>""".format(n=nonce, c="true" if etat.get("correction") else "false"))
-    hote = der.get("hote", "") if der else socket.gethostname()
-    return page("Audite-moi — " + hote, "".join(out), nonce, nu=True)
-
-HTML_MATERIEL = """<div class="meta"><span>Processeur, mémoire et GPU en direct (toutes les 2 s) · disques et pools relevés toutes les 10 minutes, sans réveiller les disques en veille</span></div>
-<div class="kpis">
+HTML_MATERIEL = """<div class="kpis">
 <a class="stat" href="#cpu"><div class="l">Processeur</div><div class="v" id="k-cpu">—</div><div class="s" id="k-cpu-s">&nbsp;</div><svg id="k-cpu-g" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"></svg></a>
 <a class="stat" href="#memoire"><div class="l">Mémoire</div><div class="v" id="k-ram">—</div><div class="s" id="k-ram-s">&nbsp;</div><svg id="k-ram-g" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"></svg></a>
 <a class="stat" href="#gpu"><div class="l">GPU</div><div class="v" id="k-gpu">—</div><div class="s" id="k-gpu-s">&nbsp;</div><svg id="k-gpu-g" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"></svg></a>
@@ -1375,15 +1769,10 @@ direct();stockage();setInterval(maj,2000);document.addEventListener('visibilityc
 
 
 def page_materiel(app, csrf, nonce):
-    hist = app.donnees.rapports()
-    der = hist[-1] if hist else None
-    etat = app.donnees.etat()
     init = json.dumps(dict(app.mesures.instantane(), seuils=app.seuils.effectifs()), ensure_ascii=False).replace("<", "\\u003c")
-    corps = (barre(csrf, etat["en_cours"] or etat["demande"], "materiel", der) + '<div class="wrap">' + HTML_MATERIEL +
-             '<footer>Audite-moi {v} · <a href="https://github.com/oliv2776/Audite-moi">GitHub</a></footer></div>'.format(v=VERSION) +
-             '<script type="application/json" id="init">{}</script><script src="{}" defer></script>'.format(init, statique("materiel.js")))
-    hote = der.get("hote", "") if der else socket.gethostname()
-    return page("Audite-moi — matériel — " + hote, corps, nonce, nu=True)
+    corps = (HTML_MATERIEL + '<script type="application/json" id="init">{}</script><script src="{}" defer></script>'.format(init, statique("materiel.js")))
+    return coque(app.donnees, csrf, nonce, "materiel", "Matériel", corps, sous_titre=(
+        "Processeur, mémoire et GPU en direct (toutes les 2 s) · disques et pools relevés toutes les 10 minutes, sans réveiller les disques en veille"))
 
 
 # ------------------------------------------------------------------ seuils --
@@ -1392,7 +1781,7 @@ CACHE_STATIQUE = "public, max-age=31536000, immutable"
 
 def _statiques():
     res = {}
-    for nom, texte, type_ in (("app.css", CSS, "text/css; charset=utf-8"), ("filtres.js", JS_FILTRES, "text/javascript; charset=utf-8"),
+    for nom, texte, type_ in (("app.css", CSS, "text/css; charset=utf-8"), ("app.js", JS_APP, "text/javascript; charset=utf-8"), ("filtres.js", JS_FILTRES, "text/javascript; charset=utf-8"),
                               ("dialogue.js", JS_DIALOGUE, "text/javascript; charset=utf-8"),
                               ("materiel.js", JS_MATERIEL, "text/javascript; charset=utf-8"),
                               ("reglages.js", JS_REGLAGES, "text/javascript; charset=utf-8")):
@@ -1503,27 +1892,151 @@ var t=document.getElementById('tout-defaut');if(t)t.addEventListener('click',fun
 STATIQUES = _statiques()
 
 
-def page_reglages(app, csrf, nonce, message="", erreurs=None, saisie=None):
+def charger_configurer(conf):
+    """Fonctions de validation du service root (une seule définition des formats acceptés)."""
+    ici = os.path.dirname(os.path.abspath(__file__))
+    for f in (conf.get("configurer") or "", os.path.join(ici, "audite-moi-configurer"), os.path.join(ici, "..", "systemd", "audite-moi-configurer"),
+              "/usr/local/lib/audite-moi/audite-moi-configurer"):
+        if f and os.path.isfile(f):
+            try:
+                from importlib.machinery import SourceFileLoader
+                import importlib.util
+                chargeur = SourceFileLoader("audite_moi_configurer", f)
+                mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(chargeur.name, chargeur))
+                chargeur.exec_module(mod)
+                return mod
+            except (OSError, SyntaxError, ImportError) as exc:
+                sys.stderr.write("module de configuration illisible ({}) : {}\n".format(f, exc))
+    return None
+
+
+ONGLETS = [("seuils", "Seuils"), ("controles", "Réseau"), ("sauvegardes", "Sauvegardes"), ("opnsense", "OPNsense"),
+           ("telegram", "Telegram"), ("planification", "Planification"), ("interface", "Interface"),
+           ("acceptes", "Acceptés"), ("journal", "Journal")]
+ACTIONS_CONFIG = {   # chemin POST → (action du service root, onglet, mot de passe redemandé)
+    "controles": ("controles", "controles", True), "sauvegardes": ("sauvegardes", "sauvegardes", True),
+    "opnsense": ("opnsense", "opnsense", True), "opnsense-tester": ("opnsense-tester", "opnsense", False),
+    "opnsense-effacer": ("opnsense-effacer", "opnsense", True), "telegram": ("telegram", "telegram", True),
+    "telegram-tester": ("telegram-tester", "telegram", False), "telegram-effacer": ("telegram-effacer", "telegram", True),
+    "planification": ("planification", "planification", True), "interface": ("interface", "interface", True),
+    "mot-de-passe": ("interface", "interface", False),
+}
+JOURS_FR = [("lun", "lundi"), ("mar", "mardi"), ("mer", "mercredi"), ("jeu", "jeudi"), ("ven", "vendredi"), ("sam", "samedi"), ("dim", "dimanche")]
+SECRETS_FORM = {"jeton", "cle", "secret", "mot_de_passe", "actuel", "nouveau", "confirmation"}
+
+
+def champ(nom, label, valeur="", hint="", type_="text", attrs="", id_=None):
+    id_ = id_ or "c-" + nom
+    return '<div class="champ"><label for="{i}">{l}</label><input type="{t}" id="{i}" name="{n}" value="{v}"{a}>{h}</div>'.format(
+        i=id_, l=label, t=type_, n=nom, v=esc(valeur), a=attrs, h='<p class="hint">{}</p>'.format(hint) if hint else "")
+
+
+def case(nom, label, coche, hint=""):
+    return '<label class="check"><input type="checkbox" name="{}" value="oui"{}><span>{}{}</span></label>'.format(
+        nom, " checked" if coche else "", label, '<span class="hint">{}</span>'.format(hint) if hint else "")
+
+
+def barre_enregistrer(libelle="Enregistrer", mdp=True, id_="mdp"):
+    m = ('<div class="mdp"><label for="{i}">Mot de passe de l’interface</label><input type="password" id="{i}" name="mot_de_passe" '
+         'autocomplete="current-password" required></div>').format(i=id_) if mdp else ""
+    return '<div class="savebar">{}<div class="btns"><button class="primary">{}</button></div></div>'.format(m, libelle)
+
+
+def form(action, csrf, contenu, classe=""):
+    return '<form method="post" action="/reglages/{}" autocomplete="off"{}><input type="hidden" name="csrf" value="{}">{}</form>'.format(
+        action, ' class="{}"'.format(classe) if classe else "", esc(csrf), contenu)
+
+
+def oui_form(form_, cle):
+    return "oui" if form_.get(cle) in ("oui", "on", "1") else "non"
+
+
+def valeurs_config(action, f, mod):
+    """Formulaire → valeurs envoyées au service root, validées ici avec les mêmes fonctions que lui (Refus si invalide)."""
+    if action == "controles":
+        v = {"externe": oui_form(f, "externe"), "domaines_extra": f.get("domaines_extra", ""), "scan_reseau": oui_form(f, "scan_reseau"),
+             "scan_reseaux": f.get("scan_reseaux", "")}
+        mod.domaines(v["domaines_extra"])
+        mod.reseaux(v["scan_reseaux"])
+        return v
+    if action == "sauvegardes":
+        lignes = []
+        for i in range(30):
+            if "s_nom_{}".format(i) not in f and "s_cible_{}".format(i) not in f:
+                continue
+            lignes.append({k: f.get("s_{}_{}".format(k, i), "") for k in ("nom", "type", "cible", "heures")})
+        mod.sauvegardes(lignes)
+        return {"lignes": lignes}
+    if action == "opnsense":
+        v = {"url": f.get("url", ""), "cle": f.get("cle", "").strip(), "secret": f.get("secret", "").strip(), "verifier_tls": oui_form(f, "verifier_tls")}
+        mod.url(v["url"], "adresse d'OPNsense", vide=False)
+        for k, nom in (("cle", "Clé"), ("secret", "Secret")):
+            if v[k] and not mod.CLE_API.fullmatch(v[k]):
+                raise mod.Refus("{} d'API invalide (copiez la valeur après « key= » ou « secret= » dans apikey.txt)".format(nom))
+        return v
+    if action == "telegram":
+        v = {"jeton": f.get("jeton", "").strip(), "chat_id": f.get("chat_id", "").strip(), "alertes": oui_form(f, "alertes"),
+             "interface_url": f.get("interface_url", "")}
+        if v["jeton"] and not mod.JETON_TG.fullmatch(v["jeton"]):
+            raise mod.Refus("Jeton du bot invalide (format 123456789:AA…, donné par @BotFather)")
+        if v["chat_id"] and not mod.CHAT_TG.fullmatch(v["chat_id"]):
+            raise mod.Refus("Identifiant de conversation invalide (nombre)")
+        mod.url_interface(v["interface_url"])
+        return v
+    if action == "planification":
+        v = {"actif": oui_form(f, "actif"), "frequence": f.get("frequence", ""), "jour": f.get("jour", "lun"),
+             "jour_mois": f.get("jour_mois", "1") or "1", "heure": f.get("heure", ""), "garder": f.get("garder", "")}
+        mod.planning(v)
+        return v
+    if action == "interface":
+        mod.entier(f.get("duree_session_h"), 1, 168, "durée de session (heures)")
+        return {"duree_session_h": f.get("duree_session_h")}
+    return {}
+
+
+def onglets(actif, conf):
+    pts = {}
+    if conf:
+        pts["telegram"] = "ok" if conf["telegram"]["jeton_defini"] and conf["telegram"]["alertes"] else ""
+        pts["opnsense"] = "ok" if conf["opnsense"]["cle_definie"] else ""
+        pts["sauvegardes"] = "ok" if conf["sauvegardes"] else ""
+        pts["planification"] = "ok" if conf["planification"].get("actif") else "warn"
+    return '<nav class="tabs" aria-label="Sections des réglages">{}</nav>'.format("".join(
+        '<a href="{h}"{c}>{d}{t}</a>'.format(h="/reglages" if k == "seuils" else "/reglages/" + k, c=' aria-current="page"' if k == actif else "",
+                                            d='<span class="dot {}"></span>'.format(pts[k]) if k in pts else "", t=t) for k, t in ONGLETS))
+
+
+def bandeau_config(app, q):
     d = app.donnees
-    hist = d.rapports()
-    der = hist[-1] if hist else None
-    etat = d.etat()
+    attente = q.get("attente", [""])[0]
+    if ID_DEMANDE.match(attente):
+        return ('<div class="banner run" data-attente-config="{}"><span class="spin"></span>Application du réglage sur le serveur… '
+                '(quelques secondes ; un test de connexion peut prendre jusqu’à 30 s)</div>').format(esc(attente))
+    r = q.get("r", [""])[0]
+    res = d.resultat_configuration()
+    if ID_DEMANDE.match(r) and res.get("id") == r:
+        cl = "errb" if not res.get("ok") else "warnb" if res.get("test_ok") is False else "okb"
+        return '<div class="banner {}"><b>{} :</b> {}</div>'.format(cl, esc(res.get("libelle", "Réglage")), esc(res.get("message", "")))
+    if d.configuration_en_attente():
+        return '<div class="banner run"><span class="spin"></span>Un réglage est en cours d’application sur le serveur.</div>'
+    return ""
+
+
+def r_seuils(app, csrf, q, erreurs, saisie):
     defs = app.seuils.definitions()
     eff = app.seuils.effectifs()
-    erreurs = erreurs or {}
-    out = [barre(csrf, etat["en_cours"] or etat["demande"], "reglages", der), '<div class="wrap">']
+    out = []
     if erreurs:
         out.append('<div class="banner warnb"><b>Rien n’a été enregistré :</b> corrigez les valeurs signalées en rouge.</div>')
-    elif message == "ok":
+    elif q.get("m", [""])[0] == "ok":
         out.append('<div class="banner okb">Seuils enregistrés. Ils s’appliquent au prochain audit et au prochain relevé des disques (10 minutes au plus). '
                    '<form class="inline" method="post" action="/lancer"><input type="hidden" name="csrf" value="{}"><input type="hidden" name="mode" value="complet">'
-                   '<button class="primary">Lancer un audit maintenant</button></form></div>'.format(esc(csrf)))
+                   '<button class="primary sm">Lancer un audit maintenant</button></form></div>'.format(esc(csrf)))
     if not defs:
-        out.append('<div class="card"><p class="empty">Fichier des seuils introuvable (seuils.json) : réinstallez Audite-moi.</p></div></div>')
-        return page("Audite-moi — réglages", "".join(out), nonce, nu=True)
+        return '<div class="card"><p class="muted">Fichier des seuils introuvable (seuils.json) : réinstallez Audite-moi.</p></div>'
     nmod = sum(1 for s in app.seuils.tous() if eff[s["cle"]] != s["defaut"])
-    out.append('<div class="meta"><span>Seuils à partir desquels un constat passe en « attention » ou en « critique ». {} '
-               'Les valeurs par défaut suivent les recommandations courantes (voir les références dans les rapports).</span></div>'.format(
+    out.append('<p class="muted">Seuils à partir desquels un constat passe en « attention » ou en « critique ». {} '
+               'Les valeurs par défaut suivent les recommandations courantes (voir les références dans les rapports).</p>'.format(
                    "<b>{} seuil(s) personnalisé(s).</b>".format(nmod) if nmod else "Tous les seuils sont à leur valeur par défaut."))
     out.append('<form method="post" action="/reglages" class="reglages"><input type="hidden" name="csrf" value="{}">'.format(esc(csrf)))
     for g in defs.get("groupes", []):
@@ -1532,7 +2045,7 @@ def page_reglages(app, csrf, nonce, message="", erreurs=None, saisie=None):
             k = s["cle"]
             v = (saisie or {}).get(k, eff[k])
             mod = str(v) != str(s["defaut"])
-            err = erreurs.get(k)
+            err = (erreurs or {}).get(k)
             lignes.append(
                 '<div class="sl{m}{e}"><label for="s-{k}"><b>{l}</b>{a}</label>'
                 '<div class="sv"><input class="seuil" id="s-{k}" name="{k}" type="number" inputmode="numeric" step="1" min="{mi}" max="{ma}" value="{v}" data-defaut="{d}" required>'
@@ -1542,28 +2055,286 @@ def page_reglages(app, csrf, nonce, message="", erreurs=None, saisie=None):
                                     mi=s["min"], ma=s["max"], v=esc(v), d=s["defaut"], u=esc(s.get("unite", "")),
                                     er='<div class="errm">{}</div>'.format(esc(err)) if err else ""))
         out.append('<div class="card"><h2>{}</h2>{}</div>'.format(esc(g["nom"]), "".join(lignes)))
-    out.append('<div class="barre-bas"><button type="button" id="tout-defaut">Tout rétablir par défaut</button><button class="primary">Enregistrer</button></div></form>')
-    out.append('<footer>Audite-moi {} · <a href="https://github.com/oliv2776/Audite-moi">GitHub</a></footer></div>'.format(VERSION))
+    out.append('<div class="savebar"><span class="hint">Appliqués au prochain audit et au prochain relevé des disques.</span>'
+               '<div class="btns"><button type="button" id="tout-defaut">Tout rétablir par défaut</button><button class="primary">Enregistrer</button></div></div></form>')
     out.append('<script src="{}" defer></script>'.format(statique("reglages.js")))
-    return page("Audite-moi — réglages", "".join(out), nonce, nu=True)
+    return "".join(out)
+
+
+def r_controles(app, csrf, conf, s):
+    c = conf["controles"]
+    v = lambda k: s.get(k, c[k]) if s else c[k]
+    coche = lambda k: (s.get(k) in ("oui", "on")) if s else c[k]
+    return form("controles", csrf, """<div class="etroit">
+<div class="card"><h2>Vu d’Internet</h2>{ext}{dom}</div>
+<div class="card"><h2>Réseau local</h2>{scan}{res}</div>{bar}</div>""".format(
+        ext=case("externe", "Tester les services publiés comme un visiteur sur Internet", coche("externe"),
+                 "Chaque nom d’hôte des tunnels Cloudflare est testé : authentification, fichiers sensibles, HSTS, adresse de la maison qui fuit dans le DNS…"),
+        dom=champ("domaines_extra", "Noms d’hôte supplémentaires", v("domaines_extra"),
+                  "Séparés par des espaces, ex. <code>nc.exemple.fr photos.exemple.fr</code>. Ceux des tunnels Cloudflare sont trouvés automatiquement."),
+        scan=case("scan_reseau", "Scanner le réseau local pendant l’audit complet (nmap)", coche("scan_reseau"),
+                  "Inventaire des appareils, services risqués (Telnet, RDP, VNC, bases de données, caméras…), nouveaux appareils depuis le dernier scan."),
+        res=champ("scan_reseaux", "Réseaux à scanner", v("scan_reseaux"),
+                  "Vide : les réseaux déclarés dans OPNsense, sinon ceux du NAS. Sinon, ex. <code>192.168.1.0/24 10.10.20.0/24</code> (1 024 adresses au plus par réseau)."),
+        bar=barre_enregistrer()))
+
+
+def r_sauvegardes(app, csrf, conf, s):
+    if s:
+        lignes = [{k: s.get("s_{}_{}".format(k, i), "") for k in ("nom", "type", "cible", "heures")} for i in range(30) if "s_nom_{}".format(i) in s]
+    else:
+        lignes = list(conf["sauvegardes"])
+    lignes = [l for l in lignes if l.get("nom") or l.get("cible")]
+    lignes += [{"nom": "", "type": "zfs", "cible": "", "heures": "26"}] * max(1, 3 - len(lignes))
+    rows = []
+    for i, l in enumerate(lignes[:30]):
+        opts = "".join('<option value="{}"{}>{}</option>'.format(t, " selected" if l.get("type") == t else "", lib)
+                       for t, lib in (("zfs", "Snapshot ZFS"), ("fichier", "Fichier ou dossier"), ("unite", "Service systemd")))
+        rows.append('<tr><td><input type="text" name="s_nom_{i}" value="{n}" aria-label="Nom" placeholder="photos-usb" maxlength="40"></td>'
+                    '<td><select name="s_type_{i}" aria-label="Type">{o}</select></td>'
+                    '<td><input type="text" name="s_cible_{i}" value="{c}" aria-label="Cible" placeholder="usb/photos"></td>'
+                    '<td class="h"><input type="number" name="s_heures_{i}" value="{h}" aria-label="Délai en heures" min="1" max="8760"></td></tr>'.format(
+                        i=i, n=esc(l.get("nom", "")), o=opts, c=esc(l.get("cible", "")), h=esc(l.get("heures", ""))))
+    return form("sauvegardes", csrf, """<div class="card"><h2>Preuves de sauvegarde à vérifier</h2>
+<p class="muted">L’audit trouve déjà les tâches de sauvegarde planifiées (restic, borg, kopia, syncoid, rclone…). Ajoutez ici ce qui prouve qu’une autre sauvegarde a réussi :
+l’audit signale un problème si la preuve date de plus que le délai indiqué.</p>
+<ul class="small muted"><li><b>Snapshot ZFS</b> : date du dernier snapshot du dataset (ex. <code>usb/photos</code>, réplication syncoid ou zfs send reçue) ;</li>
+<li><b>Fichier ou dossier</b> : fichier le plus récent (ex. <code>/mnt/backup/duplicati</code>) ;</li>
+<li><b>Service systemd</b> : dernière exécution réussie (ex. <code>restic-cloud.service</code>).</li></ul>
+<div class="tw"><table class="edit" id="sauvegardes"><thead><tr><th>Nom</th><th>Type</th><th>Cible</th><th>Délai (h)</th></tr></thead><tbody>{r}</tbody></table></div>
+<p class="hint">Pour retirer une sauvegarde, videz sa ligne. 26 h conviennent à une sauvegarde quotidienne, 170 h à une hebdomadaire.</p>
+<button type="button" id="ajout-ligne" class="sm">+ Ajouter une ligne</button></div>{b}""".format(r="".join(rows), b=barre_enregistrer()))
+
+
+def r_opnsense(app, csrf, conf, s):
+    o = conf["opnsense"]
+    if o["cle_definie"]:
+        etat = '<p class="etat-ligne"><span class="pastille ok">Clé enregistrée{}</span> <span class="muted">{}</span></p>'.format(
+            " (…{})".format(esc(o["cle_fin"])) if o.get("cle_fin") else "", esc(o["url"]))
+    else:
+        etat = '<p class="etat-ligne"><span class="pastille">Non configuré</span> <span class="muted">l’audit du routeur est ignoré</span></p>'
+    ph = ' placeholder="déjà enregistré : laisser vide pour conserver"'
+    verif = (s.get("verifier_tls") in ("oui", "on")) if s else o["verifier_tls"]
+    aide = """<details class="card"><summary><b>Créer la clé API dans OPNsense</b> (lecture seule)</summary>
+<ol class="etapes"><li><b>Système › Accès › Utilisateurs › +</b> : utilisateur <code>audite-moi</code>, cochez « Générer un mot de passe brouillé » (il ne se connectera jamais).</li>
+<li>Dans <b>Privilèges effectifs</b>, ajoutez uniquement <b>System: Firmware</b> et <b>Diagnostics: Backup &amp; Restore</b> (selon la version : <b>System: Configuration: Backups</b>).</li>
+<li>Rouvrez l’utilisateur, section <b>Clés API</b>, bouton <b>+</b> : OPNsense télécharge <code>apikey.txt</code> avec <code>key=</code> et <code>secret=</code>.</li></ol>
+<p class="hint">Ces privilèges permettent de lire toute la configuration (redirections, règles, empreintes de mots de passe) : la clé reste dans
+<code>/etc/audite-moi/audit.conf</code>, lisible par root seulement, et n’est jamais renvoyée à cette page ni écrite dans les rapports.</p></details>"""
+    principal = form("opnsense", csrf, """<div class="card"><h2>Connexion au routeur</h2>{e}{u}<div class="row2">{k}{sec}</div>{v}</div>{b}""".format(
+        e=etat, u=champ("url", "Adresse de l’interface d’OPNsense", (s or {}).get("url", o["url"]) if s else o["url"], "ex. <code>https://192.168.1.1</code>",
+                        attrs=' placeholder="https://192.168.1.1" required'),
+        k=champ("cle", "Clé API (key)", "", "", "password", (ph if o["cle_definie"] else "") + ' autocomplete="off"'),
+        sec=champ("secret", "Secret API (secret)", "", "", "password", (ph if o["secret_defini"] else "") + ' autocomplete="off"'),
+        v=case("verifier_tls", "Vérifier le certificat HTTPS du routeur", verif,
+               "Décochez seulement si le routeur garde son certificat auto-signé d’origine (sinon la connexion est refusée)."),
+        b=barre_enregistrer("Enregistrer et tester")))
+    autres = ""
+    if o["cle_definie"]:
+        autres = """<div class="card"><h2>Connexion</h2><p class="muted">Vérifie que la clé enregistrée est acceptée par le routeur.</p>{t}</div>
+<div class="card zone-danger"><h2>Effacer la clé</h2><p class="muted">L’audit du routeur sera désactivé. Pensez à supprimer aussi la clé dans OPNsense.</p>{x}</div>""".format(
+            t=form("opnsense-tester", csrf, '<button>Tester la connexion</button>'),
+            x=form("opnsense-effacer", csrf, '<div class="savebar"><div class="mdp"><label for="mdp-x">Mot de passe de l’interface</label>'
+                   '<input type="password" id="mdp-x" name="mot_de_passe" autocomplete="current-password" required></div>'
+                   '<div class="btns"><button class="danger">Effacer la clé</button></div></div>'))
+    return '<div class="etroit">{}{}{}</div>'.format(aide, principal, autres)
+
+
+def r_telegram(app, csrf, conf, s, hote):
+    t = conf["telegram"]
+    al = app.donnees.alertes()
+    if not t["jeton_defini"]:
+        etat = '<span class="pastille">Non configurées</span>'
+    elif not t["alertes"]:
+        etat = '<span class="pastille warn">Désactivées</span>'
+    elif al.get("erreur"):
+        etat = '<span class="pastille warn">Échec d’envoi le {}</span>'.format(esc(datetime.fromtimestamp(al["erreur"]).strftime("%d/%m à %H:%M")))
+    else:
+        etat = '<span class="pastille ok">Actives</span>'
+    url_def = t["interface_url"] or ("{}://{}/".format("https" if app.tls else "http", hote) if hote else "")
+    aide = """<details class="card"{o}><summary><b>Créer le bot Telegram</b> (2 minutes)</summary>
+<ol class="etapes"><li>Dans Telegram, ouvrez une conversation avec <b>@BotFather</b>, envoyez <code>/newbot</code>, choisissez un nom (ex. « NAS maison ») puis un identifiant finissant par « bot ».</li>
+<li>BotFather répond avec un jeton du type <code>123456789:AA…</code> : collez-le ci-dessous.</li>
+<li>Ouvrez la conversation avec votre nouveau bot et envoyez-lui un message (ex. « bonjour »), puis enregistrez : la conversation est trouvée automatiquement.</li></ol></details>""".format(
+        o="" if t["jeton_defini"] else " open")
+    principal = form("telegram", csrf, """<div class="card"><h2>Bot et conversation</h2><p class="etat-ligne">{e}</p><div class="row2">{j}{c}</div>{a}{u}</div>{b}""".format(
+        e=etat,
+        j=champ("jeton", "Jeton du bot", "", "", "password",
+                (' placeholder="déjà enregistré : laisser vide pour conserver"' if t["jeton_defini"] else ' placeholder="123456789:AA…"') + ' autocomplete="off"'),
+        c=champ("chat_id", "Conversation", (s or {}).get("chat_id", t["chat_id"]) if s else t["chat_id"],
+                "Laissez vide pour la trouver automatiquement (écrivez d’abord au bot).", attrs=' inputmode="numeric"'),
+        a=case("alertes", "Envoyer les alertes", (s.get("alertes") in ("oui", "on")) if s else (t["alertes"] or not t["jeton_defini"]),
+               "Pool dégradé ou presque plein, disque qui faiblit, sauvegarde en échec, nouveau port ouvert, résumé de chaque audit, chaque correction et chaque réglage modifié ici."),
+        u=champ("interface_url", "Lien vers cette interface dans les messages", (s or {}).get("interface_url", url_def) if s else url_def,
+                "Ouvert depuis votre téléphone sur le réseau local (ou par VPN). Laissez vide pour ne pas ajouter de lien."),
+        b=barre_enregistrer("Enregistrer et envoyer un test")))
+    autres = ""
+    if t["jeton_defini"]:
+        autres = """<div class="card"><h2>Message de test</h2><p class="muted">Envoie un message dans la conversation enregistrée.</p>{t}</div>
+<div class="card zone-danger"><h2>Désactiver et effacer le jeton</h2><p class="muted">Un dernier message signale la désactivation.</p>{x}</div>""".format(
+            t=form("telegram-tester", csrf, '<button>Envoyer un message de test</button>'),
+            x=form("telegram-effacer", csrf, '<div class="savebar"><div class="mdp"><label for="mdp-x">Mot de passe de l’interface</label>'
+                   '<input type="password" id="mdp-x" name="mot_de_passe" autocomplete="current-password" required></div>'
+                   '<div class="btns"><button class="danger">Désactiver les alertes</button></div></div>'))
+    return '<div class="etroit">{}{}{}</div>'.format(aide, principal, autres)
+
+
+def description_planning(p):
+    h = p.get("heure", "")
+    if p.get("frequence") == "quotidien":
+        return "chaque jour à {}".format(h)
+    if p.get("frequence") == "mensuel":
+        return "le {} de chaque mois à {}".format(p.get("jour_mois", 1), h)
+    return "chaque {} à {}".format(dict(JOURS_FR).get(p.get("jour"), "lundi"), h)
+
+
+def r_planification(app, csrf, conf, s):
+    p = dict(conf["planification"])
+    if s:
+        p.update({k: s.get(k, p.get(k)) for k in ("frequence", "jour", "jour_mois", "heure", "garder")})
+        p["actif"] = s.get("actif") in ("oui", "on")
+    prochain = app.donnees.prochain_audit()
+    freq = "".join('<option value="{}"{}>{}</option>'.format(v, " selected" if p.get("frequence") == v else "", t)
+                   for v, t in (("quotidien", "Chaque jour"), ("hebdomadaire", "Chaque semaine"), ("mensuel", "Chaque mois")))
+    jours = "".join('<option value="{}"{}>{}</option>'.format(v, " selected" if p.get("jour") == v else "", t) for v, t in JOURS_FR)
+    return form("planification", csrf, """<div class="etroit"><div class="card"><h2>Audit complet automatique</h2>
+<p class="etat-ligne">{etat}</p>{actif}
+<div class="row2"><div class="champ"><label for="p-frequence">Fréquence</label><select id="p-frequence" name="frequence">{freq}</select></div>
+<div class="champ" id="c-jour"><label for="p-jour">Jour</label><select id="p-jour" name="jour">{jours}</select></div>
+<div class="champ" id="c-jour-mois"><label for="p-jour-mois">Jour du mois</label><input type="number" id="p-jour-mois" name="jour_mois" min="1" max="28" value="{jm}"></div>
+<div class="champ"><label for="p-heure">Heure</label><input type="time" id="p-heure" name="heure" value="{h}" required></div></div>
+<p class="hint">Un délai aléatoire de 20 minutes au plus est ajouté. Si le serveur était éteint à l’heure prévue, l’audit est lancé au démarrage suivant.
+Un audit complet prend quelques minutes et sollicite les disques (Lynis, Trivy, scan du réseau).</p></div>
+<div class="card"><h2>Conservation des rapports</h2>{garder}</div>{b}</div>""".format(
+        etat=('<span class="pastille ok">Planifié : {}</span>{}'.format(esc(description_planning(conf["planification"])),
+              ' <span class="muted">prochain audit le {}</span>'.format(esc(prochain)) if prochain else "")
+              if conf["planification"].get("actif") else '<span class="pastille warn">Aucun audit automatique</span>'),
+        actif=case("actif", "Lancer un audit complet automatiquement", p.get("actif")),
+        freq=freq, jours=jours, jm=esc(p.get("jour_mois", 1)), h=esc(p.get("heure", "07:20")),
+        garder=champ("garder", "Nombre de rapports conservés", p.get("garder", 60),
+                     "De 5 à 500. Les plus anciens sont supprimés après chaque audit ; l’historique et l’évolution des notes portent sur ceux qui restent.",
+                     "number", ' min="5" max="500" class="court" required'),
+        b=barre_enregistrer()))
+
+
+def r_interface(app, csrf, conf, s):
+    c = app.conf
+    duree = (s or {}).get("duree_session_h", c.get("duree_session_h", 12)) if s else c.get("duree_session_h", 12)
+    mdp = form("mot-de-passe", csrf, """<div class="card"><h2>Mot de passe de l’interface</h2>
+<p class="muted">Toutes les sessions ouvertes sont fermées : reconnectez-vous ensuite avec le nouveau mot de passe.</p>
+{a}<div class="row2">{n}{c}</div><div class="savebar"><div class="btns"><button class="primary">Changer le mot de passe</button></div></div></div>""".format(
+        a=champ("actuel", "Mot de passe actuel", "", "", "password", ' autocomplete="current-password" required'),
+        n=champ("nouveau", "Nouveau mot de passe", "", "12 caractères au moins.", "password", ' autocomplete="new-password" minlength="12" required'),
+        c=champ("confirmation", "Confirmation", "", "", "password", ' autocomplete="new-password" minlength="12" required')))
+    session = form("interface", csrf, """<div class="card"><h2>Session</h2>{d}{b}</div>""".format(
+        d=champ("duree_session_h", "Durée d’une session (heures)", duree, "De 1 à 168 h. Au-delà, le mot de passe est redemandé. L’interface redémarre pour l’appliquer.",
+                "number", ' min="1" max="168" class="court" required'),
+        b=barre_enregistrer(id_="mdp-s")))
+    acces = """<div class="card"><h2>Accès réseau</h2><dl class="kv"><dt>Adresse d’écoute</dt><dd><code>{e}</code>{et}</dd><dt>Port</dt><dd><code>{p}</code></dd>
+<dt>HTTPS</dt><dd>{h}</dd></dl>
+<p class="hint">Changer l’adresse, le port ou le certificat peut couper l’accès à cette page : faites-le depuis le serveur, par exemple
+<code>sudo ./install.sh --port 8765 --ecoute 192.168.1.10</code> (le pare-feu UFW est mis à jour en même temps).</p></div>""".format(
+        e=esc(c.get("ecoute", "")), et=" (toutes les interfaces)" if c.get("ecoute") == "0.0.0.0" else "", p=esc(c.get("port", "")),
+        h='<span class="pastille ok">Activé</span> certificat auto-signé' if app.tls else '<span class="pastille warn">Désactivé</span> (déconseillé)')
+    return '<div class="etroit">{}{}{}</div>'.format(mdp, session, acces)
+
+
+def r_acceptes(app, csrf):
+    acc = app.donnees.acceptes()
+    if not acc:
+        return ('<div class="card"><p class="muted">Aucun constat accepté. Dans <a href="/constats">Constats</a>, « C’est voulu… » marque un choix assumé : '
+                'le constat reste visible, avec votre raison, mais ne compte plus dans la note et ne déclenche plus d’alerte.</p></div>')
+    hist = app.donnees.rapports()
+    titres = {cle_de(c): c for c in (hist[-1].get("constats", []) if hist else [])}
+    secs = hist[-1].get("sections", {}) if hist else {}
+    rows = []
+    for k, v in sorted(acc.items(), key=lambda kv: -int((kv[1] or {}).get("date", 0))):
+        c = titres.get(k)
+        titre = fmt(c["titre"]) if c else '<span class="muted">{}</span>'.format(esc(k.split("|", 1)[-1]))
+        sec = esc((secs.get(c.get("section", ""), {}) or {}).get("titre", c.get("section", ""))) if c else esc(k.split("|", 1)[0])
+        rows.append('<tr><td><b>{t}</b><span class="modele">{s}{abs}</span></td><td class="etat">{r}</td><td>{d}</td><td>{f}</td></tr>'.format(
+            t=titre, s=sec, abs="" if c else " · absent du dernier audit", r=esc((v or {}).get("raison", "")),
+            d=esc(datetime.fromtimestamp(int((v or {}).get("date", 0))).strftime("%d/%m/%Y")),
+            f='<form class="inline" method="post" action="/accepter"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="cle" value="{k}">'
+              '<input type="hidden" name="retirer" value="1"><input type="hidden" name="retour" value="acceptes"><button class="sm">Ne plus accepter</button></form>'.format(
+                  c=esc(csrf), k=esc(k))))
+    return ('<div class="card"><p class="muted">Ces constats ne comptent plus dans la note ni dans les alertes. Retirez l’acceptation si la situation a changé.</p>'
+            '<div class="tw"><table><thead><tr><th>Constat</th><th>Raison</th><th>Depuis le</th><th></th></tr></thead><tbody>{}</tbody></table></div></div>').format("".join(rows))
+
+
+def r_journal(app):
+    j = app.donnees.journal_configuration()
+    if not j:
+        return '<div class="card"><p class="muted">Aucune modification depuis l’interface pour l’instant. Chaque réglage du serveur modifié ici est noté, et signalé sur Telegram.</p></div>'
+    rows = []
+    for e in reversed(j[-100:]):
+        b = '<span class="badge b-WARN">Refusé</span>' if e.get("refus") else '<span class="badge b-OK">Appliqué</span>' if e.get("ok") else '<span class="badge b-CRIT">Échec</span>'
+        rows.append('<tr><td>{d}</td><td class="etat"><b>{l}</b><span class="modele">{c}</span></td><td>{b}</td><td class="etat">{m}</td><td>{p}</td></tr>'.format(
+            d=esc(datetime.fromtimestamp(e.get("date", 0)).strftime("%d/%m/%Y %H:%M")), l=esc(e.get("libelle", "")),
+            c=esc(", ".join(e.get("changements") or [])), b=b, m=esc(e.get("message", "")), p=esc(e.get("par", ""))))
+    return ('<div class="card"><div class="tw"><table><thead><tr><th>Date</th><th>Réglage</th><th>Résultat</th><th>Détail</th><th>Depuis</th></tr></thead>'
+            '<tbody>{}</tbody></table></div><p class="hint">Les secrets (jeton, clé API, mot de passe) ne sont jamais notés.</p></div>').format("".join(rows))
+
+
+SOUS_TITRES = {
+    "seuils": "Niveaux d’alerte des contrôles de santé (températures, usure, remplissage…)",
+    "controles": "Ce que l’audit teste sur le réseau : services publiés et réseau local",
+    "sauvegardes": "Les sauvegardes dont l’audit vérifie la fraîcheur",
+    "opnsense": "Lecture de la configuration du routeur par son API (lecture seule)",
+    "telegram": "Prévenu sur votre téléphone quand quelque chose change",
+    "planification": "Audits automatiques et conservation des rapports",
+    "interface": "Mot de passe, session et accès à cette interface",
+    "acceptes": "Les écarts que vous avez déclarés volontaires",
+    "journal": "Les réglages du serveur modifiés depuis cette interface",
+}
+
+
+def page_reglages(app, csrf, nonce, onglet="seuils", q=None, erreurs=None, saisie=None, erreur_config="", hote=""):
+    q = q or {}
+    conf = app.donnees.configuration()
+    corps = [onglets(onglet, conf)]
+    if onglet == "seuils":
+        corps.append(r_seuils(app, csrf, q, erreurs, saisie))
+    elif onglet in ("acceptes", "journal"):
+        corps.append(r_acceptes(app, csrf) if onglet == "acceptes" else r_journal(app))
+    else:
+        corps.append(bandeau_config(app, q))
+        if erreur_config:
+            corps.append('<div class="banner errb"><b>Rien n’a été modifié :</b> {}</div>'.format(esc(erreur_config)))
+        if onglet == "interface":
+            corps.append(r_interface(app, csrf, conf, saisie))
+        elif not conf or app.configurer is None:
+            corps.append('<div class="card"><p class="muted">Les réglages du serveur ne sont pas encore lisibles par l’interface : mettez Audite-moi à jour sur le serveur '
+                         '(<code>git pull && sudo ./install.sh</code>).</p></div>')
+        else:
+            s = {k: v for k, v in (saisie or {}).items() if k not in SECRETS_FORM} if saisie else None
+            corps.append({"controles": lambda: r_controles(app, csrf, conf, s), "sauvegardes": lambda: r_sauvegardes(app, csrf, conf, s),
+                          "opnsense": lambda: r_opnsense(app, csrf, conf, s), "telegram": lambda: r_telegram(app, csrf, conf, s, hote),
+                          "planification": lambda: r_planification(app, csrf, conf, s)}[onglet]())
+    return coque(app.donnees, csrf, nonce, "reglages", "Réglages", "".join(corps), sous_titre=SOUS_TITRES.get(onglet, ""),
+                 titre_onglet="Réglages — " + dict(ONGLETS).get(onglet, ""))
+
 
 def page_texte(donnees, csrf, nonce, nom, contenu):
-    hist = donnees.rapports()
-    der = hist[-1] if hist else None
-    etat = donnees.etat()
-    corps = barre(csrf, etat["en_cours"] or etat["demande"], "rapport", der) + \
-        '<div class="wrap"><div class="meta"><a class="btn" href="/">← Tableau de bord</a><a class="btn" href="/rapports/{h}">Version HTML</a><a class="btn" href="/rapports/{t}" download>Télécharger</a></div>' \
-        '<div class="card"><pre class="texte">{c}</pre></div></div>'.format(h=esc(nom[:-4] + ".html"), t=esc(nom), c=esc(contenu))
-    return page("Audite-moi — " + nom, corps, nonce, nu=True)
+    corps = '<div class="card"><pre class="texte">{c}</pre></div>'.format(c=esc(contenu))
+    actions = '<a class="btn" href="/rapports/{h}">Version HTML</a><a class="btn" href="/rapports/{t}" download>Télécharger</a>'.format(
+        h=esc(nom[:-4] + ".html"), t=esc(nom))
+    return coque(donnees, csrf, nonce, "rapport", "Rapport texte", corps, sous_titre=esc(nom), actions=actions)
 
 
-def page_connexion(erreur, nonce):
-    e = '<p class="err">{}</p>'.format(esc(erreur)) if erreur else ""
-    corps = """<div class="login card"><div class="brand"><span class="logo">✓</span>Audite-moi</div>
-{e}<form method="post" action="/connexion"><label for="mdp">Mot de passe</label>
+MESSAGES_CONNEXION = {"redemarre": "L’interface a redémarré pour appliquer vos réglages : reconnectez-vous.",
+                      "mdp": "Mot de passe modifié : connectez-vous avec le nouveau mot de passe."}
+
+
+def page_connexion(erreur, nonce, message=""):
+    e = '<div class="banner errb">{}</div>'.format(esc(erreur)) if erreur else ""
+    if not e and message in MESSAGES_CONNEXION:
+        e = '<div class="banner okb">{}</div>'.format(esc(MESSAGES_CONNEXION[message]))
+    corps = """<div class="login"><div class="brand">{logo}<span>Audite-moi</span></div>
+{e}<div class="card"><form method="post" action="/connexion"><label for="mdp">Mot de passe</label>
 <input id="mdp" name="mot_de_passe" type="password" autocomplete="current-password" autofocus required>
-<button class="primary">Se connecter</button></form></div>""".format(e=e)
-    return page("Audite-moi — connexion", corps, nonce)
+<button class="primary">Se connecter</button></form></div></div>""".format(e=e, logo=LOGO)
+    return page("Connexion — Audite-moi", corps, nonce, nu=True)
 
 
 # -------------------------------------------------------------- serveur HTTP --
@@ -1642,13 +2413,13 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
         if len(brut) > 10:
             raise OverflowError("requête trop volumineuse")
         n = int(brut)
-        if n > 4096:
+        if n > 16384:          # le formulaire des sauvegardes compte jusqu'à 30 lignes
             raise OverflowError("requête trop volumineuse")
         contenu = self.rfile.read(n)
         if len(contenu) != n:
             raise ValueError("corps de requête tronqué")
         try:
-            champs = urllib.parse.parse_qs(contenu.decode("utf-8", "strict"), max_num_fields=64)
+            champs = urllib.parse.parse_qs(contenu.decode("utf-8", "strict"), max_num_fields=200)
         except (UnicodeDecodeError, ValueError) as exc:
             raise ValueError("formulaire invalide") from exc
         return {k: v[0] for k, v in champs.items()}
@@ -1678,25 +2449,42 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
         if chemin.path == "/connexion":
             if self.session():
                 return self.rediriger("/")
-            return self.envoyer(200, page_connexion("", nonce), csp=self.csp_page(nonce))
+            m = urllib.parse.parse_qs(chemin.query).get("m", [""])[0]
+            return self.envoyer(200, page_connexion("", nonce, m), csp=self.csp_page(nonce))
         s = self.session()
         if not s:
-            if chemin.path in ("/etat.json", "/materiel.json", "/tendances.json"):
+            if chemin.path in ("/etat.json", "/materiel.json", "/tendances.json", "/reglages/resultat.json"):
                 return self.envoyer(401, b'{"erreur":"non connecte"}', "application/json")
             return self.rediriger("/connexion")
+        q = urllib.parse.parse_qs(chemin.query)
+        m = q.get("m", [""])[0]
+        choix = q.get("rapport", [""])[0]
+        if not (NOM_RAPPORT.match(choix) and choix.endswith(".json")):
+            choix = ""
         if chemin.path == "/":
-            q = urllib.parse.parse_qs(chemin.query)
-            choix = q.get("rapport", [""])[0]
-            if not (NOM_RAPPORT.match(choix) and choix.endswith(".json")):
-                choix = ""
-            return self.envoyer(200, tableau_bord(self.app.donnees, s["csrf"], nonce, q.get("m", [""])[0], choix), csp=self.csp_page(nonce))
+            if choix:   # ancien lien « /?rapport=… » : les constats sont sur leur propre page
+                return self.rediriger("/constats?rapport=" + urllib.parse.quote(choix))
+            return self.envoyer(200, tableau_bord(self.app, s["csrf"], nonce, m), csp=self.csp_page(nonce))
+        if chemin.path == "/constats":
+            return self.envoyer(200, page_constats(self.app, s["csrf"], nonce, m, choix), csp=self.csp_page(nonce))
+        if chemin.path == "/corrections":
+            return self.envoyer(200, page_corrections(self.app, s["csrf"], nonce, m), csp=self.csp_page(nonce))
+        if chemin.path == "/historique":
+            return self.envoyer(200, page_historique(self.app, s["csrf"], nonce), csp=self.csp_page(nonce))
+        if chemin.path == "/reglages/resultat.json":
+            ident = q.get("id", [""])[0]
+            res = self.app.donnees.resultat_configuration()
+            fait = bool(ID_DEMANDE.match(ident)) and res.get("id") == ident
+            return self.envoyer(200, json.dumps({"fait": fait}), "application/json; charset=utf-8")
+        if chemin.path.startswith("/reglages/") and chemin.path[len("/reglages/"):] in dict(ONGLETS):
+            onglet = chemin.path[len("/reglages/"):]
+            return self.envoyer(200, page_reglages(self.app, s["csrf"], nonce, onglet, q, hote=self.hote()), csp=self.csp_page(nonce))
         if chemin.path == "/etat.json":
             return self.envoyer(200, json.dumps(self.app.donnees.etat()), "application/json; charset=utf-8")
         if chemin.path == "/materiel":
             return self.envoyer(200, page_materiel(self.app, s["csrf"], nonce), csp=self.csp_page(nonce))
         if chemin.path == "/reglages":
-            q = urllib.parse.parse_qs(chemin.query)
-            return self.envoyer(200, page_reglages(self.app, s["csrf"], nonce, q.get("m", [""])[0]), csp=self.csp_page(nonce))
+            return self.envoyer(200, page_reglages(self.app, s["csrf"], nonce, "seuils", q), csp=self.csp_page(nonce))
         if chemin.path == "/tendances.json":
             try:
                 j = int(urllib.parse.parse_qs(chemin.query).get("jours", ["30"])[0])
@@ -1717,8 +2505,13 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
         return self.introuvable(nonce)
 
     def introuvable(self, nonce):
-        return self.envoyer(404, page("Introuvable", '<div class="card">Page ou rapport introuvable. <a href="/">Retour au tableau de bord</a></div>', nonce),
-                            csp=self.csp_page(nonce))
+        corps = '<div class="login"><div class="brand">{}<span>Audite-moi</span></div><div class="card">Page ou rapport introuvable. <a href="/">Retour au tableau de bord</a></div></div>'.format(LOGO)
+        return self.envoyer(404, page("Introuvable — Audite-moi", corps, nonce, nu=True), csp=self.csp_page(nonce))
+
+    def hote(self):
+        """Nom et port utilisés par le navigateur (suggestion du lien ajouté aux messages Telegram)."""
+        h = self.headers.get("Host", "")
+        return h if re.fullmatch(r"[A-Za-z0-9.\-]{1,253}(:[0-9]{1,5})?|\[[0-9A-Fa-f:.]+\](:[0-9]{1,5})?", h) else ""
 
     def lire_rapport(self, nom):
         if not NOM_RAPPORT.match(nom):
@@ -1739,7 +2532,7 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
         if ext == "html":   # barre de retour au tableau de bord, collée en haut du rapport
             barre_r = ('<div style="position:sticky;top:0;z-index:50;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:9px 20px;'
                        'background:var(--card,#fff);border-bottom:1px solid var(--line,#ddd);font:600 14px system-ui,sans-serif">'
-                       '<a href="/" style="color:#fff;background:#2f5fd0;text-decoration:none;padding:6px 12px;border-radius:8px">← Tableau de bord</a>'
+                       '<a href="/" style="color:#fff;background:#2557b8;text-decoration:none;padding:6px 12px;border-radius:8px">← Tableau de bord</a>'
                        '<a href="/texte/{t}" style="color:inherit;text-decoration:none;padding:6px 10px;border:1px solid var(--line,#ddd);border-radius:8px">Version texte</a>'
                        '<span style="color:var(--muted,#666);font-weight:500;font-size:13px">Astuce : cliquez sur les notes ou les compteurs pour filtrer</span></div>'
                        ).format(t=esc(nom[:-5] + ".txt")).encode()
@@ -1750,38 +2543,41 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
     def accepter(self, form):
         """Marque un constat du dernier rapport comme « voulu » (ou retire cette marque)."""
         cle = form.get("cle", "")
+        retour = "/reglages/acceptes?m=" if form.get("retour") == "acceptes" else "/constats?m="
+        if form.get("retirer") and cle in self.app.donnees.acceptes():     # possible même si le constat a disparu depuis
+            self.app.donnees.modifier_acceptes(cle, None)
+            return self.rediriger(retour + "retire")
         hist = self.app.donnees.rapports()
         if not hist or len(cle) > 600 or not any(cle_de(c) == cle for c in hist[-1].get("constats", [])):
-            return self.rediriger("/?m=corr-invalide#constats")
+            return self.rediriger("/constats?m=corr-invalide")
         if form.get("retirer"):
-            self.app.donnees.modifier_acceptes(cle, None)
-            return self.rediriger("/?m=retire#constats")
+            return self.rediriger(retour + "retire")
         raison = re.sub(r"\s+", " ", form.get("raison", "")).strip()[:200] or "voulu"
         self.app.donnees.modifier_acceptes(cle, {"raison": raison, "date": int(time.time())})
-        return self.rediriger("/?m=accepte#constats")
+        return self.rediriger("/constats?m=accepte")
 
     def corriger(self, chemin, form):
         """Correction en un clic (ou annulation) : mot de passe redemandé, puis demande déposée pour audite-moi-corriger (root)."""
         ip = self.client_address[0]
         if self.app.bloque(ip):
-            return self.rediriger("/?m=bloque#corrections")
+            return self.rediriger("/constats?m=bloque")
         if not verifier(form.get("mot_de_passe", ""), self.app.conf["mot_de_passe"]):
             self.app.echec(ip)
             sys.stderr.write("{} mot de passe incorrect pour une correction\n".format(ip))
-            return self.rediriger("/?m=mdp#constats")
+            return self.rediriger("/constats?m=mdp")
         d = self.app.donnees
         if d.correction_en_attente() or d.etat()["en_cours"]:
-            return self.rediriger("/?m=corr-occupe#corrections")
+            return self.rediriger("/corrections?m=corr-occupe")
         ident = secrets.token_hex(8)
         if chemin == "/annuler":
             cible = form.get("id", "")
             if not ID_DEMANDE.match(cible) or not any(e.get("id") == cible and e.get("ok") and not e.get("annule") for e in d.corrections()):
-                return self.rediriger("/?m=corr-invalide#corrections")
+                return self.rediriger("/corrections?m=corr-invalide")
             demande = {"id": ident, "annuler": cible, "par": ip}
         else:
             hist = d.rapports()
             if not hist or form.get("rapport") != hist[-1]["_fichier"]:      # uniquement depuis le dernier audit
-                return self.rediriger("/?m=corr-invalide#constats")
+                return self.rediriger("/constats?m=corr-invalide")
             c = next((c for c in hist[-1].get("constats", []) if cle_de(c) == form.get("cle")), None)
             try:
                 i = int(form.get("i", "-1"))
@@ -1789,7 +2585,7 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
             except (ValueError, IndexError):
                 a = None
             if not a or a.get("type") not in TYPES_CORRECTION:
-                return self.rediriger("/?m=corr-invalide#constats")
+                return self.rediriger("/constats?m=corr-invalide")
             demande = {"id": ident, "type": a["type"], "cible": a.get("cible", ""), "par": ip}
         try:
             d.demander_correction(demande)
@@ -1797,7 +2593,48 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
             sys.stderr.write("demande de correction impossible : {}\n".format(exc))
             return self.rediriger("/?m=erreur")
         sys.stderr.write("{} correction demandée : {}\n".format(ip, demande.get("type") or "annulation"))
-        return self.rediriger("/?m=correction#corrections")
+        return self.rediriger("/corrections?m=correction")
+
+    def configurer(self, nom, form, s, nonce):
+        """Réglage du serveur : validé ici (mêmes règles que le service root), puis déposé pour audite-moi-configurer."""
+        action, onglet, mdp = ACTIONS_CONFIG[nom]
+        app, ip = self.app, self.client_address[0]
+        mod = app.configurer
+
+        def refus(texte, code=400):
+            return self.envoyer(code, page_reglages(app, s["csrf"], nonce, onglet, {}, saisie=form, erreur_config=texte, hote=self.hote()),
+                                csp=self.csp_page(nonce))
+        if mod is None:
+            return refus("module de configuration introuvable : réinstallez Audite-moi.", 500)
+        if mdp or nom == "mot-de-passe":
+            if app.bloque(ip):
+                return refus("trop d’essais de mot de passe : réessayez dans 15 minutes.", 429)
+            if not verifier(form.get("actuel" if nom == "mot-de-passe" else "mot_de_passe", ""), app.conf["mot_de_passe"]):
+                app.echec(ip)
+                sys.stderr.write("{} mot de passe incorrect pour un réglage\n".format(ip))
+                return refus("mot de passe incorrect.", 403)
+        try:
+            if nom == "mot-de-passe":
+                nouveau = form.get("nouveau", "")
+                if len(nouveau) < 12:
+                    raise mod.Refus("le nouveau mot de passe doit compter 12 caractères au moins")
+                if nouveau != form.get("confirmation", ""):
+                    raise mod.Refus("la confirmation ne correspond pas au nouveau mot de passe")
+                valeurs = {"mot_de_passe": hacher(nouveau)}
+            else:
+                valeurs = valeurs_config(action, form, mod)
+        except mod.Refus as exc:
+            return refus(str(exc))
+        if app.donnees.configuration_en_attente():
+            return refus("un autre réglage est en cours d’application : réessayez dans quelques secondes.", 409)
+        ident = secrets.token_hex(8)
+        try:
+            app.donnees.demander_configuration({"id": ident, "action": action, "valeurs": valeurs, "par": ip})
+        except OSError as exc:
+            sys.stderr.write("demande de réglage impossible : {}\n".format(exc))
+            return refus("impossible de déposer la demande (droits du dossier de demandes ?).", 500)
+        sys.stderr.write("{} réglage demandé : {}\n".format(ip, nom))
+        return self.rediriger("/reglages/{}?attente={}".format(onglet, ident))
 
     def do_POST(self):
         chemin = urllib.parse.urlsplit(self.path).path
@@ -1840,7 +2677,7 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
         if chemin == "/reglages":
             valeurs, erreurs = self.app.seuils.valider(form)
             if erreurs:
-                return self.envoyer(400, page_reglages(self.app, s["csrf"], nonce, "", erreurs, form), csp=self.csp_page(nonce))
+                return self.envoyer(400, page_reglages(self.app, s["csrf"], nonce, "seuils", {}, erreurs, form), csp=self.csp_page(nonce))
             try:
                 self.app.seuils.enregistrer(valeurs)
             except OSError as exc:
@@ -1850,6 +2687,8 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
             return self.rediriger("/reglages?m=ok")
         if chemin in ("/corriger", "/annuler"):
             return self.corriger(chemin, form)
+        if chemin.startswith("/reglages/") and chemin[len("/reglages/"):] in ACTIONS_CONFIG:
+            return self.configurer(chemin[len("/reglages/"):], form, s, nonce)
         if chemin == "/mesurer":
             try:
                 self.app.mesures.demander()
@@ -1876,6 +2715,7 @@ class Application:
         self.donnees = Donnees(conf)
         self.mesures = Mesures(conf)
         self.seuils = Seuils(conf)
+        self.configurer = charger_configurer(conf)
         self.tls = bool(conf.get("tls_cert"))
         self._sessions = {}
         self._verrou = threading.Lock()

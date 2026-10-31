@@ -78,6 +78,7 @@ install -d -m 755 "$LIB"
 install -m 755 "$SRC/systemd/audite-moi-run" "$LIB/audite-moi-run"
 install -m 755 "$SRC/systemd/audite-moi-mesures" "$LIB/audite-moi-mesures"
 install -m 755 "$SRC/systemd/audite-moi-corriger" "$LIB/audite-moi-corriger"
+install -m 755 "$SRC/systemd/audite-moi-configurer" "$LIB/audite-moi-configurer"
 install -m 644 "$SRC/seuils.json" "$SRC/references.json" "$LIB/"
 install -m 755 "$SRC/web/audite-moi-web.py" "$LIB/audite-moi-web.py"
 echo "/usr/local/sbin/audite-moi, $LIB/"
@@ -273,17 +274,22 @@ etape "Services systemd"
 install -m 644 "$SRC/systemd/audite-moi.service" "$SRC/systemd/audite-moi.path" "$SRC/systemd/audite-moi.timer" /etc/systemd/system/
 ((WEB)) && install -m 644 "$SRC/systemd/audite-moi-web.service" "$SRC/systemd/audite-moi-mesures.service" \
   "$SRC/systemd/audite-moi-mesures.timer" "$SRC/systemd/audite-moi-mesures.path" \
-  "$SRC/systemd/audite-moi-corriger.service" "$SRC/systemd/audite-moi-corriger.path" /etc/systemd/system/
+  "$SRC/systemd/audite-moi-corriger.service" "$SRC/systemd/audite-moi-corriger.path" \
+  "$SRC/systemd/audite-moi-configurer.service" "$SRC/systemd/audite-moi-configurer.path" /etc/systemd/system/
 if ((SYSTEMD)); then
   systemctl daemon-reload
   systemctl enable --now audite-moi.path >/dev/null
-  if ((MINUTEUR)); then systemctl enable --now audite-moi.timer >/dev/null; echo "Audit complet automatique : chaque lundi vers 7 h 30"
+  if ((MINUTEUR)) && [[ -f /etc/systemd/system/audite-moi.timer.d/50-audite-moi-interface.conf ]]; then
+    echo "Audit automatique : planification choisie dans l'interface conservée (Réglages > Planification)"
+  elif ((MINUTEUR)); then systemctl enable --now audite-moi.timer >/dev/null; echo "Audit complet automatique : chaque lundi vers 7 h 30"
   else systemctl disable --now audite-moi.timer >/dev/null 2>&1 || true; fi
   if ((WEB)); then
     # relevé des disques pour la page « Matériel » : toutes les 10 min et à la demande
-    systemctl enable --now audite-moi-mesures.timer audite-moi-mesures.path audite-moi-corriger.path >/dev/null
+    systemctl enable --now audite-moi-mesures.timer audite-moi-mesures.path audite-moi-corriger.path audite-moi-configurer.path >/dev/null
     systemctl start --no-block audite-moi-mesures.service
     echo "Relevé des disques, des connexions et alertes : toutes les 10 minutes ; corrections en un clic actives"
+    # vue des réglages affichée par l'interface (sans aucun secret)
+    python3 "$LIB/audite-moi-configurer" --exporter || true
     systemctl enable audite-moi-web.service >/dev/null
     systemctl restart audite-moi-web.service
     sleep 1
