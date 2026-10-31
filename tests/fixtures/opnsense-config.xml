@@ -114,6 +114,15 @@
       <source><network>lan</network></source>
       <destination><any/></destination>
     </rule>
+    <rule>
+      <type>pass</type>
+      <interface>opt1</interface>
+      <ipprotocol>inet</ipprotocol>
+      <protocol>any</protocol>
+      <source><network>opt1</network></source>
+      <destination><any/></destination>
+      <descr>IoT vers Internet</descr>
+    </rule>
   </filter>
   <installedpackages>
     <miniupnpd>

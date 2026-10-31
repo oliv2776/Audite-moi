@@ -3,6 +3,7 @@ if [[ ${AUDITE_MOI_IP_ROUTE_ECHEC:-0} == 1 && "$*" == "route show default" ]]; t
 if [[ ${AUDITE_MOI_IP_IPV6_ECHEC:-0} == 1 && "$*" == "-6 addr show scope global" ]]; then exit 1; fi
 case "$*" in
   "-br addr") printf 'lo UNKNOWN 127.0.0.1/8\nenp3s0 UP 192.168.1.10/24 2a01:e0a:1:2::10/64\n' ;;
+  "-o -4 addr show") printf '1: lo    inet 127.0.0.1/8 scope host lo\n2: enp3s0    inet 192.168.1.10/24 brd 192.168.1.255 scope global enp3s0\n3: docker0    inet 172.17.0.1/16 scope global docker0\n' ;;
   "route") echo "default via 192.168.1.1 dev enp3s0 proto dhcp" ;;
   "route show default") echo "default via 192.168.1.1 dev enp3s0 proto dhcp src 192.168.1.10 metric 100" ;;
   "-6 addr show scope global") printf '2: enp3s0: <BROADCAST,MULTICAST,UP>\n    inet6 2a01:e0a:1:2::10/64 scope global dynamic\n' ;;

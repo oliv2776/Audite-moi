@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Faux dpkg-query : paquet source et version installée des paquets demandés
+for a in "$@"; do
+  case $a in
+    openssl|libssl3t64) echo "openssl 3.0.13-0ubuntu3.5" ;;
+    -W|-f*|\$*) ;;
+    *) [[ $a == -* ]] || echo "$a 1.0-1" ;;
+  esac
+done

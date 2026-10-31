@@ -17,7 +17,7 @@
 #  https://github.com/oliv2776/Audite-moi
 # =============================================================================
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 PROG=${0##*/}
 NL=$'\n'
 TAB=$'\t'
@@ -187,29 +187,31 @@ declare -a T_SEC=() T_TTL=() T_FILE=()                    # tableaux
 declare -a X_SEC=() X_TTL=() X_FILE=()                    # données brutes
 CUR="" SEC_N=0
 
-SEC_ORDER=(systeme materiel disques zfs docker gpu reseau sauvegardes cloudflare exposition applis opnsense lan maj comptes ssh parefeu dockersec fichiers noyau journaux outils)
+SEC_ORDER=(systeme materiel disques zfs docker gpu reseau sauvegardes cloudflare exposition domaines applis opnsense lan maj comptes ssh parefeu dockersec fichiers noyau journaux outils vulns)
 declare -A SEC_TITLE=(
   [systeme]="Système" [materiel]="Matériel : processeur, mémoire, températures, onduleur"
   [disques]="Disques (SMART)" [zfs]="Pools ZFS" [docker]="Docker : état des conteneurs"
   [gpu]="GPU et transcodage" [reseau]="Réseau" [sauvegardes]="Sauvegardes et snapshots"
   [cloudflare]="Exposition Internet : tunnels Cloudflare" [exposition]="Vu d'Internet : services publiés"
-  [applis]="Applications exposées : Nextcloud et Stash" [opnsense]="Routeur OPNsense" [lan]="Réseau local (scan)"
+  [domaines]="Domaines : DNS, messagerie, sous-domaines et certificats"
+  [applis]="Applications auto-hébergées" [opnsense]="Routeur OPNsense" [lan]="Réseau local (scan)"
   [maj]="Mises à jour"
   [comptes]="Comptes et privilèges" [ssh]="SSH" [parefeu]="Pare-feu et services réseau"
   [dockersec]="Sécurité Docker" [fichiers]="Fichiers, permissions et intégrité"
   [noyau]="Noyau et durcissement" [journaux]="Journaux et détection d'intrusion"
   [outils]="Analyses complémentaires (Lynis, Trivy, rkhunter)"
+  [vulns]="Vulnérabilités connues et vue depuis Internet"
 )
 declare -A SEC_SHORT=(
   [systeme]="Système" [materiel]="Matériel" [disques]="Disques" [zfs]="ZFS" [docker]="Docker"
   [gpu]="GPU" [reseau]="Réseau" [sauvegardes]="Sauvegardes" [cloudflare]="Cloudflare"
-  [exposition]="Vu d'Internet" [applis]="Applications" [opnsense]="OPNsense" [lan]="Réseau local" [maj]="Mises à jour" [comptes]="Comptes" [ssh]="SSH" [parefeu]="Pare-feu"
-  [dockersec]="Sécurité Docker" [fichiers]="Fichiers" [noyau]="Noyau" [journaux]="Journaux" [outils]="Analyses"
+  [exposition]="Vu d'Internet" [domaines]="Domaines" [applis]="Applications" [opnsense]="OPNsense" [lan]="Réseau local" [maj]="Mises à jour" [comptes]="Comptes" [ssh]="SSH" [parefeu]="Pare-feu"
+  [dockersec]="Sécurité Docker" [fichiers]="Fichiers" [noyau]="Noyau" [journaux]="Journaux" [outils]="Analyses" [vulns]="Vulnérabilités"
 )
 declare -A SEC_CAT=(
   [systeme]=sante [materiel]=sante [disques]=sante [zfs]=sante [docker]=sante [gpu]=sante
-  [reseau]=sante [sauvegardes]=sante [cloudflare]=secu [exposition]=secu [applis]=secu [opnsense]=secu [lan]=secu [maj]=secu [comptes]=secu [ssh]=secu
-  [parefeu]=secu [dockersec]=secu [fichiers]=secu [noyau]=secu [journaux]=secu [outils]=secu
+  [reseau]=sante [sauvegardes]=sante [cloudflare]=secu [exposition]=secu [domaines]=secu [applis]=secu [opnsense]=secu [lan]=secu [maj]=secu [comptes]=secu [ssh]=secu
+  [parefeu]=secu [dockersec]=secu [fichiers]=secu [noyau]=secu [journaux]=secu [outils]=secu [vulns]=secu
 )
 declare -A LVL_FR=([CRIT]="Critique" [WARN]="Attention" [OK]="OK" [INFO]="Info" [ACC]="Accepté")
 
@@ -2095,6 +2097,91 @@ occ_nc() { tmo 90 docker exec -u www-data "$NC_C" php /var/www/html/occ --no-int
 occ_lsio() { tmo 90 docker exec "$NC_C" occ --no-interaction "$@" 2>/dev/null; }
 OCC=occ_nc NC_C=""
 
+# ---------------------------------------------- module d'analyse (Python) --
+# Vulnérabilités connues, vue depuis Internet, domaines : audite-moi-analyse.py écrit des lignes
+# F (constat) et T (tableau) comme l'analyse d'OPNsense, et l'inventaire dans $WORK/inventaire.
+ANALYSE=""
+for f in "${AUDITE_MOI_ANALYSE:-}" "$(dirname "$(readlink -f "$0")")/audite-moi-analyse.py" /usr/local/lib/audite-moi/audite-moi-analyse.py; do
+  [[ -n $f && -f $f ]] && { ANALYSE=$f; break; }
+done
+CACHE_DIR=${AUDITE_MOI_CACHE:-/var/lib/audite-moi/cache}
+analyse() {   # analyse commande arguments… (la clé NVD passe par l'environnement, jamais sur la ligne de commande)
+  local -A TB=()
+  local -a TORD=()
+  local kind a b c d t
+  [[ -d $CACHE_DIR && -w $CACHE_DIR ]] || mkdir -p -m 700 "$CACHE_DIR" 2>/dev/null || CACHE_DIR="$WORK/cache"
+  while IFS=$US read -r kind a b c d; do
+    case $kind in
+      F) add "$a" "$b" "${c//\\n/$NL}" "$d" ;;
+      T) [[ -n ${TB[$a]:-} ]] || { TB[$a]="$WORK/an_t_${RANDOM}_${#TB[@]}.tsv"; TORD+=("$a"); }; printf '%s\n' "$b" >> "${TB[$a]}" ;;
+    esac
+  done < <(AUDITE_MOI_NVD_CLE=$(cfg NVD_API_KEY) tmo 1500 python3 -I "$ANALYSE" --cache "$CACHE_DIR" --inventaire "$WORK/inventaire" "$@" 2>>"$WORK/analyse.err")
+  for t in "${TORD[@]}"; do tbl "$t" < "${TB[$t]}"; done
+}
+ip_publique() {
+  [[ -n $PUB_IP ]] || PUB_IP=$(tmo 10 curl -sS -m 8 https://1.1.1.1/cdn-cgi/trace 2>/dev/null | awk -F= '$1 == "ip" {print $2}')
+  printf '%s' "$PUB_IP"
+}
+
+check_domaines() {
+  section domaines
+  local doms; doms=$(cfg DOMAINES)
+  if [[ -z $doms ]]; then
+    info "Aucun nom de domaine à surveiller" "Indiquez vos domaines pour vérifier leur DNS, leur messagerie (SPF, DKIM, DMARC), leur expiration, leurs sous-domaines et leurs certificats." \
+      "Dans l'interface : Réglages › Domaines"
+    return
+  fi
+  [[ -n $ANALYSE ]] || { info "Module d'analyse introuvable (audite-moi-analyse.py) : réinstallez Audite-moi"; return; }
+  have python3 || { info "python3 absent : analyse des domaines impossible"; return; }
+  note "Domaines : DNS, messagerie, sous-domaines et certificats de ${doms}…"
+  local -a o=(--selecteurs "$(cfg DKIM_SELECTEURS)" --ip-publique "$(ip_publique)")
+  oui "$(cfg SOUS_DOMAINES oui)" && o+=(--sous-domaines)
+  analyse domaines "$doms" "${o[@]}"
+}
+
+inventaire_base() {   # ce serveur et ses conteneurs, pour la page Inventaire
+  local d="$WORK/inventaire"
+  mkdir -p "$d"
+  jq -n --arg h "$HOST" --arg os "$OS_PRETTY" --arg k "$KERNEL" --arg ip "$(ip -o -4 addr show 2>/dev/null | awk '$2 !~ /^(lo|docker|br-|veth|virbr)/ {sub(/\/.*/, "", $4); print $4}' | tr '\n' ' ')" --arg pub "$PUB_IP" --arg v6 "$IPV6_GLOBAL" \
+    '{hote: $h, os: $os, noyau: $k, ip: ($ip | split(" ") | map(select(length > 0))), ip_publique: $pub, ipv6: ($v6 | split(" ") | map(select(length > 0)))}' > "$d/serveur.json"
+  if ((DOCKER_OK)) && [[ -s ${INSPECT:-} ]]; then
+    local exp="" n
+    for n in "${!EXPOSED[@]}" "${!REACHABLE[@]}"; do exp+="$n "; done
+    jq --arg exp " $exp" '[.[] | (.Name | ltrimstr("/")) as $n | {nom: $n, image: .Config.Image, etat: .State.Status,
+        ports: [(.NetworkSettings.Ports // {}) | to_entries[] | select(.value != null) | .key as $p | .value[] | "\(.HostIp // "0.0.0.0"):\(.HostPort) → \($p)"] | unique,
+        internet: ($exp | contains(" " + $n + " "))}]' "$INSPECT" > "$d/conteneurs.json" 2>/dev/null || rm -f "$d/conteneurs.json"
+  fi
+}
+
+check_vulns() {
+  section vulns
+  if ! oui "$(cfg VULNERABILITES oui)"; then
+    info "Recherche des vulnérabilités connues désactivée" "" "Dans l'interface : Réglages › Vulnérabilités"
+    inventaire_base; return
+  fi
+  [[ -n $ANALYSE ]] && have python3 || { info "Module d'analyse introuvable (audite-moi-analyse.py) : réinstallez Audite-moi"; inventaire_base; return; }
+  note "Vulnérabilités connues : paquets, images Docker, appareils du réseau, vue depuis Internet…"
+  if [[ -s $WORK/paquets-secu.txt ]]; then
+    local eco; eco="Ubuntu:$(. /etc/os-release 2>/dev/null; echo "${VERSION_ID:-24.04}")"
+    grep -q 'LTS' /etc/os-release 2>/dev/null && eco+=":LTS"
+    analyse paquets "$WORK/paquets-secu.txt" --ecosysteme "$eco"
+  fi
+  [[ -d $WORK/trivy ]] && analyse images "$WORK/trivy"
+  if [[ -s $WORK/nmap.xml ]]; then
+    analyse lan "$WORK/nmap.xml" --exposes "$OPN_FWD" --nas "$(hostname -I 2>/dev/null)"
+  elif ! ((QUICK)) && oui "$(cfg SCAN_RESEAU oui)"; then
+    info "Appareils du réseau non vérifiés" "Le scan du réseau local n'a rien donné."
+  fi
+  if oui "$(cfg INTERNETDB oui)"; then
+    local -a ips=() v
+    [[ -n $(ip_publique) ]] && ips+=("$PUB_IP")
+    for v in $IPV6_GLOBAL; do ips+=("${v%/*}"); done
+    if ((${#ips[@]})); then analyse internet "${ips[@]}"
+    else info "Vue depuis Internet impossible" "Adresse publique inconnue (pas d'accès à Internet ?)."; fi
+  fi
+  inventaire_base
+}
+
 check_applis() {
   section applis
   if ((!DOCKER_OK)); then info "Docker absent ou inaccessible : section ignorée"; return; fi
@@ -2256,7 +2343,7 @@ audit_stash() {
 # ------------------------------------------------------------- OPNsense --
 opn_py() {   # analyse de config.xml : lignes F (constat), N (réseau), T (table) ; n'affiche jamais de secret
   cat <<'PY'
-import sys, socket, ipaddress, xml.etree.ElementTree as ET
+import re, sys, socket, ipaddress, xml.etree.ElementTree as ET
 US = "\x1f"
 root = ET.parse(sys.argv[1]).getroot()
 nas_ips = set(sys.argv[2].split())
@@ -2285,7 +2372,7 @@ def tx(e, p, d=""):
 def present(e, p): return e is not None and e.find(p) is not None
 
 # Interfaces et réseaux
-names = {}
+names, reseaux = {}, {}
 T("Interfaces du routeur", "Interface", "Nom interne", "Adresse", "Active")
 itfs = root.find("interfaces")
 for i in (list(itfs) if itfs is not None else []):
@@ -2296,7 +2383,9 @@ for i in (list(itfs) if itfs is not None else []):
     if ip and sn and ip[0].isdigit() and i.tag != "wan":
         try:
             net = ipaddress.ip_interface(f"{ip}/{sn}").network
-            if net.is_private: print(US.join(["N", str(net)]))
+            if net.is_private:
+                print(US.join(["N", str(net)]))
+                if present(i, "enable"): reseaux[i.tag] = net
         except ValueError: pass
 def nom(itf): return ", ".join(names.get(x, x) for x in itf.split(",")) if itf else "?"
 
@@ -2315,6 +2404,7 @@ for n in root.findall("./nat/rule"):
     T("Redirections de ports (NAT)", nom(itf), proto, dport, f"{tgt}:{lport}", src, descr, "désactivée" if off else "@WARN active")
     if off: continue
     fw.append(dport)
+    print(US.join(["X", f"{tgt}:{lport}"]))
     repond = service_present(tgt, lport, proto)
     if repond is False:
         F("WARN", f"Redirection de port inutile : {dport}/{proto} → {tgt}:{lport} (rien n'écoute)",
@@ -2365,6 +2455,45 @@ for proto, src, dst, port, descr in wan_pass:
         F("WARN" if ouvert else "INFO", f"Règle WAN autorisant l'entrée : {proto} vers {dst}:{port}", f"Source : {src}. {descr}".strip(),
           "Vérifiez qu'elle est nécessaire (Pare-feu > Règles > WAN)")
 
+# Cloisonnement : un réseau « invités », « objets connectés » ou « caméras » ne doit pas joindre les autres réseaux internes
+SENSIBLE = re.compile(r"iot|objet|invit|guest|cam|domoti|dmz|isol|untrust|enfant|kids", re.I)
+def dest(r, mvc=False):
+    if mvc: return tx(r, "destination_net", "any")
+    return "any" if present(r, "destination/any") else (tx(r, "destination/network") or tx(r, "destination/address") or "?")
+regles = [(r, False) for r in root.findall("./filter/rule")] + [(r, True) for r in (list(mvc) if mvc is not None else [])]
+sensibles = [t for t in reseaux if SENSIBLE.search(names.get(t, "") + " " + t)]
+if sensibles: T("Accès depuis les réseaux à isoler", "Réseau", "Ordre", "Action", "Destination", "Port", "Description")
+for itf in sensibles:
+    vu_blocage, ouvert = False, None
+    for n, (r, est_mvc) in enumerate([x for x in regles if itf in tx(x[0], "interface").split(",")], 1):
+        if (tx(r, "enabled", "1") != "1") if est_mvc else present(r, "disabled"): continue
+        action = tx(r, "action", "pass") if est_mvc else tx(r, "type", "pass")
+        d = dest(r, est_mvc)
+        port = tx(r, "destination_port", "*") if est_mvc else tx(r, "destination/port", "*")
+        T("Accès depuis les réseaux à isoler", names.get(itf, itf), n, "@OK bloque" if action in ("block", "reject") else "autorise", nom(d) if d not in ("any", "?") else "toutes", port, tx(r, "description" if est_mvc else "descr"))
+        interne = d.replace("ip", "").replace("net", "") in reseaux or d in ("lan", "lannet", "lanip")
+        if action in ("block", "reject") and d not in ("any",):
+            vu_blocage = True
+        elif action == "pass" and ((d == "any" and not vu_blocage) or (interne and d.replace("ip", "").replace("net", "") != itf)):
+            ouvert = ouvert or (d, tx(r, "description" if est_mvc else "descr"))
+    if ouvert:
+        F("WARN", f"Le réseau « {names.get(itf, itf)} » ({reseaux[itf]}) peut joindre les autres réseaux internes",
+          f"Une règle autorise ce réseau vers {'toutes les destinations' if ouvert[0] == 'any' else nom(ouvert[0])} sans blocage préalable des réseaux privés"
+          f"{(' (' + ouvert[1] + ')') if ouvert[1] else ''}. Un objet connecté ou un invité compromis pourrait alors atteindre le NAS et vos ordinateurs.",
+          f"Pare-feu > Règles > {names.get(itf, itf)} : ajoutez EN TÊTE une règle « Bloquer » vers un alias des réseaux privés (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16), "
+          "puis gardez « Autoriser » vers Internet (et l'accès DNS au routeur)")
+    else:
+        F("OK", f"Réseau « {names.get(itf, itf)} » isolé des autres réseaux internes (d'après les règles)")
+if not sensibles:
+    if len(reseaux) <= 1:
+        F("INFO", "Un seul réseau interne : tous les appareils se voient",
+          "Caméras, objets connectés et appareils des invités partagent le réseau du NAS et des ordinateurs : un seul appareil vulnérable donne accès à tout le reste.",
+          "Créez un VLAN « IoT » (et « Invités ») dans OPNsense, isolé du réseau principal (Interfaces > Autres types > VLAN)")
+    else:
+        F("INFO", "Aucun réseau nommé « invités », « IoT » ou « caméras » parmi les interfaces",
+          "Seuls ces réseaux sont analysés pour le cloisonnement (d'après leur nom) : " + ", ".join(names.get(t, t) for t in reseaux),
+          "Nommez clairement vos VLAN dans OPNsense (ex. « IoT ») pour que leur isolation soit vérifiée")
+
 # Interface d'administration, SSH, comptes
 wg = root.find("./system/webgui")
 if tx(wg, "protocol", "https") == "http":
@@ -2397,7 +2526,7 @@ opn = root.find("OPNsense")
 if opn is not None and any(c.tag.lower() == "crowdsec" for c in opn): F("OK", "CrowdSec présent sur le routeur", "Blocage collaboratif des adresses malveillantes.")
 PY
 }
-OPN_NETS=""
+OPN_NETS="" OPN_FWD=""
 opn_api() {   # opn_api chemin fichier → code HTTP (identifiants passés par l'entrée standard, pas sur la ligne de commande)
   local -a k=(); oui "$(cfg OPNSENSE_VERIFIER_TLS oui)" || k=(-k)
   printf 'user = "%s:%s"\n' "$(cfg OPNSENSE_KEY)" "$(cfg OPNSENSE_SECRET)" \
@@ -2451,6 +2580,7 @@ check_opnsense() {
     case $kind in
       F) add "$a" "$b" "${c//\\n/$NL}" "$d" ;;
       N) OPN_NETS+="$a " ;;
+      X) OPN_FWD+="$a " ;;
       T) [[ -n ${TB[$a]:-} ]] || { TB[$a]="$WORK/opn_t_${#TB[@]}.tsv"; TORD+=("$a"); }; printf '%s\n' "$b" >> "${TB[$a]}" ;;
     esac
   done < <(opn_py > "$WORK/opn.py"; python3 -I "$WORK/opn.py" "$xml" "$(hostname -I 2>/dev/null)" "${!ECOUTE[*]}")
@@ -2502,7 +2632,9 @@ check_lan() {
   if ((${#ok_c[@]} == 0)); then info "Aucun réseau à scanner" "" "Renseignez SCAN_RESEAUX dans /etc/audite-moi/audit.conf"; return; fi
   note "Scan nmap de ${ok_c[*]} (quelques minutes)…"
   local x="$WORK/nmap.xml"
-  tmo 1800 nmap -T4 --top-ports 200 --open --host-timeout 120s -oX "$x" "${ok_c[@]}" >/dev/null 2>&1
+  local -a sv=()
+  oui "$(cfg VERSIONS_LAN oui)" && sv=(-sV --version-light)   # versions des services : croisées avec les failles connues (section Vulnérabilités)
+  tmo 2400 nmap -T4 --top-ports 200 --open --host-timeout 180s "${sv[@]}" -oX "$x" "${ok_c[@]}" >/dev/null 2>&1
   [[ -s $x ]] || { warn "Le scan nmap a échoué" "" "Lancez-le à la main : \`sudo nmap -T4 --top-ports 200 --open ${ok_c[*]}\`"; return; }
   local res; res=$(nmap_py > "$WORK/nmap.py"; python3 -I "$WORK/nmap.py" "$x")
   local n; n=$(nlines "$res")
@@ -2569,6 +2701,9 @@ check_maj() {
     up=$(grep '/' <<< "$apt_raw" || true)
     nall=$(nlines "$up"); nsec=$(grep -c -- '-security' <<< "$up")
     secpk=$(grep -- '-security' <<< "$up" | cut -d/ -f1 | head -n 25 | tr '\n' ' ')
+    # paquets source et versions installées : croisés avec les failles connues (section Vulnérabilités)
+    grep -- '-security' <<< "$up" | cut -d/ -f1 | sort -u | head -n 300 \
+      | xargs -r dpkg-query -W -f='${source:Package} ${source:Version}\n' 2>/dev/null | sort -u > "$WORK/paquets-secu.txt"
     if ((nsec > 0)); then
       warn "$nsec mise(s) à jour de sécurité en attente" "Paquets : $secpk" "\`sudo apt update && sudo apt full-upgrade\`"
     fi
@@ -3593,11 +3728,13 @@ check_outils() {
       note "Trivy : analyse de ${#imgs[@]} image(s)…"
       for img in "${imgs[@]}"; do
         out=$(tmo 600 trivy image --quiet --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --format json "$img" 2>/dev/null) || continue
+        mkdir -p "$WORK/trivy"; printf '%s' "$out" > "$WORK/trivy/${#trows[@]}.json"
         c=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' <<< "$out" 2>/dev/null)
         h=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' <<< "$out" 2>/dev/null)
         isint "$c" || continue
         tc=$((tc + c))
         nexp=$(jq -r --arg i "$img" '.[] | select(.Config.Image == $i) | .Name | ltrimstr("/")' "$INSPECT" | while read -r x; do [[ -n ${EXPOSED[$x]:-}${REACHABLE[$x]:-} ]] && echo "$x"; done | head -n 1)
+        jq -n --arg i "$img" --arg e "$nexp" '{image: $i, expose: $e}' > "$WORK/trivy/${#trows[@]}.meta"
         trows+=("$img$TAB$( ((c > 0)) && echo "@WARN $c" || echo "@OK 0")$TAB$h$TAB${nexp:+Internet ($nexp)}")
         ((c > 0)) && [[ -n $nexp ]] && warn "Image exposée $img : $c vulnérabilité(s) critique(s) corrigeable(s)" "Conteneur $nexp, publié sur Internet." "Mettez l'image à jour : \`docker compose pull && docker compose up -d\`"
       done
@@ -3951,6 +4088,14 @@ render_txt() {
   done
 }
 
+inventaire_json() {   # fragments $WORK/inventaire/*.json → {nom: contenu}
+  local obj='{}' f
+  for f in "$WORK"/inventaire/*.json; do
+    [[ -s $f ]] || continue
+    obj=$(jq -c --arg k "$(basename "$f" .json)" --slurpfile v "$f" '. + {($k): $v[0]}' <<< "$obj" 2>/dev/null) || obj='{}'
+  done
+  printf '%s' "$obj"
+}
 render_json() {
   local nC=$1 nW=$2 nO=$3 nI=$4 hs=$5 ss=$6 dur=$7 base=$8 s i
   local secs; secs=$(for s in "${SEC_ORDER[@]}"; do printf '%s%s%s%s%s%s%s\n' "$s" "$US" "${SEC_TITLE[$s]}" "$US" "${SEC_SHORT[$s]}" "$US" "${SEC_CAT[$s]}"; done \
@@ -3961,8 +4106,9 @@ render_json() {
   done | jq -Rs --arg hote "$HOST" --arg date "$DATE_HUMAN" --argjson horodatage "$START" --arg version "$VERSION" \
       --arg os "$OS_PRETTY" --arg noyau "$KERNEL" --argjson duree "$dur" --arg mode "$( ((QUICK)) && echo rapide || echo complet)" \
       --argjson hs "$hs" --argjson ss "$ss" --arg hg "$(grade "$hs")" --arg sg "$(grade "$ss")" \
-      --argjson c "$nC" --argjson w "$nW" --argjson o "$nO" --argjson n "$nI" --arg base "$base" --argjson secs "$secs" --arg smod "$(seuils_modifies)" '
-    {version: $version, seuils_modifies: ($smod | split("\n") | map(select(length > 0))), hote: $hote, date: $date, horodatage: $horodatage, os: $os, noyau: $noyau, duree_s: $duree, mode: $mode,
+      --argjson c "$nC" --argjson w "$nW" --argjson o "$nO" --argjson n "$nI" --arg base "$base" --argjson secs "$secs" --arg smod "$(seuils_modifies)" \
+      --argjson inv "$(inventaire_json)" '
+    {version: $version, inventaire: $inv, seuils_modifies: ($smod | split("\n") | map(select(length > 0))), hote: $hote, date: $date, horodatage: $horodatage, os: $os, noyau: $noyau, duree_s: $duree, mode: $mode,
      notes: {sante: {score: $hs, lettre: $hg}, securite: {score: $ss, lettre: $sg}},
      compteurs: {CRIT: $c, WARN: $w, OK: $o, INFO: $n},
      fichiers: {html: ($base + ".html"), txt: ($base + ".txt"), json: ($base + ".json")},
@@ -4003,6 +4149,7 @@ main() {
   check_sauvegardes
   check_cloudflare
   check_exposition
+  check_domaines
   check_applis
   check_opnsense
   check_lan
@@ -4015,6 +4162,7 @@ main() {
   check_noyau
   check_journaux
   check_outils
+  check_vulns
   appliquer_acceptes
   appliquer_references
 
