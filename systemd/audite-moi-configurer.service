@@ -1,0 +1,30 @@
+[Unit]
+Description=Audite-moi : application d'un réglage demandé depuis l'interface web
+Documentation=https://github.com/oliv2776/Audite-moi
+
+[Service]
+Type=oneshot
+# Liste fermée de réglages, chaque valeur validée avant écriture (voir le script)
+ExecStart=/usr/bin/python3 /usr/local/lib/audite-moi/audite-moi-configurer
+TimeoutStartSec=3min
+PrivateTmp=yes
+
+# /usr reste en lecture seule ; /etc reste modifiable (audit.conf, web.json et
+# surcharges systemd de la planification).
+NoNewPrivileges=yes
+ProtectSystem=yes
+ProtectHome=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# réseau : test d'OPNsense et de Telegram ; AF_UNIX : systemctl
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

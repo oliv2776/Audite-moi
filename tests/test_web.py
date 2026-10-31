@@ -149,8 +149,18 @@ class TestInterface(unittest.TestCase):
         self.assertIn("nas-test", t)
         self.assertIn("61", t)                                    # dernière note de santé
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", t)  # contenu échappé
-        self.assertIn("<code>ceci</code>", t)
+        self.assertIn("À corriger en priorité", t)
         self.assertIn("<polyline", t)                             # graphique d'évolution (2 rapports)
+        self.assertIn('<a href="/" aria-current="page">', t)        # barre latérale, page active
+        self.assertIn('<span class="cpt" title="1 critique(s), 1 à surveiller">2</span>', t)
+        r2, t2 = self.req("GET", "/constats", cookie=ck)
+        self.assertEqual(r2.status, 200)
+        self.assertIn("<code>ceci</code>", t2)
+        self.assertIn('data-f="cat:sante"', t2)
+        for page_ in ("/corrections", "/historique", "/reglages", "/reglages/journal", "/reglages/acceptes"):
+            r2, t2 = self.req("GET", page_, cookie=ck)
+            self.assertEqual(r2.status, 200, page_)
+            self.assertNotIn('style="', t2, page_)
         csp = r.getheader("Content-Security-Policy")
         self.assertIn("nonce-", csp)
         for nonce in re.findall(r'nonce="([^"]+)"', t):
@@ -228,11 +238,11 @@ class TestInterface(unittest.TestCase):
     def test_formulaire_longueur_invalide(self):
         r, _ = self.req("POST", "/connexion", None, entetes={"Content-Length": "-1"})
         self.assertEqual(r.status, 400)
-        r, _ = self.req("POST", "/connexion", {"mot_de_passe": "x" * 5000})
+        r, _ = self.req("POST", "/connexion", {"mot_de_passe": "x" * 17000})
         self.assertEqual(r.status, 413)
 
     def test_formulaire_trop_de_champs(self):
-        corps = {"k{}".format(i): "v" for i in range(65)}
+        corps = {"k{}".format(i): "v" for i in range(201)}
         r, _ = self.req("POST", "/connexion", corps)
         self.assertEqual(r.status, 400)
 
@@ -265,11 +275,13 @@ class TestInterface(unittest.TestCase):
         self.assertIn("Tableau de bord", t)
         r, _ = self.req("GET", "/texte/..%2Fsecret.txt", cookie=ck)
         self.assertEqual(r.status, 404)
-        r, t = self.req("GET", "/?rapport=rapport-nas-test-20260101-1000.json", cookie=ck)
+        r, _ = self.req("GET", "/?rapport=rapport-nas-test-20260101-1000.json", cookie=ck)
+        self.assertEqual(r.getheader("Location"), "/constats?rapport=rapport-nas-test-20260101-1000.json")   # ancien lien
+        r, t = self.req("GET", "/constats?rapport=rapport-nas-test-20260101-1000.json", cookie=ck)
         self.assertIn("ancien rapport", t)
         self.assertIn('data-niv="CRIT"', t)
         self.assertIn('data-f="cat:sante"', t)                     # tuiles cliquables
-        r, t = self.req("GET", "/?rapport=../../etc/passwd", cookie=ck)
+        r, t = self.req("GET", "/constats?rapport=../../etc/passwd", cookie=ck)
         self.assertEqual(r.status, 200)
         self.assertNotIn("ancien rapport", t)
 
@@ -305,7 +317,7 @@ class TestInterface(unittest.TestCase):
         self.assertNotIn(' style="', t)
         self.assertNotIn("<style", t)
         self.assertNotIn("<b>", t.split('id="init">')[1].split("</script>")[0])   # données échappées dans le JSON embarqué
-        self.assertIn('class="on">Matériel', t)
+        self.assertIn('<a href="/materiel" aria-current="page">', t)
         r, t = self.req("GET", "/materiel.json", cookie=cookie)
         self.assertEqual(r.status, 200)
         d = json.loads(t)
@@ -319,7 +331,7 @@ class TestInterface(unittest.TestCase):
         r, t = self.req("GET", url)                                  # sans session : contenu fixe, rien de sensible
         self.assertEqual(r.status, 200)
         self.assertEqual(r.getheader("Cache-Control"), "public, max-age=31536000, immutable")
-        self.assertIn(".topbar", t)
+        self.assertIn(".sidebar", t)
         etag = r.getheader("ETag")
         r, _ = self.req("GET", url, entetes={"If-None-Match": etag})
         self.assertEqual(r.status, 304)
@@ -414,7 +426,7 @@ class TestInterface(unittest.TestCase):
         self.assertTrue(json.loads(t)["demande"])
 
     def csrf_de(self, cookie):
-        _, t = self.req("GET", "/", cookie=cookie)
+        _, t = self.req("GET", "/constats", cookie=cookie)
         return re.search(r'name="csrf" value="([^"]+)"', t).group(1), t
 
     def test_nouveaux_et_resolus(self):
@@ -433,10 +445,13 @@ class TestInterface(unittest.TestCase):
         self.assertIn("m=accepte", r.getheader("Location"))
         acc = json.load(open(os.path.join(self.tmp.name, "reglages", "acceptes.json")))
         self.assertEqual(acc[cle]["raison"], "voulu ici")
-        _, t = self.req("GET", "/", cookie=cookie)
+        _, t = self.req("GET", "/constats", cookie=cookie)
         self.assertIn('data-niv="ACC"', t)
-        self.assertIn('<div class="v">0</div><div class="l">avertissements', t)   # le constat accepté ne compte plus
-        self.req("POST", "/accepter", {"csrf": csrf, "cle": cle, "retirer": "1"}, cookie=cookie)
+        self.assertIn('<div class="v">0</div><div class="l">À surveiller', t)   # le constat accepté ne compte plus
+        _, t = self.req("GET", "/reglages/acceptes", cookie=cookie)
+        self.assertIn("voulu ici", t)
+        r, _ = self.req("POST", "/accepter", {"csrf": csrf, "cle": cle, "retirer": "1", "retour": "acceptes"}, cookie=cookie)
+        self.assertEqual(r.getheader("Location"), "/reglages/acceptes?m=retire")
         self.assertNotIn(cle, json.load(open(os.path.join(self.tmp.name, "reglages", "acceptes.json"))))
 
     def test_corriger(self):
@@ -465,12 +480,88 @@ class TestInterface(unittest.TestCase):
         with open(os.path.join(self.tmp.name, "etat", "corrections.json"), "w") as f:
             json.dump([{"id": d["id"], "date": int(time.time()), "type": "zfs-scrub", "cible": "stockage", "libelle": "Scrub", "ok": True,
                         "annulation": [["zpool", "scrub", "-s", "stockage"]]}], f)
-        _, t = self.req("GET", "/", cookie=cookie)
+        _, t = self.req("GET", "/constats", cookie=cookie)
         self.assertIn("corrigé le", t)
+        _, t = self.req("GET", "/corrections", cookie=cookie)
+        self.assertIn('data-dlg="annuler"', t)
         r, _ = self.req("POST", "/annuler", {"csrf": csrf, "id": d["id"], "mot_de_passe": MDP}, cookie=cookie)
         self.assertIn("m=correction", r.getheader("Location"))
         self.assertEqual(json.load(open(dem))["annuler"], d["id"])
         os.remove(dem)
+
+    def test_reglages_serveur(self):
+        cookie = self.connexion()
+        etat, dem = os.path.join(self.tmp.name, "etat"), os.path.join(self.tmp.name, "demande", "configurer")
+        vue = os.path.join(etat, "configuration.json")
+        if os.path.exists(vue):
+            os.remove(vue)
+        _, t = self.req("GET", "/reglages/telegram", cookie=cookie)
+        self.assertIn("pas encore lisibles", t)                  # service root pas encore passé
+        with open(vue, "w") as f:
+            json.dump({"controles": {"externe": True, "domaines_extra": "", "scan_reseau": True, "scan_reseaux": ""}, "sauvegardes": [],
+                       "opnsense": {"url": "", "cle_definie": False, "cle_fin": "", "secret_defini": False, "verifier_tls": True},
+                       "telegram": {"jeton_defini": True, "chat_id": "42", "alertes": True, "interface_url": ""},
+                       "planification": {"actif": True, "frequence": "hebdomadaire", "jour": "lun", "jour_mois": 1, "heure": "07:20", "garder": 60},
+                       "interface": {}}, f)
+        for onglet in ("controles", "sauvegardes", "opnsense", "telegram", "planification", "interface"):
+            r, t = self.req("GET", "/reglages/" + onglet, cookie=cookie)
+            self.assertEqual(r.status, 200, onglet)
+            self.assertIn('aria-current="page">', t)
+        csrf = re.search(r'name="csrf" value="([^"]+)"', t).group(1)
+        base = {"csrf": csrf, "externe": "oui", "domaines_extra": "nc.exemple.fr", "scan_reseau": "oui", "scan_reseaux": "192.168.1.0/24"}
+        r, t = self.req("POST", "/reglages/controles", dict(base, mot_de_passe="faux"), cookie=cookie)
+        self.assertEqual(r.status, 403)
+        self.assertIn("mot de passe incorrect", t)
+        self.assertFalse(os.path.exists(dem))
+        r, t = self.req("POST", "/reglages/controles", dict(base, scan_reseaux="10.0.0.0/8", mot_de_passe=MDP), cookie=cookie)
+        self.assertEqual(r.status, 400)
+        self.assertIn("réseau trop grand", t)
+        self.assertIn('value="10.0.0.0/8"', t)                     # saisie conservée
+        self.assertFalse(os.path.exists(dem))
+        r, _ = self.req("POST", "/reglages/controles", base, cookie=cookie)
+        self.assertEqual(r.status, 403)                            # mot de passe obligatoire
+        r, _ = self.req("POST", "/reglages/controles", dict(base, mot_de_passe=MDP), cookie=cookie)
+        self.assertEqual(r.status, 303)
+        ident = r.getheader("Location").rsplit("=", 1)[1]
+        self.assertEqual(r.getheader("Location"), "/reglages/controles?attente=" + ident)
+        self.assertEqual(oct(os.stat(dem).st_mode & 0o777), "0o600")
+        d = json.load(open(dem))
+        self.assertEqual((d["action"], d["valeurs"]["scan_reseaux"], d["id"]), ("controles", "192.168.1.0/24", ident))
+        r, _ = self.req("POST", "/reglages/controles", dict(base, mot_de_passe=MDP), cookie=cookie)
+        self.assertEqual(r.status, 409)                            # un réglage à la fois
+        _, t = self.req("GET", "/reglages/resultat.json?id=" + ident, cookie=cookie)
+        self.assertFalse(json.loads(t)["fait"])
+        os.remove(dem)
+        with open(os.path.join(etat, "configuration-resultat.json"), "w") as f:
+            json.dump({"id": ident, "ok": True, "libelle": "Contrôles réseau", "message": "Enregistré <b>"}, f)
+        _, t = self.req("GET", "/reglages/resultat.json?id=" + ident, cookie=cookie)
+        self.assertTrue(json.loads(t)["fait"])
+        _, t = self.req("GET", "/reglages/controles?r=" + ident, cookie=cookie)
+        self.assertIn("Enregistré &lt;b&gt;", t)
+        # test Telegram : sans mot de passe, rien n'est modifié
+        r, _ = self.req("POST", "/reglages/telegram-tester", {"csrf": csrf}, cookie=cookie)
+        self.assertEqual(r.status, 303)
+        self.assertEqual(json.load(open(dem))["action"], "telegram-tester")
+        os.remove(dem)
+        # mot de passe de l'interface
+        mdp = {"csrf": csrf, "actuel": MDP, "nouveau": "nouveau-mot-de-passe", "confirmation": "nouveau-mot-de-passe"}
+        r, t = self.req("POST", "/reglages/mot-de-passe", dict(mdp, nouveau="court", confirmation="court"), cookie=cookie)
+        self.assertEqual(r.status, 400)
+        self.assertIn("12 caractères au moins", t)
+        self.assertNotIn('value="court"', t)                       # un mot de passe n'est jamais réaffiché
+        r, _ = self.req("POST", "/reglages/mot-de-passe", dict(mdp, confirmation="autre-mot-de-passe"), cookie=cookie)
+        self.assertEqual(r.status, 400)
+        r, _ = self.req("POST", "/reglages/mot-de-passe", mdp, cookie=cookie)
+        self.assertEqual(r.status, 303)
+        h = json.load(open(dem))["valeurs"]["mot_de_passe"]
+        self.assertTrue(web.verifier("nouveau-mot-de-passe", h))
+        self.assertNotIn("nouveau-mot-de-passe", open(dem).read())
+        os.remove(dem)
+        r, _ = self.req("POST", "/reglages/executer", {"csrf": csrf, "mot_de_passe": MDP}, cookie=cookie)
+        self.assertEqual(r.status, 404)
+        r, _ = self.req("POST", "/reglages/controles", dict(base, csrf="faux", mot_de_passe=MDP), cookie=cookie)
+        self.assertEqual(r.status, 403)
+        self.srv.app._echecs.clear()
 
     def test_deconnexion(self):
         ck = self.connexion()

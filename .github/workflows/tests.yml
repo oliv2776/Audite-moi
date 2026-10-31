@@ -24,6 +24,6 @@ jobs:
       - name: Vérifier la syntaxe
         run: |
           bash -n audite-moi.sh install.sh tests/run-tests.sh
-          python3 -m py_compile web/audite-moi-web.py systemd/audite-moi-corriger tests/test_web.py tests/test_corriger.py
+          python3 -m py_compile web/audite-moi-web.py systemd/audite-moi-corriger systemd/audite-moi-configurer tests/test_web.py tests/test_corriger.py tests/test_configurer.py
       - name: Exécuter la suite simulée
         run: sudo -E bash tests/run-tests.sh

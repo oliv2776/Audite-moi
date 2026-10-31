@@ -1,0 +1,689 @@
+#!/usr/bin/env python3
+"""Audite-moi — réglages du serveur modifiés depuis l'interface web (exécuté en root).
+
+L'interface (sans droits) dépose une demande dans /var/lib/audite-moi/demande/configurer :
+  {"id": "...", "action": "telegram", "valeurs": {...}, "par": "192.168.1.20"}
+
+Sécurité : seules les ACTIONS ci-dessous existent ; chaque valeur est validée par un
+format strict avant d'être écrite (jamais de guillemet, d'antislash ni de retour à la
+ligne dans audit.conf, qui n'est d'ailleurs jamais exécuté) ; les secrets (jeton
+Telegram, clé OPNsense) ne sont jamais renvoyés à l'interface ni écrits dans le journal ;
+chaque modification est journalisée et signalée sur Telegram.
+
+Sans demande (option --exporter), le script écrit seulement la vue publique des réglages
+(/var/lib/audite-moi/etat/configuration.json) que l'interface affiche.
+
+Ce fichier sert aussi de module : l'interface web importe ses fonctions de validation
+pour signaler une erreur de saisie avant même d'envoyer la demande.
+"""
+import argparse
+import base64
+import datetime
+import grp
+import html
+import ipaddress
+import json
+import os
+import re
+import ssl
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+GARDE_JOURNAL = 200
+FICHIER_UNITE = "50-audite-moi-interface.conf"   # surcharge systemd écrite par ce script (planification, conservation)
+JOURS = {"lun": "Mon", "mar": "Tue", "mer": "Wed", "jeu": "Thu", "ven": "Fri", "sam": "Sat", "dim": "Sun"}
+PLANNING_DEFAUT = {"actif": True, "frequence": "hebdomadaire", "jour": "lun", "jour_mois": 1, "heure": "07:20"}
+GARDER_DEFAUT = 60
+
+
+class Refus(Exception):
+    """Valeur ou demande invalide : rien n'a été modifié."""
+
+
+# ------------------------------------------------------------- validation --
+def est_oui(v):
+    return str(v or "").strip().lower() in ("oui", "o", "1", "true", "on", "yes")
+
+
+def oui_non(v, nom="valeur"):
+    v = str(v or "").strip().lower()
+    if v in ("oui", "o", "1", "true", "on", "yes"):
+        return "oui"
+    if v in ("non", "n", "0", "false", "off", "no", ""):
+        return "non"
+    raise Refus("{} : « oui » ou « non » attendu".format(nom))
+
+
+NOM_HOTE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$")
+
+
+def domaines(v):
+    noms = [x for x in re.split(r"[\s,;]+", str(v or "").strip().lower()) if x]
+    if len(noms) > 30:
+        raise Refus("30 noms d'hôte au plus")
+    for n in noms:
+        if not NOM_HOTE.fullmatch(n):
+            raise Refus("nom d'hôte invalide : {}".format(n[:80]))
+    return " ".join(dict.fromkeys(noms))
+
+
+def reseaux(v):
+    res = []
+    for x in [x for x in re.split(r"[\s,;]+", str(v or "").strip()) if x]:
+        try:
+            n = ipaddress.ip_network(x, strict=False)
+        except ValueError:
+            raise Refus("réseau invalide : {} (ex. 192.168.1.0/24)".format(x[:60]))
+        if n.version != 4:
+            raise Refus("{} : seuls les réseaux IPv4 sont scannés".format(x[:60]))
+        if n.num_addresses > 1024:
+            raise Refus("{} : réseau trop grand (1 024 adresses au plus, soit /22)".format(n))
+        res.append(str(n))
+    if len(res) > 16:
+        raise Refus("16 réseaux au plus")
+    return " ".join(dict.fromkeys(res))
+
+
+URL_SIMPLE = re.compile(r"^https?://(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)(:[0-9]{1,5})?$")
+
+
+def url(v, nom="adresse", vide=True):
+    v = str(v or "").strip()
+    if not v:
+        if vide:
+            return ""
+        raise Refus("{} obligatoire".format(nom))
+    if "://" not in v:
+        v = "https://" + v
+    v = v.rstrip("/")
+    if not URL_SIMPLE.fullmatch(v):
+        raise Refus("{} invalide : schéma, nom et port seulement (ex. https://192.168.1.1)".format(nom))
+    port = v.rsplit(":", 1)[-1] if re.search(r":[0-9]{1,5}$", v) else None
+    if port and not 0 < int(port) < 65536:
+        raise Refus("{} : port invalide".format(nom))
+    return v
+
+
+def url_interface(v):
+    v = url(v, "adresse de l'interface")
+    return v + "/" if v else ""
+
+
+CLE_API = re.compile(r"^[A-Za-z0-9+/=]{20,128}$")
+JETON_TG = re.compile(r"^[0-9]{5,15}:[A-Za-z0-9_-]{30,64}$")
+CHAT_TG = re.compile(r"^-?[0-9]{1,20}$")
+NOM_SAUVEGARDE = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+DATASET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]{0,254}$")
+UNITE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9@_.\\-]{0,199}$")
+CHEMIN = re.compile(r"^/[^\s:\"'\\`$]{0,4095}$")
+
+
+def sauvegardes(lignes):
+    """[{nom, type, cible, heures}] → « nom:type:cible:heures … » (format de SAUVEGARDES)."""
+    if not isinstance(lignes, list):
+        raise Refus("liste de sauvegardes attendue")
+    res, noms = [], set()
+    for i, l in enumerate(lignes, 1):
+        if not isinstance(l, dict):
+            raise Refus("ligne {} illisible".format(i))
+        nom, typ = str(l.get("nom", "")).strip(), str(l.get("type", "")).strip()
+        cible, heures = str(l.get("cible", "")).strip(), str(l.get("heures", "")).strip()
+        if not (nom or cible):
+            continue                                    # ligne laissée vide dans le formulaire
+        if not NOM_SAUVEGARDE.fullmatch(nom):
+            raise Refus("ligne {} : nom invalide (lettres, chiffres, . _ -, 40 caractères au plus)".format(i))
+        if nom in noms:
+            raise Refus("ligne {} : le nom « {} » est déjà utilisé".format(i, nom))
+        noms.add(nom)
+        if typ == "zfs":
+            if not DATASET.fullmatch(cible) or ".." in cible.split("/"):
+                raise Refus("ligne {} : dataset ZFS invalide (ex. usb/photos)".format(i))
+        elif typ == "fichier":
+            if not CHEMIN.fullmatch(cible) or ".." in cible.split("/"):
+                raise Refus("ligne {} : chemin absolu attendu, sans espace ni « : » (ex. /mnt/backup/dernier)".format(i))
+        elif typ == "unite":
+            if not UNITE.fullmatch(cible):
+                raise Refus("ligne {} : nom de service systemd invalide (ex. restic-cloud.service)".format(i))
+        else:
+            raise Refus("ligne {} : type « zfs », « fichier » ou « unite » attendu".format(i))
+        if not heures.isdigit() or not 1 <= int(heures) <= 8760:
+            raise Refus("ligne {} : délai en heures entre 1 et 8760".format(i))
+        res.append("{}:{}:{}:{}".format(nom, typ, cible, int(heures)))
+    if len(res) > 30:
+        raise Refus("30 sauvegardes au plus")
+    return " ".join(res)
+
+
+def lire_sauvegardes(brut):
+    res = []
+    for n in str(brut or "").split():
+        p = n.split(":")
+        if len(p) == 4:
+            res.append({"nom": p[0], "type": p[1], "cible": p[2], "heures": p[3]})
+    return res
+
+
+def entier(v, mini, maxi, nom):
+    v = str(v if v is not None else "").strip()
+    if not re.fullmatch(r"[0-9]{1,6}", v) or not mini <= int(v) <= maxi:
+        raise Refus("{} : nombre entier entre {} et {} attendu".format(nom, mini, maxi))
+    return int(v)
+
+
+def planning(v):
+    if not isinstance(v, dict):
+        raise Refus("planification illisible")
+    p = {"actif": oui_non(v.get("actif"), "audit automatique") == "oui"}
+    p["frequence"] = str(v.get("frequence", "")).strip()
+    if p["frequence"] not in ("quotidien", "hebdomadaire", "mensuel"):
+        raise Refus("fréquence : quotidien, hebdomadaire ou mensuel")
+    p["jour"] = str(v.get("jour", "lun")).strip()
+    if p["jour"] not in JOURS:
+        raise Refus("jour de la semaine invalide")
+    p["jour_mois"] = entier(v.get("jour_mois", 1), 1, 28, "jour du mois")
+    h = str(v.get("heure", "")).strip()
+    if not re.fullmatch(r"([01][0-9]|2[0-3]):[0-5][0-9]", h):
+        raise Refus("heure au format HH:MM attendue (ex. 07:20)")
+    p["heure"] = h
+    p["garder"] = entier(v.get("garder", GARDER_DEFAUT), 5, 500, "rapports conservés")
+    return p
+
+
+def oncalendar(p):
+    h = p["heure"] + ":00"
+    if p["frequence"] == "quotidien":
+        return "*-*-* " + h
+    if p["frequence"] == "mensuel":
+        return "*-*-{:02d} {}".format(p["jour_mois"], h)
+    return "{} *-*-* {}".format(JOURS[p["jour"]], h)
+
+
+def lire_oncalendar(expr):
+    """Expression écrite par oncalendar() → champs du formulaire (None si inconnue)."""
+    m = re.fullmatch(r"(\*-\*-\*|\*-\*-(\d{2})|(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \*-\*-\*) (\d{2}:\d{2})(:00)?", expr.strip())
+    if not m:
+        return None
+    p = dict(PLANNING_DEFAUT, heure=m.group(4))
+    if m.group(2):
+        p.update(frequence="mensuel", jour_mois=int(m.group(2)))
+    elif m.group(3):
+        p.update(frequence="hebdomadaire", jour={v: k for k, v in JOURS.items()}[m.group(3)])
+    else:
+        p["frequence"] = "quotidien"
+    return p
+
+
+HASH = re.compile(r"^pbkdf2_sha256\$([0-9]{6,7})\$[A-Za-z0-9+/=]{16,64}\$[A-Za-z0-9+/=]{40,64}$")
+
+
+def hash_mdp(v):
+    v = str(v or "")
+    m = HASH.fullmatch(v)
+    if not m or int(m.group(1)) < 300000:
+        raise Refus("empreinte de mot de passe invalide")
+    return v
+
+
+# ---------------------------------------------------------------- fichiers --
+def lire_conf(chemin):
+    try:
+        with open(chemin, encoding="utf-8") as f:
+            return lire_conf_texte(f.read())
+    except OSError:
+        return {}
+
+
+def lire_conf_texte(texte):
+    conf = {}
+    for l in texte.splitlines():
+        m = re.match(r"^\s*([A-Z_]+)\s*=\s*(.*?)\s*$", l)
+        if m:
+            v = m.group(2)
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            conf[m.group(1)] = v
+    return conf
+
+
+def ecrire_atomique(chemin, texte, mode, uid=0, gid=0):
+    tmp = "{}.{}.tmp".format(chemin, os.getpid())
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(texte)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, mode)
+        if os.geteuid() == 0:
+            os.chown(tmp, uid, gid)
+        os.replace(tmp, chemin)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def modifier_conf(chemin, valeurs):
+    """Remplace (ou ajoute) les lignes CLÉ="valeur" ; le reste du fichier (commentaires) est conservé."""
+    for k, v in valeurs.items():
+        if not re.fullmatch(r"[A-Z_]{1,40}", k) or any(c in str(v) for c in "\"\\\n\r\x00`$"):
+            raise Refus("valeur refusée pour {}".format(k))
+    try:
+        with open(chemin, encoding="utf-8") as f:
+            lignes = f.read().splitlines()
+    except FileNotFoundError:
+        lignes = ["# Audite-moi — réglages (lu par root uniquement : gardez ce fichier en 600)"]
+    restant = dict(valeurs)
+    for i, l in enumerate(lignes):
+        m = re.match(r"^\s*([A-Z_]+)\s*=", l)
+        if m and m.group(1) in restant:
+            lignes[i] = '{}="{}"'.format(m.group(1), restant.pop(m.group(1)))
+    for k, v in restant.items():
+        lignes.append('{}="{}"'.format(k, v))
+    ecrire_atomique(chemin, "\n".join(lignes) + "\n", 0o600)
+
+
+def groupe_id(nom):
+    try:
+        return grp.getgrnam(nom).gr_gid
+    except KeyError:
+        return 0
+
+
+def ecrire_json(chemin, donnees, groupe, mode=0o640):
+    ecrire_atomique(chemin, json.dumps(donnees, ensure_ascii=False, indent=1) + "\n", mode, 0, groupe_id(groupe))
+
+
+def lire_json(chemin, defaut):
+    try:
+        with open(chemin, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, type(defaut)) else defaut
+    except (OSError, ValueError):
+        return defaut
+
+
+# ----------------------------------------------------------------- systemd --
+def systemctl(*args):
+    if os.environ.get("AUDITE_MOI_SYSTEMCTL_TRACE"):     # tests : on note l'appel au lieu de l'exécuter
+        with open(os.environ["AUDITE_MOI_SYSTEMCTL_TRACE"], "a", encoding="utf-8") as f:
+            f.write(" ".join(args) + "\n")
+        return 0, "enabled" if args[:1] == ("is-enabled",) and os.environ.get("AUDITE_MOI_TIMER_ACTIF") == "1" else ""
+    try:
+        p = subprocess.run(["systemctl"] + list(args), capture_output=True, text=True, timeout=60)
+        return p.returncode, (p.stdout + p.stderr).strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 1, str(exc)
+
+
+def lire_surcharge(dossier, unite):
+    try:
+        with open(os.path.join(dossier, unite + ".d", FICHIER_UNITE), encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def ecrire_surcharge(dossier, unite, texte):
+    d = os.path.join(dossier, unite + ".d")
+    os.makedirs(d, mode=0o755, exist_ok=True)
+    ecrire_atomique(os.path.join(d, FICHIER_UNITE), texte, 0o644)
+
+
+def planning_actuel(dossier):
+    p = dict(PLANNING_DEFAUT)
+    t = lire_surcharge(dossier, "audite-moi.timer")
+    for l in t.splitlines():
+        if l.startswith("OnCalendar=") and l != "OnCalendar=":
+            p = lire_oncalendar(l[len("OnCalendar="):]) or p
+    rc, sortie = systemctl("is-enabled", "audite-moi.timer")
+    p["actif"] = sortie.strip() == "enabled"
+    m = re.search(r"AUDITE_MOI_GARDER=([0-9]+)", lire_surcharge(dossier, "audite-moi.service"))
+    p["garder"] = int(m.group(1)) if m else GARDER_DEFAUT
+    return p
+
+
+# ------------------------------------------------------------------ outils --
+def tester_opnsense(conf):
+    adresse, cle, secret = conf.get("OPNSENSE_URL", ""), conf.get("OPNSENSE_KEY", ""), conf.get("OPNSENSE_SECRET", "")
+    if not (adresse and cle and secret):
+        return False, "OPNsense n'est pas configuré."
+    if os.environ.get("AUDITE_MOI_OPNSENSE_TEST"):         # tests : code HTTP simulé
+        code = int(os.environ["AUDITE_MOI_OPNSENSE_TEST"])
+    else:
+        ctx = ssl.create_default_context()
+        if conf.get("OPNSENSE_VERIFIER_TLS", "oui").lower() in ("non", "n", "0", "no", "false"):
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(adresse.rstrip("/") + "/api/core/firmware/status", headers={
+            "Authorization": "Basic " + base64.b64encode("{}:{}".format(cle, secret).encode()).decode()})
+        try:
+            with urllib.request.urlopen(req, timeout=15, context=ctx) as r:
+                code = r.status
+        except urllib.error.HTTPError as exc:
+            code = exc.code
+        except ssl.SSLError:
+            return False, "Certificat HTTPS du routeur refusé : s'il garde son certificat auto-signé d'origine, décochez « Vérifier le certificat »."
+        except (OSError, ValueError) as exc:
+            if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+                return False, "Certificat HTTPS du routeur refusé : s'il garde son certificat auto-signé d'origine, décochez « Vérifier le certificat »."
+            return False, "OPNsense ne répond pas à {} ({}).".format(adresse, type(exc).__name__)
+    if code == 200:
+        return True, "Connexion à l'API d'OPNsense réussie."
+    if code in (401, 403):
+        return False, "OPNsense refuse cette clé (HTTP {}) : vérifiez la clé, le secret et les privilèges de l'utilisateur.".format(code)
+    return False, "OPNsense répond HTTP {} : vérifiez l'adresse.".format(code)
+
+
+def outil_mesures():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "audite-moi-mesures")
+
+
+def trouver_chat(jeton):
+    try:
+        p = subprocess.run([sys.executable, outil_mesures(), "--trouver-chat"], input=jeton + "\n", capture_output=True, text=True, timeout=40)
+    except (OSError, subprocess.SubprocessError):
+        return None, ""
+    if p.returncode != 0 or "\t" not in p.stdout:
+        return None, ""
+    ident, nom = p.stdout.strip().split("\t", 1)
+    return (ident, nom) if CHAT_TG.fullmatch(ident) else (None, "")
+
+
+def tester_telegram(chemin_conf):
+    try:
+        p = subprocess.run([sys.executable, outil_mesures(), "--test-telegram", "--conf", chemin_conf], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return p.returncode == 0
+
+
+def avant_fichier(texte, dossier):
+    """Copie privée de l'ancienne configuration (supprimée par notifier)."""
+    chemin = os.path.join(dossier, ".configuration-avant.{}".format(os.getpid()))
+    ecrire_atomique(chemin, texte, 0o600)
+    return chemin
+
+
+def notifier(texte, chemin_conf):
+    try:
+        subprocess.run([sys.executable, outil_mesures(), "--notifier", "--conf", chemin_conf], input=texte, text=True, timeout=40,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    finally:
+        if os.path.basename(chemin_conf).startswith(".configuration-avant."):
+            try:
+                os.remove(chemin_conf)
+            except OSError:
+                pass
+
+
+# ----------------------------------------------------------------- actions --
+class Contexte:
+    def __init__(self, a):
+        self.conf = a.conf
+        self.web = a.web
+        self.systemd = a.systemd
+        self.etat = a.etat
+        self.groupe = a.groupe
+
+
+def act_controles(v, cx):
+    valeurs = {"EXTERNE": oui_non(v.get("externe"), "test depuis Internet"), "DOMAINES_EXTRA": domaines(v.get("domaines_extra")),
+               "SCAN_RESEAU": oui_non(v.get("scan_reseau"), "scan du réseau local"), "SCAN_RESEAUX": reseaux(v.get("scan_reseaux"))}
+    modifier_conf(cx.conf, valeurs)
+    return True, "Contrôles réseau enregistrés : ils s'appliquent au prochain audit.", ["contrôles réseau"]
+
+
+def act_sauvegardes(v, cx):
+    s = sauvegardes(v.get("lignes"))
+    modifier_conf(cx.conf, {"SAUVEGARDES": s})
+    n = len(s.split()) if s else 0
+    return True, "{} sauvegarde(s) à vérifier enregistrée(s) : contrôle au prochain audit.".format(n), ["sauvegardes à vérifier"]
+
+
+def act_opnsense(v, cx):
+    conf = lire_conf(cx.conf)
+    adresse = url(v.get("url"), "adresse d'OPNsense", vide=False)
+    valeurs = {"OPNSENSE_URL": adresse, "OPNSENSE_VERIFIER_TLS": oui_non(v.get("verifier_tls"), "vérification du certificat")}
+    cle, secret = str(v.get("cle", "")).strip(), str(v.get("secret", "")).strip()
+    for nom, val, k in (("clé", cle, "OPNSENSE_KEY"), ("secret", secret, "OPNSENSE_SECRET")):
+        if val:
+            if not CLE_API.fullmatch(val):
+                raise Refus("{} d'API invalide (copiez la valeur après « key= » ou « secret= » dans apikey.txt)".format(nom.capitalize()))
+            valeurs[k] = val
+        elif not conf.get(k):
+            raise Refus("{} d'API obligatoire".format(nom.capitalize()))
+    modifier_conf(cx.conf, valeurs)
+    ok, msg = tester_opnsense(lire_conf(cx.conf))
+    return True, "Routeur enregistré. " + msg, ["OPNsense" + (" (clé API)" if cle or secret else "")], ok
+
+
+def act_opnsense_tester(v, cx):
+    ok, msg = tester_opnsense(lire_conf(cx.conf))
+    return ok, msg, [], ok
+
+
+def act_opnsense_effacer(v, cx):
+    modifier_conf(cx.conf, {"OPNSENSE_URL": "", "OPNSENSE_KEY": "", "OPNSENSE_SECRET": ""})
+    return True, "Clé API d'OPNsense effacée : pensez à la supprimer aussi dans OPNsense.", ["OPNsense (clé effacée)"]
+
+
+def act_telegram(v, cx):
+    conf = lire_conf(cx.conf)
+    jeton, chat = str(v.get("jeton", "")).strip(), str(v.get("chat_id", "")).strip()
+    valeurs = {"ALERTES": oui_non(v.get("alertes"), "alertes"), "INTERFACE_URL": url_interface(v.get("interface_url"))}
+    changes = ["alertes Telegram"]
+    if jeton:
+        if not JETON_TG.fullmatch(jeton):
+            raise Refus("Jeton du bot invalide (format 123456789:AA…, donné par @BotFather)")
+        valeurs["TELEGRAM_TOKEN"] = jeton
+        changes.append("jeton du bot")
+    elif not conf.get("TELEGRAM_TOKEN"):
+        raise Refus("Jeton du bot obligatoire (donné par @BotFather)")
+    nom = ""
+    if chat:
+        if not CHAT_TG.fullmatch(chat):
+            raise Refus("Identifiant de conversation invalide (nombre)")
+    elif jeton or not conf.get("TELEGRAM_CHAT_ID"):
+        chat, nom = trouver_chat(jeton or conf["TELEGRAM_TOKEN"])
+        if not chat:
+            raise Refus("Aucune conversation trouvée : ouvrez votre bot dans Telegram, envoyez-lui un message, puis réessayez.")
+    if chat and chat != conf.get("TELEGRAM_CHAT_ID"):
+        valeurs["TELEGRAM_CHAT_ID"] = chat
+        changes.append("conversation")
+    modifier_conf(cx.conf, valeurs)
+    if valeurs["ALERTES"] == "non":
+        return True, "Réglages enregistrés ; les alertes sont désactivées.", changes, True
+    ok = tester_telegram(cx.conf)
+    msg = "Réglages enregistrés{}. ".format(" (conversation : {})".format(nom) if nom else "")
+    msg += "Message de test envoyé : vérifiez Telegram." if ok else "Le message de test n'est pas parti : vérifiez le jeton et la conversation."
+    return True, msg, changes, ok
+
+
+def act_telegram_tester(v, cx):
+    ok = tester_telegram(cx.conf)
+    return ok, "Message de test envoyé : vérifiez Telegram." if ok else "Échec de l'envoi : vérifiez le jeton et la conversation.", [], ok
+
+
+def act_telegram_effacer(v, cx):
+    modifier_conf(cx.conf, {"TELEGRAM_TOKEN": "", "TELEGRAM_CHAT_ID": ""})
+    return True, "Alertes Telegram désactivées et jeton effacé.", ["alertes Telegram (jeton effacé)"]
+
+
+def act_planification(v, cx):
+    p = planning(v)
+    ecrire_surcharge(cx.systemd, "audite-moi.timer", "# Écrit par l'interface d'Audite-moi (Réglages > Planification)\n[Timer]\nOnCalendar=\nOnCalendar={}\n".format(oncalendar(p)))
+    ecrire_surcharge(cx.systemd, "audite-moi.service", "# Écrit par l'interface d'Audite-moi (Réglages > Planification)\n[Service]\nEnvironment=AUDITE_MOI_GARDER={}\n".format(p["garder"]))
+    systemctl("daemon-reload")
+    if p["actif"]:
+        rc, s = systemctl("enable", "audite-moi.timer")
+        rc2, s2 = systemctl("restart", "audite-moi.timer")
+        if rc or rc2:
+            raise Refus("le minuteur n'a pas pu être activé : " + (s or s2)[-200:])
+        msg = "Audit automatique planifié ; {} rapports conservés.".format(p["garder"])
+    else:
+        systemctl("disable", "--now", "audite-moi.timer")
+        msg = "Audit automatique désactivé ; {} rapports conservés.".format(p["garder"])
+    return True, msg, ["planification des audits"]
+
+
+def act_interface(v, cx):
+    try:
+        with open(cx.web, encoding="utf-8") as f:
+            web = json.load(f)
+        st = os.stat(cx.web)
+    except (OSError, ValueError):
+        raise Refus("configuration de l'interface illisible ({})".format(cx.web))
+    changes = []
+    if "duree_session_h" in v:
+        d = entier(v.get("duree_session_h"), 1, 168, "durée de session (heures)")
+        if d != web.get("duree_session_h"):
+            web["duree_session_h"] = d
+            changes.append("durée de session")
+    if v.get("mot_de_passe"):
+        web["mot_de_passe"] = hash_mdp(v["mot_de_passe"])
+        changes.append("mot de passe de l'interface")
+    if not changes:
+        return True, "Aucun changement.", []
+    ecrire_atomique(cx.web, json.dumps(web, ensure_ascii=False, indent=2) + "\n", st.st_mode & 0o777, st.st_uid, st.st_gid)
+    systemctl("restart", "--no-block", "audite-moi-web.service")
+    return True, "Interface redémarrée : reconnectez-vous" + (" avec le nouveau mot de passe." if "mot de passe de l'interface" in changes else "."), changes
+
+
+ACTIONS = {
+    "controles": ("Contrôles réseau", act_controles),
+    "sauvegardes": ("Sauvegardes à vérifier", act_sauvegardes),
+    "opnsense": ("Routeur OPNsense", act_opnsense),
+    "opnsense-tester": ("Test de la connexion à OPNsense", act_opnsense_tester),
+    "opnsense-effacer": ("Effacement de la clé OPNsense", act_opnsense_effacer),
+    "telegram": ("Alertes Telegram", act_telegram),
+    "telegram-tester": ("Test des alertes Telegram", act_telegram_tester),
+    "telegram-effacer": ("Désactivation des alertes Telegram", act_telegram_effacer),
+    "planification": ("Planification des audits", act_planification),
+    "interface": ("Interface web", act_interface),
+}
+SANS_MODIFICATION = {"opnsense-tester", "telegram-tester"}
+
+
+# ------------------------------------------------------------- exportation --
+def exporter(cx):
+    """Vue publique des réglages pour l'interface : aucun secret, seulement s'il est défini."""
+    c = lire_conf(cx.conf)
+    web = lire_json(cx.web, {})
+    p = planning_actuel(cx.systemd)
+    cle = c.get("OPNSENSE_KEY", "")
+    d = {
+        "date": int(time.time()),
+        "controles": {"externe": est_oui(c.get("EXTERNE", "oui")), "domaines_extra": c.get("DOMAINES_EXTRA", ""),
+                      "scan_reseau": est_oui(c.get("SCAN_RESEAU", "oui")), "scan_reseaux": c.get("SCAN_RESEAUX", "")},
+        "sauvegardes": lire_sauvegardes(c.get("SAUVEGARDES", "")),
+        "opnsense": {"url": c.get("OPNSENSE_URL", ""), "cle_definie": bool(cle), "cle_fin": cle[-4:] if len(cle) > 12 else "",
+                     "secret_defini": bool(c.get("OPNSENSE_SECRET")),
+                     "verifier_tls": est_oui(c.get("OPNSENSE_VERIFIER_TLS", "oui"))},
+        "telegram": {"jeton_defini": bool(c.get("TELEGRAM_TOKEN")), "chat_id": c.get("TELEGRAM_CHAT_ID", ""),
+                     "alertes": est_oui(c.get("ALERTES", "oui")), "interface_url": c.get("INTERFACE_URL", "")},
+        "planification": p,
+        "interface": {"ecoute": web.get("ecoute", ""), "port": web.get("port", ""), "https": bool(web.get("tls_cert")),
+                      "duree_session_h": web.get("duree_session_h", 12)},
+    }
+    ecrire_json(os.path.join(cx.etat, "configuration.json"), d, cx.groupe)
+    return d
+
+
+def alertes_actives(conf):
+    return bool(conf.get("TELEGRAM_TOKEN") and conf.get("TELEGRAM_CHAT_ID")) and est_oui(conf.get("ALERTES", "oui"))
+
+
+# ---------------------------------------------------------------- principal --
+def traiter(dem, cx):
+    ident = str(dem.get("id", ""))[:40]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,40}", ident):
+        raise Refus("identifiant de demande invalide")
+    action = dem.get("action")
+    if action not in ACTIONS:
+        raise Refus("réglage inconnu")
+    valeurs = dem.get("valeurs") or {}
+    if not isinstance(valeurs, dict):
+        raise Refus("valeurs illisibles")
+    res = ACTIONS[action][1](valeurs, cx)
+    ok, message, changes = res[0], res[1], res[2]
+    return {"id": ident, "action": action, "libelle": ACTIONS[action][0], "ok": ok, "message": message,
+            "changements": changes, "test_ok": res[3] if len(res) > 3 else None}
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Réglages d'Audite-moi modifiés depuis l'interface web")
+    ap.add_argument("--demande", default="/var/lib/audite-moi/demande/configurer")
+    ap.add_argument("--etat", default="/var/lib/audite-moi/etat")
+    ap.add_argument("--conf", default="/etc/audite-moi/audit.conf")
+    ap.add_argument("--web", default="/etc/audite-moi/web.json")
+    ap.add_argument("--systemd", default="/etc/systemd/system")
+    ap.add_argument("--groupe", default="audite-moi")
+    ap.add_argument("--exporter", action="store_true", help="écrit seulement la vue publique des réglages (configuration.json)")
+    a = ap.parse_args()
+    cx = Contexte(a)
+    if a.exporter:
+        exporter(cx)
+        return
+    try:
+        with open(a.demande, encoding="utf-8") as f:
+            brut = f.read(16384)
+    except OSError:
+        return
+    finally:
+        try:
+            os.remove(a.demande)   # sinon audite-moi-configurer.path relancerait en boucle
+        except OSError:
+            pass
+    dem = {}
+    try:
+        with open(a.conf, encoding="utf-8") as f:
+            avant = f.read()
+    except OSError:
+        avant = ""
+    try:
+        dem = json.loads(brut)
+        if not isinstance(dem, dict):
+            dem = {}
+            raise Refus("demande illisible")
+        ent = traiter(dem, cx)
+    except Refus as exc:
+        act = dem.get("action") if isinstance(dem.get("action"), str) else ""
+        ent = {"id": str(dem.get("id", ""))[:40], "action": act[:40], "libelle": ACTIONS.get(act, ("Réglage",))[0],
+               "ok": False, "message": str(exc), "changements": [], "refus": True}
+    except (ValueError, OSError) as exc:
+        ent = {"id": str(dem.get("id", ""))[:40], "action": "", "libelle": "Erreur", "ok": False,
+               "message": "Erreur : {}".format(str(exc)[:300]), "changements": [], "refus": True}
+    ent["date"] = int(time.time())
+    ent["par"] = str(dem.get("par", ""))[:60]
+    journal = lire_json(os.path.join(a.etat, "configuration-journal.json"), [])
+    journal.append(ent)
+    ecrire_json(os.path.join(a.etat, "configuration-journal.json"), journal[-GARDE_JOURNAL:], a.groupe)
+    try:
+        exporter(cx)
+    except (OSError, ValueError):
+        pass
+    ecrire_json(os.path.join(a.etat, "configuration-resultat.json"), ent, a.groupe)
+    if ent.get("changements") or ent.get("refus"):
+        if ent.get("refus"):
+            texte = "⚠️ <b>Modification de réglage refusée</b>\n{} : {}".format(html.escape(ent["libelle"]), html.escape(ent["message"][:300]))
+        else:
+            texte = "⚙️ <b>Réglages modifiés depuis l'interface</b>\n{}".format(html.escape(", ".join(ent["changements"])))
+        if ent["par"]:
+            texte += "\nDemandé depuis {}".format(html.escape(ent["par"]))
+        if alertes_actives(lire_conf(a.conf)):
+            notifier(texte, a.conf)
+        elif avant and alertes_actives(lire_conf_texte(avant)):
+            # les alertes viennent d'être coupées : prévenir avec l'ancienne configuration,
+            # pour qu'une désactivation ne passe pas inaperçue
+            notifier(texte, avant_fichier(avant, a.etat))
+    print("{} : {} — {}".format(datetime.datetime.fromtimestamp(ent["date"]).isoformat(), ent["libelle"], "réussi" if ent["ok"] else "échec"),
+          file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
