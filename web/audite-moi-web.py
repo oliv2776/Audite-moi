@@ -1565,7 +1565,10 @@ def page_inventaire(app, csrf, nonce):
             rows.append('<tr><td><b>{ip}</b>{moi}<span class="modele">{nom}</span></td><td class="etat">{v}</td><td>{x}</td><td class="etat">{f}</td></tr>'.format(
                 ip=esc(a.get("ip", "")), moi=" (ce NAS)" if a.get("ip") in nas_ips else "", nom=esc(" · ".join(x for x in (a.get("nom"), a.get("fabricant")) if x)),
                 v=esc(versions) or "—", x=expo("internet" if a.get("expose") else "lan"),
-                f=('<span class="pastille crit">{} exploitée(s)</span> '.format(len(ex)) if ex else "") + ("{} connue(s)".format(nf) if nf else '<span class="muted">aucune connue</span>')))
+                f=('<span class="pastille crit">{} exploitée(s)</span> '.format(len(ex)) if ex else "") + ("{} connue(s)".format(nf) if nf else (
+                    '<span class="muted">vérifiées paquet par paquet</span>' if a.get("ip") in nas_ips else
+                    '<span class="muted" title="{}">non comparées</span>'.format(esc("; ".join(sorted({s["non_compare"] for s in sv if s.get("non_compare")}))))
+                    if any(s.get("non_compare") for s in sv) else '<span class="muted">aucune connue</span>'))))
         out.append('<div class="card"><h2>Appareils du réseau <span class="mini">versions détectées par nmap, failles d’après la base NVD</span></h2><div class="tw"><table><thead><tr><th>Appareil</th>'
                    '<th>Services et versions</th><th>Exposition</th><th>Failles</th></tr></thead><tbody>{}</tbody></table></div></div>'.format("".join(rows)))
     return coque(donnees, csrf, nonce, "inventaire", "Inventaire", "".join(out), ctx,

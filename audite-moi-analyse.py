@@ -302,6 +302,21 @@ def nvd(cpe, cle):
     return res
 
 
+DISTRIB = re.compile(r"ubuntu|debian|deb\d|raspbian|\bel\d|\.el\d|\bfc\d|\+deb|alpine|synology|qnap", re.I)
+
+
+def comparable(service, nas):
+    """Peut-on croiser la version annoncée avec la base NVD sans fausse alerte ? (None si oui, sinon la raison)"""
+    if nas:
+        return "ce serveur : ses failles sont vérifiées paquet par paquet (OSV)"
+    texte = "{} {}".format(service.get("produit", ""), service.get("version", ""))
+    if DISTRIB.search(texte):
+        return "version de distribution : les correctifs y sont rétroportés sans changer le numéro"
+    if re.search(r"samba", service.get("produit", ""), re.I) and (service.get("version") in ("4.6.2", "") or "X" in service.get("version", "")):
+        return "version de Samba non mesurable par nmap (il affiche « 4.6.2 » ou « 3.X - 4.X » quelle que soit la version)"
+    return None
+
+
 def cmd_lan(a):
     try:
         racine = ET.parse(a.xml).getroot()
@@ -333,8 +348,14 @@ def cmd_lan(a):
                              "cpe": next((c for c in (cpe23(x) for x in cpes) if c), None)})
         appareils.append({"ip": ip, "nom": hn.get("name", "") if hn is not None else "", "mac": mac, "fabricant": fab, "services": services,
                           "expose": sorted("{}:{}".format(ip, s["port"]) for s in services if "{}:{}".format(ip, s["port"]) in exposes)})
-    # failles connues par version (NVD), avec un budget de temps : l'API publique limite le débit
-    cpes = sorted({s["cpe"] for ap in appareils for s in ap["services"] if s["cpe"]})
+    # failles connues par version (NVD), avec un budget de temps : l'API publique limite le débit.
+    # Écartés : ce serveur (vérifié par ses paquets), versions de distribution (correctifs rétroportés),
+    # empreintes connues pour être fausses : ce sont des faux positifs garantis.
+    nas = set(a.nas.split())
+    for ap in appareils:
+        for s in ap["services"]:
+            s["non_compare"] = comparable(s, ap["ip"] in nas) if s["cpe"] else None
+    cpes = sorted({s["cpe"] for ap in appareils for s in ap["services"] if s["cpe"] and not s["non_compare"]})
     connus, debut, ignores = {}, time.time(), 0
     for c in cpes[:40]:
         if time.time() - debut > a.budget:
@@ -352,13 +373,13 @@ def cmd_lan(a):
     for ap in appareils:
         ports = {s["port"] for s in ap["services"]}
         for s in ap["services"]:
-            vul = connus.get(s["cpe"], []) if s["cpe"] else []
+            vul = connus.get(s["cpe"], []) if s["cpe"] and not s["non_compare"] else []
             ex = sorted({c for c, _, x in vul if x or c in k})
             s["failles"], s["exploitees"] = len(vul), ex
             s["cvss_max"] = max([sc for _, sc, _ in vul] or [0])
             T("Services et versions détectés", ap["ip"], ap["nom"] or ap["fabricant"], "{}/{}".format(s["port"], s["proto"]), s["service"],
               " ".join(x for x in (s["produit"], s["version"]) if x) or "—",
-              ("@WARN " if s["cvss_max"] >= 7 else "") + str(len(vul)) if vul else "0", "@CRIT " + liste(ex, 2) if ex else "—")
+              ("@WARN " if s["cvss_max"] >= 7 else "") + str(len(vul)) if vul else ("non comparé" if s["non_compare"] else "0"), "@CRIT " + liste(ex, 2) if ex else "—")
             if not vul:
                 continue
             qui = "{}{}".format(ap["ip"], " ({})".format(ap["nom"] or ap["fabricant"]) if ap["nom"] or ap["fabricant"] else "")
