@@ -151,7 +151,7 @@ Ils se règlent dans l'interface (**Réglages › Réseau** et **Réglages › O
 ### Créer la clé API d'OPNsense
 
 1. **Système > Accès > Utilisateurs > +** : utilisateur `audite-moi`, cochez « Générer un mot de passe brouillé » (il ne se connectera jamais à l'interface).
-2. Dans **Privilèges effectifs**, ajoutez uniquement **System: Firmware** et **Diagnostics: Backup & Restore** (selon la version : **System: Configuration: Backups**). Enregistrez.
+2. Dans **Privilèges effectifs**, ajoutez uniquement **System: Firmware** et **Diagnostics: Configuration History**. Enregistrez. (C'est ce second privilège qui ouvre l'API de téléchargement de la configuration, `api/core/backup/*` ; « System: Configuration: Backups » ne donne accès qu'à l'ancienne page web et provoque une erreur 403.)
 3. Rouvrez l'utilisateur, section **Clés API**, bouton **+** : OPNsense télécharge un fichier `apikey.txt` contenant `key=` et `secret=`.
 4. Dans l'interface, **Réglages › OPNsense** : adresse du routeur, clé, secret ; la connexion est testée. (En ligne de commande : `sudo ./install.sh --configurer-opnsense`.)
 
