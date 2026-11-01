@@ -76,6 +76,28 @@ class TestAnalyse(unittest.TestCase):
         self.assertEqual(ap["192.168.1.10"]["services"][0]["cpe"], "cpe:2.3:a:openbsd:openssh:9.6p1:*:*:*:*:*:*:*")
         self.assertEqual(ap["192.168.20.5"]["expose"], ["192.168.20.5:80"])
 
+    def test_pas_de_faux_positifs(self):
+        """Ce serveur, versions de distribution et Samba vu par nmap : jamais comparés à la NVD (rapport réel du 01/11/2026)."""
+        x = os.path.join(self.tmp.name, "nmap-fp.xml")
+        with open(x, "w") as f:
+            f.write("""<nmaprun><host><status state="up"/><address addr="10.10.1.10" addrtype="ipv4"/><ports>
+<port protocol="tcp" portid="445"><state state="open"/><service name="netbios-ssn" product="Samba smbd" version="4.6.2"><cpe>cpe:/a:samba:samba:4.6.2</cpe></service></port>
+</ports></host><host><status state="up"/><address addr="10.10.1.20" addrtype="ipv4"/><ports>
+<port protocol="tcp" portid="22"><state state="open"/><service name="ssh" product="OpenSSH" version="9.6p1 Ubuntu 3ubuntu13.20"><cpe>cpe:/a:openbsd:openssh:9.6p1</cpe></service></port>
+<port protocol="tcp" portid="445"><state state="open"/><service name="netbios-ssn" product="Samba smbd" version="4.6.2"><cpe>cpe:/a:samba:samba:4.6.2</cpe></service></port>
+</ports></host></nmaprun>""")
+        table = json.load(open(self.table))
+        table = dict({"cpe%3A2.3%3Aa%3Asamba": {"status": 200, "fichier": table["virtualMatchString=cpe%3A2.3%3Aa%3Aboa%3Aboa%3A0.94.14rc21"]["fichier"]},
+                      "cpe%3A2.3%3Aa%3Aopenbsd": {"status": 200, "fichier": table["virtualMatchString=cpe%3A2.3%3Aa%3Aboa%3Aboa%3A0.94.14rc21"]["fichier"]}}, **table)
+        t2 = os.path.join(os.path.dirname(self.table), "table-fp.json")
+        json.dump(table, open(t2, "w"))
+        c, t, inv = self.lancer("lan", x, "--nas", "10.10.1.10", env={"AUDITE_MOI_HTTP_MOCK": t2})
+        self.assertEqual([x for x in c if x[0] in ("CRIT", "WARN")], [])
+        ap = {a["ip"]: a for a in json.load(open(os.path.join(inv, "appareils.json")))}
+        self.assertIn("ce serveur", ap["10.10.1.10"]["services"][0]["non_compare"])
+        self.assertIn("distribution", ap["10.10.1.20"]["services"][0]["non_compare"])
+        self.assertIn("Samba", ap["10.10.1.20"]["services"][1]["non_compare"])
+
     def test_cpe(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location("an", ANALYSE)
