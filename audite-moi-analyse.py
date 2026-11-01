@@ -264,16 +264,40 @@ def cmd_images(a):
                                "exploitees": []} for i in images])
         return
     k, e = kev(), epss(tout)
-    inv = []
+    inv, internes = [], []
+    maj = "Mettez l'image à jour (`docker compose pull && docker compose up -d`) ; si aucune version corrigée n'existe, changez d'image ou retirez l'accès depuis Internet"
     for i in images:
         ex = sorted(c for c in i["cves"] if c in k)
         inv.append({"image": i["image"], "expose": i["expose"], "critiques": i["sev"].count("CRITICAL"), "hautes": i["sev"].count("HIGH"), "exploitees": ex,
                     "epss_max": max([e.get(c) or 0 for c in i["cves"]] or [0])})
-        if ex:
-            F("CRIT" if i["expose"] else "WARN", "Image {} : {} faille(s) exploitée(s) activement".format(i["image"], len(ex)),
+        if ex and i["expose"]:   # image d'un service joignable depuis Internet : un constat par image
+            F("CRIT", "Image {} : {} faille(s) exploitée(s) activement".format(i["image"], len(ex)),
               "\n".join("{} ({}) : {}".format(c, i["cves"][c][0], k[c].get("vulnerabilityName", "")) for c in ex[:6]) +
-              ("\nLe conteneur {} est joignable depuis Internet.".format(i["expose"]) if i["expose"] else ""),
-              "Mettez l'image à jour (`docker compose pull && docker compose up -d`) ; si aucune version corrigée n'existe, changez d'image ou retirez l'accès depuis Internet")
+              "\nLe conteneur {} est joignable depuis Internet.".format(i["expose"]), maj)
+        elif ex:
+            internes.append((i, ex))
+    if len(internes) == 1:
+        i, ex = internes[0]
+        F("WARN", "Image {} : {} faille(s) exploitée(s) activement".format(i["image"], len(ex)),
+          "\n".join("{} ({}) : {}".format(c, i["cves"][c][0], k[c].get("vulnerabilityName", "")) for c in ex[:6]), maj)
+    elif internes:
+        # Même cause (souvent une bibliothèque de l'image de base, ex. brotli ou openssl) : un seul constat, pas un par image
+        communes = {}
+        for i, ex in internes:
+            for c in ex:
+                communes.setdefault(c, []).append(i)
+        lignes = []
+        for c, ims in sorted(communes.items(), key=lambda x: (-len(x[1]), x[0])):
+            if len(ims) > 1:
+                lignes.append("{} ({}) : {} — dans {} images".format(c, ims[0]["cves"][c][0], k[c].get("vulnerabilityName", ""), len(ims)))
+        for i, ex in internes:
+            propres = [c for c in ex if len(communes[c]) == 1]
+            if propres:
+                lignes.append("{} : {}".format(i["image"], ", ".join("{} ({})".format(c, i["cves"][c][0]) for c in propres[:4])))
+        lignes.append("Images concernées : " + ", ".join(i["image"] for i, _ in internes))
+        F("WARN", "Failles exploitées activement dans {} images non exposées à Internet".format(len(internes)), "\n".join(lignes),
+          "Mettez ces images à jour (`docker compose pull && docker compose up -d` dans chaque projet) : une faille commune à plusieurs images vient en général "
+          "de leur système de base et disparaît quand l'éditeur publie une nouvelle version. Une image figée sur une version (ex. `:4.6.3`) ne reçoit plus ces correctifs.")
     T("Images : failles exploitées et probabilité d'exploitation", "Image", "Critiques", "Élevées", "Exploitées activement", "EPSS max", "Exposition")
     for i in sorted(inv, key=lambda x: (-len(x["exploitees"]), -x["epss_max"])):
         T("Images : failles exploitées et probabilité d'exploitation", i["image"], i["critiques"], i["hautes"],

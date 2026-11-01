@@ -17,6 +17,7 @@ Chaque audit produit un rapport classé par priorité (**critique**, **attention
 - **ZFS** : état des pools, remplissage, erreurs, dernier scrub et sa planification, TRIM des pools SSD, ZED et ses notifications, ARC, chiffrement, modules prêts pour le prochain noyau.
 - **Docker** : conteneurs arrêtés en erreur, en boucle de redémarrage, *unhealthy*, tués par manque de mémoire, consommation, espace récupérable, rotation des journaux.
 - **GPU et transcodage** : correspondance `/dev/dri/renderD*` ↔ GPU, pilotes (i915/xe, amdgpu, nvidia), encodage VA-API, firmware GuC/HuC, température / charge / mémoire vidéo de la carte AMD, accès réel de chaque conteneur à chaque GPU.
+- **Consommation électrique** : puissance mesurée (processeur via RAPL, carte graphique, onduleur NUT), réglages qui empêchent le NAS de consommer peu au repos : gouverneur et préférence énergie/performance du processeur, options de démarrage (`intel_idle.max_cstate`, `pcie_aspm=off`…), états de veille profonds (C-states), veille des liens PCIe (ASPM) et SATA (ALPM), carte AMD bloquée en haute fréquence, disques mécaniques hors pool sans mise en veille, carte graphique dédiée alors que l'iGPU suffirait au transcodage. Rien n'est modifié : chaque constat indique le réglage à appliquer et ses précautions.
 - **Réseau** : vitesse des liens, DNS, IPv6 publique.
 - **Sauvegardes** : snapshots par pool, outils de sauvegarde (règle 3-2-1), **date de la dernière sauvegarde réussie** de chaque tâche planifiée (restic, borg, kopia, syncoid, rclone…), échecs, **copie hors du serveur** ou non ; vos propres preuves de sauvegarde (`SAUVEGARDES`, voir plus bas).
 - **Tendances** : rythme de remplissage de chaque pool et date prévue des 90 % (à partir des relevés horaires).
@@ -153,7 +154,7 @@ Ils se règlent dans l'interface (**Réglages › Réseau** et **Réglages › O
 ### Créer la clé API d'OPNsense
 
 1. **Système > Accès > Utilisateurs > +** : utilisateur `audite-moi`, cochez « Générer un mot de passe brouillé » (il ne se connectera jamais à l'interface).
-2. Dans **Privilèges effectifs**, ajoutez uniquement **System: Firmware** et **Diagnostics: Configuration History**. Enregistrez. (C'est ce second privilège qui ouvre l'API de téléchargement de la configuration, `api/core/backup/*` ; « System: Configuration: Backups » ne donne accès qu'à l'ancienne page web et provoque une erreur 403.)
+2. Dans **Privilèges effectifs**, ajoutez uniquement **System: Firmware**, **Diagnostics: Configuration History** et, facultatif, **Diagnostics: ARP Table**. Enregistrez. (C'est le deuxième qui ouvre l'API de téléchargement de la configuration, `api/core/backup/*` ; « System: Configuration: Backups » ne donne accès qu'à l'ancienne page web et provoque une erreur 403. La table ARP donne l'adresse MAC et le fabricant des appareils des autres réseaux, que le scan du NAS ne voit pas : sans elle, un appareil qui change d'adresse IP passe pour un nouvel appareil.)
 3. Rouvrez l'utilisateur, section **Clés API**, bouton **+** : OPNsense télécharge un fichier `apikey.txt` contenant `key=` et `secret=`.
 4. Dans l'interface, **Réglages › OPNsense** : adresse du routeur, clé, secret ; la connexion est testée. (En ligne de commande : `sudo ./install.sh --configurer-opnsense`.)
 
@@ -275,6 +276,8 @@ services:
 | radeontop / intel-gpu-tools | charge instantanée du GPU | `sudo apt install radeontop intel-gpu-tools` |
 | miniupnpc | redirections UPnP de la box | `sudo apt install miniupnpc` |
 | nmap | scan du réseau local | `sudo apt install nmap` |
+| powertop | ce qui empêche le processeur de dormir (onglets « Idle stats », « Tunables ») | `sudo apt install powertop` |
+| hdparm | état (rotation / veille) des disques mécaniques, sans les réveiller | `sudo apt install hdparm` |
 | conntrack | connexions reçues par les conteneurs Docker (si `/proc/net/nf_conntrack` est absent) | `sudo apt install conntrack` |
 
 ## Dépannage

@@ -65,6 +65,22 @@ class TestAnalyse(unittest.TestCase):
         i = json.load(open(os.path.join(inv, "images.json")))[0]
         self.assertEqual((i["critiques"], i["hautes"], i["exploitees"]), (1, 1, ["CVE-2023-9999"]))
 
+    def test_images_regroupees(self):
+        """Plusieurs images non exposées avec la même faille exploitée : un seul constat, pas un par image."""
+        d = os.path.join(self.tmp.name, "trivy2")
+        os.makedirs(d)
+        for n, img in enumerate(["a/radarr", "a/sonarr", "a/lidarr"]):
+            with open(os.path.join(d, "{}.json".format(n)), "w") as f:
+                json.dump({"ArtifactName": img, "Results": [{"Vulnerabilities": [
+                    {"VulnerabilityID": "CVE-2023-9999", "PkgName": "libboa", "Severity": "HIGH"}]}]}, f)
+            with open(os.path.join(d, "{}.meta".format(n)), "w") as f:
+                json.dump({"image": img, "expose": ""}, f)
+        c, t, inv = self.lancer("images", d)
+        warn = self.titres(c, "WARN")
+        self.assertIn("Failles exploitées activement dans 3 images non exposées à Internet", warn)
+        self.assertEqual(len([x for x in warn if "exploitée" in x]), 1)
+        self.assertFalse(self.titres(c, "CRIT"))
+
     def test_lan(self):
         c, t, inv = self.lancer("lan", os.path.join(ICI, "fixtures", "nmap.xml"), "--exposes", "192.168.20.5:80", "--nas", "192.168.1.10")
         crit = self.titres(c, "CRIT")

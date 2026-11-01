@@ -17,7 +17,7 @@
 #  https://github.com/oliv2776/Audite-moi
 # =============================================================================
 
-VERSION="1.4.0"
+VERSION="1.5.0"
 PROG=${0##*/}
 NL=$'\n'
 TAB=$'\t'
@@ -210,11 +210,11 @@ declare -a T_SEC=() T_TTL=() T_FILE=()                    # tableaux
 declare -a X_SEC=() X_TTL=() X_FILE=()                    # données brutes
 CUR="" SEC_N=0
 
-SEC_ORDER=(systeme materiel disques zfs docker gpu reseau sauvegardes cloudflare exposition domaines applis opnsense lan maj comptes ssh parefeu dockersec fichiers noyau journaux outils vulns)
+SEC_ORDER=(systeme materiel disques zfs docker gpu energie reseau sauvegardes cloudflare exposition domaines applis opnsense lan maj comptes ssh parefeu dockersec fichiers noyau journaux outils vulns)
 declare -A SEC_TITLE=(
   [systeme]="Système" [materiel]="Matériel : processeur, mémoire, températures, onduleur"
   [disques]="Disques (SMART)" [zfs]="Pools ZFS" [docker]="Docker : état des conteneurs"
-  [gpu]="GPU et transcodage" [reseau]="Réseau" [sauvegardes]="Sauvegardes et snapshots"
+  [gpu]="GPU et transcodage" [energie]="Consommation électrique" [reseau]="Réseau" [sauvegardes]="Sauvegardes et snapshots"
   [cloudflare]="Exposition Internet : tunnels Cloudflare" [exposition]="Vu d'Internet : services publiés"
   [domaines]="Domaines : DNS, messagerie, sous-domaines et certificats"
   [applis]="Applications auto-hébergées" [opnsense]="Routeur OPNsense" [lan]="Réseau local (scan)"
@@ -227,12 +227,12 @@ declare -A SEC_TITLE=(
 )
 declare -A SEC_SHORT=(
   [systeme]="Système" [materiel]="Matériel" [disques]="Disques" [zfs]="ZFS" [docker]="Docker"
-  [gpu]="GPU" [reseau]="Réseau" [sauvegardes]="Sauvegardes" [cloudflare]="Cloudflare"
+  [gpu]="GPU" [energie]="Énergie" [reseau]="Réseau" [sauvegardes]="Sauvegardes" [cloudflare]="Cloudflare"
   [exposition]="Vu d'Internet" [domaines]="Domaines" [applis]="Applications" [opnsense]="OPNsense" [lan]="Réseau local" [maj]="Mises à jour" [comptes]="Comptes" [ssh]="SSH" [parefeu]="Pare-feu"
   [dockersec]="Sécurité Docker" [fichiers]="Fichiers" [noyau]="Noyau" [journaux]="Journaux" [outils]="Analyses" [vulns]="Vulnérabilités"
 )
 declare -A SEC_CAT=(
-  [systeme]=sante [materiel]=sante [disques]=sante [zfs]=sante [docker]=sante [gpu]=sante
+  [systeme]=sante [materiel]=sante [disques]=sante [zfs]=sante [docker]=sante [gpu]=sante [energie]=sante
   [reseau]=sante [sauvegardes]=sante [cloudflare]=secu [exposition]=secu [domaines]=secu [applis]=secu [opnsense]=secu [lan]=secu [maj]=secu [comptes]=secu [ssh]=secu
   [parefeu]=secu [dockersec]=secu [fichiers]=secu [noyau]=secu [journaux]=secu [outils]=secu [vulns]=secu
 )
@@ -356,6 +356,8 @@ START=$NOW
 
 # Variables partagées entre sections
 declare -A DISK_POOL=() POOL_MEDIA=() POOL_NVME=() SNAP_COUNT=() SNAP_LAST=()
+declare -a CRC_DISQUES=()   # disques avec erreurs de liaison (section Énergie : prudence avec la veille SATA)
+IGPU_MASQUE=0               # iGPU Intel présent mais désactivé (section Énergie)
 declare -A EXPOSED=() REACHABLE=() PORTMAP=() CNAMES=() CF_NETMODE=() VIA_PORT=()
 declare -a POOLS=() ZFS_MOUNTS=() INGRESS=() PERM_BAD=()
 DOCKER_OK=0 SSH_EXPOSED=0 SSH_PASS=0 REBOOT_REQ=0 CF_FOUND=0 CF_NETS="" IPV6_GLOBAL="" TRIM_SCHED=""
@@ -812,7 +814,7 @@ check_disques() {
       if ((offu >= ${SEUIL[disque_en_attente_critique]:-10})); then lvl=CRIT; else lvl=$(worst "$lvl" WARN); fi; iss+=("$offu secteur(s) irrécupérable(s)")
     fi
     if isint "$repu" && ((repu > 0)); then lvl=$(worst "$lvl" WARN); iss+=("$repu erreur(s) non corrigée(s) signalée(s)"); fi
-    if isint "$crc" && ((crc > 0)); then lvl=$(worst "$lvl" WARN); iss+=("$crc erreur(s) CRC de liaison"); cablefix=1; fi
+    if isint "$crc" && ((crc > 0)); then lvl=$(worst "$lvl" WARN); iss+=("$crc erreur(s) CRC de liaison"); cablefix=1; CRC_DISQUES+=("$dev"); fi
     if isint "$grown" && ((grown > 0)); then lvl=$(worst "$lvl" WARN); iss+=("$grown défaut(s) acquis"); fi
     local tw=${SEUIL[disque_temp_hdd_attention]:-50} tc=${SEUIL[disque_temp_hdd_critique]:-60}
     case $kind in SSD) tw=${SEUIL[disque_temp_ssd_attention]:-60} tc=${SEUIL[disque_temp_ssd_critique]:-70} ;; NVMe) tw=${SEUIL[disque_temp_nvme_attention]:-70} tc=${SEUIL[disque_temp_nvme_critique]:-80} ;; esac
@@ -1134,7 +1136,15 @@ check_docker() {
         [[ $policy == no || -z $policy ]] && norestart+=("$name") ;;
       restarting)
         cell="@CRIT redémarre en boucle"
-        crit "Conteneur $name en boucle de redémarrage" "Il plante dès son démarrage (code de sortie $code)." "\`docker logs --tail 100 $name\`" ;;
+        local cause="" cfix="\`docker logs --tail 100 $name\`" api
+        api=$(tmo 15 docker logs --tail 30 "$name" 2>&1 | grep -oE 'client version [0-9.]+ is too old[^"]*' | tail -n 1)
+        if [[ -n $api ]]; then
+          cause=" Le programme parle une version trop ancienne de l'API Docker, refusée depuis Docker 29 : « ${api%%,*} »."
+          cfix="Mettez l'image à jour ; si le projet n'est plus maintenu, remplacez-le"
+          [[ $image == *containrrr/watchtower* ]] && { cause+=" Le projet containrrr/watchtower est archivé et ne sera pas corrigé : tant qu'il plante, vos conteneurs ne sont plus mis à jour automatiquement."
+            cfix="Remplacez l'image par le fork maintenu \`nickfedor/watchtower\` (mêmes options et variables WATCHTOWER_*) dans le docker-compose, puis \`docker compose up -d\`"; }
+        fi
+        crit "Conteneur $name en boucle de redémarrage" "Il plante dès son démarrage (code de sortie $code).$cause" "$cfix" ;;
       exited|dead)
         if [[ $oom == true ]]; then
           cell="@WARN arrêté (mémoire)"
@@ -1214,6 +1224,7 @@ check_gpu() {
     [[ $g == *"Advanced Micro Devices"* || $g == *"[AMD/ATI]"* || $g == *"ATI Technologies"* ]] && has_amd=1
   done
   if ((!has_intel)) && [[ ${CPU_MODEL:-} =~ Intel.*Core.*-[0-9]{4,5}([A-Z]*) ]] && [[ ${BASH_REMATCH[1]} != *F* ]]; then
+    IGPU_MASQUE=1
     info "iGPU Intel du processeur non visible" "Le processeur (${CPU_MODEL}) possède un iGPU (Quick Sync), mais il n'apparaît pas : il est probablement désactivé dans le BIOS parce qu'une carte graphique est installée." \
       "Dans le BIOS : activez « iGPU Multi-Monitor » (ou « Internal Graphics : Enabled »), redémarrez, puis vérifiez \`ls /dev/dri\` (un nœud renderD de plus)"
   fi
@@ -1239,7 +1250,9 @@ check_gpu() {
     drows+=("$b$TAB$vname$TAB${drv:-?}$TAB${pci:-?}$TAB$(stat -c '%A %U:%G' "$n" 2>/dev/null)$TAB$desc")
   done
   ((${#drows[@]})) && tbl "Nœuds de rendu (/dev/dri)" < <(printf 'Nœud\tFabricant\tPilote\tAdresse PCI\tDroits\tPériphérique\n'; printf '%s\n' "${drows[@]}")
-  local klog; klog=$( { journalctl -k -b --no-pager -q 2>/dev/null || dmesg 2>/dev/null; } )
+  local klog=""
+  if attendre klog && [[ -s $WORK/fond/klog.out ]]; then klog=$(< "$WORK/fond/klog.out")
+  else klog=$( { tmo 120 journalctl -k -b --no-pager -q 2>/dev/null || dmesg 2>/dev/null; } ); fi
 
   if ((has_intel)); then
     local inode=""
@@ -1386,6 +1399,236 @@ check_gpu() {
         "Dans le docker-compose du conteneur : \`devices: [\"/dev/dri:/dev/dri\"]\` (iGPU + carte AMD)"
     fi
   fi
+}
+
+# ------------------------------------------------- consommation électrique --
+lire1() { local v; [[ -r $1 ]] && IFS= read -r v < "$1" 2>/dev/null && printf '%s' "$v"; }
+rapl_watts() {   # rapl_watts dossier_powercap délai → puissance moyenne (W) mesurée sur le délai
+  local d=$1 t=$2 e1 e2 max
+  e1=$(lire1 "$d/energy_uj") && isint "$e1" || return 1
+  sleep "$t"
+  e2=$(lire1 "$d/energy_uj") && isint "$e2" || return 1
+  if ((e2 < e1)); then max=$(lire1 "$d/max_energy_range_uj"); isint "$max" || return 1; e2=$((e2 + max)); fi
+  awk -v a="$e1" -v b="$e2" -v t="$t" 'BEGIN {printf "%.1f", (b - a) / 1e6 / t}'
+}
+check_energie() {
+  section energie
+  local sysr=${AUDITE_MOI_SYS:-/sys} cmdline delai=${AUDITE_MOI_RAPL_DELAI:-2}
+  cmdline=$(lire1 "${AUDITE_MOI_CMDLINE:-/proc/cmdline}")
+  local -a rows=() mes=()
+  local nwarn=0 c v
+
+  # Mesures : processeur (RAPL), cartes graphiques, onduleur
+  local d nom w
+  for d in "$sysr"/class/powercap/intel-rapl:[0-9]; do
+    [[ -r $d/energy_uj ]] || continue
+    nom=$(lire1 "$d/name"); w=$(rapl_watts "$d" "$delai") || continue
+    mes+=("Processeur (${nom:-paquet})$TAB$w W$TAB""compteur RAPL, moyenne sur $delai s")
+  done
+  local dgpu_w="" card dev vend lvl hw p
+  for card in "$DRM_CLASS"/card[0-9]*; do
+    [[ $card =~ card[0-9]+$ ]] || continue
+    dev=$card/device; vend=$(lire1 "$dev/vendor")
+    [[ $vend == 0x1002 ]] || continue
+    for hw in "$dev"/hwmon/hwmon*; do
+      p=$(lire1 "$hw/power1_average") || p=$(lire1 "$hw/power1_input") || continue
+      isint "$p" || continue
+      w=$(awk -v p="$p" 'BEGIN {printf "%.1f", p / 1e6}'); dgpu_w=$w
+      mes+=("Carte graphique AMD (${card##*/})$TAB$w W$TAB""pilote amdgpu")
+    done
+    lvl=$(lire1 "$dev/power_dpm_force_performance_level")
+    if [[ -n $lvl ]]; then
+      if [[ $lvl == auto ]]; then rows+=("Carte AMD ${card##*/} : niveau de performance${TAB}auto${TAB}auto${TAB}@OK conforme")
+      else
+        rows+=("Carte AMD ${card##*/} : niveau de performance${TAB}$lvl${TAB}auto${TAB}@WARN à corriger")
+        warn "Carte graphique AMD bloquée en mode « $lvl »" "La carte ne descend plus à ses fréquences de repos : plusieurs watts perdus en permanence." \
+          "\`echo auto | sudo tee $dev/power_dpm_force_performance_level\`, puis retirez le réglage qui l'impose (script, outil d'overclocking, règle udev)"
+        nwarn=$((nwarn + 1))
+      fi
+    fi
+  done
+  if have nvidia-smi; then
+    while IFS=, read -r nom w; do
+      [[ $w =~ ^[[:space:]]*[0-9.]+ ]] || continue
+      dgpu_w=${w// /}; mes+=("Carte NVIDIA ${nom# }$TAB${w// /} W${TAB}nvidia-smi")
+    done < <(tmo 20 nvidia-smi --query-gpu=name,power.draw --format=csv,noheader,nounits 2>/dev/null)
+  fi
+  if have upsc; then
+    local ups rp ld nominal
+    ups=$(tmo 10 upsc -l 2>/dev/null | head -n 1)
+    if [[ -n $ups ]]; then
+      rp=$(tmo 10 upsc "$ups" ups.realpower 2>/dev/null)
+      if [[ ! $rp =~ ^[0-9.]+$ ]]; then
+        ld=$(tmo 10 upsc "$ups" ups.load 2>/dev/null); nominal=$(tmo 10 upsc "$ups" ups.realpower.nominal 2>/dev/null)
+        [[ $ld =~ ^[0-9.]+$ && $nominal =~ ^[0-9.]+$ ]] && rp=$(awk -v l="$ld" -v n="$nominal" 'BEGIN {printf "%.0f", l * n / 100}')
+      fi
+      [[ $rp =~ ^[0-9.]+$ ]] && mes+=("Tout ce qui est branché sur l'onduleur $ups${TAB}$rp W${TAB}onduleur (NUT)")
+    fi
+  fi
+
+  # Fréquence du processeur : pilote, gouverneur, préférence énergie/performance (EPP)
+  local cf=$sysr/devices/system/cpu/cpu0/cpufreq drv govs epps
+  if [[ -d $cf ]]; then
+    drv=$(lire1 "$cf/scaling_driver")
+    govs=$(cat "$sysr"/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor 2>/dev/null | sort -u | tr '\n' ' '); govs=${govs% }
+    epps=$(cat "$sysr"/devices/system/cpu/cpu[0-9]*/cpufreq/energy_performance_preference 2>/dev/null | sort -u | tr '\n' ' '); epps=${epps% }
+    rows+=("Pilote de fréquence du processeur${TAB}${drv:--}${TAB}—${TAB}—")
+    if [[ " $govs " == *" performance "* ]]; then
+      rows+=("Gouverneur${TAB}$govs${TAB}powersave (intel_pstate, amd-pstate) ou schedutil${TAB}@WARN à corriger")
+      warn "Processeur réglé en mode « performance »" "Gouverneur : $govs (pilote ${drv:-?}). Le processeur reste à haute fréquence et descend moins dans ses états de veille, même quand le NAS ne fait rien ; les gains de réactivité sont imperceptibles pour un serveur." \
+        "Immédiat : \`echo powersave | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor\` (\`schedutil\` si le pilote est acpi-cpufreq) ; durable : \`sudo apt install tuned && sudo tuned-adm profile balanced\`, et retirez ce qui impose « performance » (cpupower, script au démarrage, profil tuned throughput-performance)"
+      nwarn=$((nwarn + 1))
+    else
+      rows+=("Gouverneur${TAB}${govs:--}${TAB}powersave (intel_pstate, amd-pstate) ou schedutil${TAB}@OK conforme")
+    fi
+    if [[ -n $epps ]]; then
+      if [[ " $epps " == *" performance "* && " $govs " == *" performance "* ]]; then
+        rows+=("Préférence énergie/performance (EPP)${TAB}$epps (imposée par le gouverneur)${TAB}balance_power ou balance_performance${TAB}@WARN à corriger")
+      elif [[ " $epps " == *" performance "* ]]; then
+        rows+=("Préférence énergie/performance (EPP)${TAB}$epps${TAB}balance_power ou balance_performance${TAB}@WARN à corriger")
+        warn "Préférence énergie/performance du processeur sur « performance »" "Le processeur privilégie la vitesse sur la consommation (EPP : $epps)." \
+          "\`echo balance_power | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference\` ; durable : \`sudo tuned-adm profile balanced\` ou \`powersave\`"
+        nwarn=$((nwarn + 1))
+      elif [[ " $epps " == *" balance_performance "* ]]; then
+        rows+=("Préférence énergie/performance (EPP)${TAB}$epps${TAB}balance_power (NAS)${TAB}@INFO acceptable")
+      else
+        rows+=("Préférence énergie/performance (EPP)${TAB}$epps${TAB}balance_power (NAS)${TAB}@OK conforme")
+      fi
+    fi
+  else
+    info "Aucun pilote de fréquence du processeur" "Le processeur tourne à fréquence fixe (machine virtuelle, pilote absent ou gestion confiée au BIOS)." \
+      "Dans le BIOS, activez « SpeedStep / Speed Shift » (Intel) ou « Cool'n'Quiet / CPPC » (AMD)"
+  fi
+
+  # Options de démarrage du noyau qui empêchent les économies
+  local -a bad=()
+  for c in $cmdline; do
+    case $c in
+      intel_idle.max_cstate=*|processor.max_cstate=*) v=${c#*=}; isint "$v" && ((v <= 3)) && bad+=("$c : le processeur ne peut pas descendre sous l'état C$v") ;;
+      idle=*) bad+=("$c : le processeur boucle au lieu de dormir") ;;
+      pcie_aspm=off) bad+=("$c : économies d'énergie des liens PCIe désactivées") ;;
+      pcie_port_pm=off) bad+=("$c : mise en veille des ports PCIe désactivée") ;;
+      intel_pstate=disable) bad+=("$c : pilote de fréquence Intel moderne désactivé") ;;
+    esac
+  done
+  if ((${#bad[@]})); then
+    warn "Options de démarrage qui limitent les économies d'énergie" "$(printf '%s\n' "${bad[@]}")" \
+      "Si elles ne corrigent pas un problème précis (souvent ajoutées pour un bug ancien), retirez-les de GRUB_CMDLINE_LINUX_DEFAULT dans /etc/default/grub, puis \`sudo update-grub\` et redémarrez"
+    nwarn=$((nwarn + 1))
+  fi
+
+  # États de veille du processeur (C-states)
+  local cpi=$sysr/devices/system/cpu/cpu0/cpuidle st profond="" ptime=0 tot=0 t up
+  if [[ -d $cpi ]]; then
+    for st in "$cpi"/state[0-9]*; do
+      [[ -d $st ]] || continue
+      t=$(lire1 "$st/time"); isint "$t" && tot=$((tot + t))
+      [[ $(lire1 "$st/disable") == 1 ]] && continue
+      profond=$(lire1 "$st/name"); ptime=${t:-0}
+    done
+    up=$(awk '{printf "%d", $1 * 1e6}' /proc/uptime 2>/dev/null)
+    local pct=""; isint "$up" && ((up > 0)) && isint "$ptime" && pct=$(awk -v a="$ptime" -v b="$up" 'BEGIN {v = 100 * a / b; if (v > 100) v = 100; printf "%.0f", v}')
+    case ${profond^^} in
+      ""|POLL|C1|C1E|C1_ACPI|C1E_ACPI|HALT)
+        rows+=("État de veille le plus profond (cœur 0)${TAB}${profond:-aucun}${TAB}C6 ou plus (Intel), C6/C2_ACPI (AMD)${TAB}@WARN à corriger")
+        warn "Le processeur ne peut pas entrer en veille profonde (${profond:-aucun état})" "Seuls les états de veille légers sont disponibles : un processeur au repos consomme alors plusieurs watts de plus." \
+          "Dans le BIOS : activez « C-States » (et « Package C-State Limit » sur Auto ou C10), désactivez « C1E » seulement si un problème l'exige ; vérifiez aussi les options de démarrage (intel_idle.max_cstate)"
+        nwarn=$((nwarn + 1)) ;;
+      *) rows+=("État de veille le plus profond (cœur 0)${TAB}$profond${pct:+ ($pct % du temps)}${TAB}C6 ou plus (Intel), C6/C2_ACPI (AMD)${TAB}@OK conforme") ;;
+    esac
+  fi
+
+  # PCIe : ASPM (veille des liens) et gestion d'énergie des périphériques
+  local pol; pol=$(lire1 "$sysr/module/pcie_aspm/parameters/policy")
+  if [[ -n $pol ]]; then
+    pol=$(grep -o '\[[a-z]*\]' <<< "$pol" | tr -d '[]')
+    if [[ $pol == performance ]]; then
+      rows+=("ASPM PCIe (politique du noyau)${TAB}$pol${TAB}default ou powersave${TAB}@WARN à corriger")
+      warn "Économies d'énergie PCIe (ASPM) désactivées par le noyau" "Politique ASPM : performance. Les liens PCIe (carte réseau, contrôleur SATA, carte graphique) restent actifs en permanence et empêchent le processeur d'atteindre ses états de veille les plus économes." \
+        "\`echo default | sudo tee /sys/module/pcie_aspm/parameters/policy\` ; retirez \`pcie_aspm.policy=performance\` des options de démarrage s'il y figure"
+      nwarn=$((nwarn + 1))
+    else
+      rows+=("ASPM PCIe (politique du noyau)${TAB}$pol${TAB}default ou powersave${TAB}@OK conforme")
+    fi
+  fi
+  local l n_l1=0 n_l1off=0 pdev; local -a l1off=()
+  for l in "$sysr"/bus/pci/devices/*/link/l1_aspm; do
+    [[ -r $l ]] || continue
+    n_l1=$((n_l1 + 1))
+    if [[ $(lire1 "$l") == 0 ]]; then
+      n_l1off=$((n_l1off + 1)); pdev=${l%/link/l1_aspm}; pdev=${pdev##*/}
+      l1off+=("$pdev${TAB}$(have lspci && lspci -s "$pdev" 2>/dev/null | head -n 1 | sed -E 's/^[^ ]+ //; s/ \[[0-9a-f]{4}\]//' | cut -c1-90)")
+    fi
+  done
+  local klogf=$WORK/fond/klog.out bios_aspm=""
+  [[ -s $klogf ]] && bios_aspm=$(grep -iE "ASPM" "$klogf" | grep -iE "unsupported|not support|disabl|BIOS configuration" | head -n 2 | sed -E 's/^.*kernel: //')
+  if ((n_l1)); then
+    if ((n_l1off)); then
+      rows+=("Liens PCIe en veille L1 (ASPM)${TAB}$((n_l1 - n_l1off)) sur $n_l1${TAB}tous${TAB}@INFO à améliorer")
+      info "Veille PCIe (ASPM L1) désactivée sur $n_l1off lien(s)" "$(printf '%s\n' "${l1off[@]:0:8}" | sed "s/$TAB/ : /")${bios_aspm:+$NL$bios_aspm}" \
+        "Activez « Native ASPM » et « PCIe ASPM » / « L1 Substates » dans le BIOS ; un seul périphérique sans ASPM (souvent une carte réseau ou un contrôleur SATA additionnel) suffit à bloquer les états de veille profonds du boîtier (Pkg C6+). Vérifiez avec \`sudo powertop\` (onglet « Idle stats »)"
+    else
+      rows+=("Liens PCIe en veille L1 (ASPM)${TAB}$n_l1 sur $n_l1${TAB}tous${TAB}@OK conforme")
+    fi
+  elif [[ -n $bios_aspm ]]; then
+    info "Veille PCIe (ASPM) laissée au BIOS" "$bios_aspm" "Activez « Native ASPM » / « PCIe ASPM » dans le BIOS pour que Linux puisse mettre les liens PCIe en veille"
+  fi
+  local rpm_on=0 rpm_tot=0
+  for l in "$sysr"/bus/pci/devices/*/power/control; do
+    [[ -r $l ]] || continue
+    rpm_tot=$((rpm_tot + 1)); [[ $(lire1 "$l") == on ]] && rpm_on=$((rpm_on + 1))
+  done
+  if ((rpm_tot)); then
+    if ((rpm_on * 2 > rpm_tot)); then rows+=("Périphériques PCI avec mise en veille automatique${TAB}$((rpm_tot - rpm_on)) sur $rpm_tot${TAB}la plupart${TAB}@INFO à améliorer")
+    else rows+=("Périphériques PCI avec mise en veille automatique${TAB}$((rpm_tot - rpm_on)) sur $rpm_tot${TAB}la plupart${TAB}@OK conforme"); fi
+  fi
+
+  # SATA : gestion d'énergie du lien (ALPM)
+  local -A lpm=(); local h k lp
+  for h in "$sysr"/class/scsi_host/host*/link_power_management_policy; do
+    [[ -r $h ]] || continue
+    lp=$(lire1 "$h"); [[ -n $lp ]] && lpm[$lp]=$(( ${lpm[$lp]:-0} + 1 ))
+  done
+  if ((${#lpm[@]})); then
+    local resume=""; for k in "${!lpm[@]}"; do resume+="$k ×${lpm[$k]}, "; done; resume=${resume%, }
+    if [[ -n ${lpm[max_performance]:-} ]]; then
+      rows+=("Ports SATA : gestion d'énergie du lien${TAB}$resume${TAB}med_power_with_dipm${TAB}@INFO à améliorer")
+      local crcw=""; ((${#CRC_DISQUES[@]})) && crcw=" Des erreurs de liaison (CRC) ont été relevées sur ${CRC_DISQUES[*]} : réglez d'abord ce problème de câble, puis activez ce réglage et vérifiez que le compteur n'augmente pas."
+      info "Ports SATA sans économie d'énergie du lien" "${lpm[max_performance]} port(s) en max_performance : les liens SATA restent actifs, ce qui empêche le processeur d'atteindre ses états de veille les plus profonds.$crcw" \
+        "Créez /etc/udev/rules.d/90-sata-lpm.rules contenant \`ACTION==\"add\", SUBSYSTEM==\"scsi_host\", KERNEL==\"host*\", ATTR{link_power_management_policy}=\"med_power_with_dipm\"\`, puis redémarrez ; surveillez ensuite les erreurs disque (\`journalctl -k | grep -i ata\`)"
+    else
+      rows+=("Ports SATA : gestion d'énergie du lien${TAB}$resume${TAB}med_power_with_dipm${TAB}@OK conforme")
+    fi
+  fi
+
+  # Disques mécaniques hors pool ZFS : mise en veille programmée ?
+  local b rot etat; local -a dorment=()
+  local spin_conf=0
+  grep -qsE '^[[:space:]]*spindown_time' /etc/hdparm.conf && spin_conf=1
+  systemctl is-active --quiet hd-idle 2>/dev/null && spin_conf=1
+  for b in "$SYS_BLOCK"/sd*; do
+    b=${b##*/}; [[ -e $SYS_BLOCK/$b ]] || continue
+    rot=$(lire1 "$SYS_BLOCK/$b/queue/rotational"); [[ $rot == 1 ]] || continue
+    [[ -n ${DISK_POOL[$b]:-} ]] && continue
+    etat=""; have hdparm && etat=$(tmo 10 hdparm -C "/dev/$b" 2>/dev/null | awk -F': *' '/drive state/ {print $2}')
+    dorment+=("/dev/$b${etat:+ : $etat}")
+  done
+  if ((${#dorment[@]})) && ((!spin_conf)); then
+    info "Disque(s) mécanique(s) hors pool ZFS sans mise en veille programmée" "$(printf '%s\n' "${dorment[@]}")$NL""Un disque 3,5\" consomme 5 à 8 W en rotation, moins de 1 W en veille. Inutile pour un disque sollicité en continu (chaque réveil l'use un peu)." \
+      "Mise en veille après 30 min d'inactivité : \`sudo hdparm -S 241 /dev/sdX\`, rendue durable dans /etc/hdparm.conf (bloc \`/dev/disk/by-id/… { spindown_time = 241 }\`) ou avec l'outil hd-idle"
+  fi
+
+  # Carte graphique dédiée alors que l'iGPU pourrait transcoder
+  if ((IGPU_MASQUE)) && [[ -n $dgpu_w ]]; then
+    info "Carte graphique dédiée allumée en permanence (${dgpu_w} W mesurés par son pilote)" "L'iGPU du processeur (Quick Sync) est désactivé ; il transcode aussi bien pour Jellyfin, Plex ou Tdarr, pour une consommation au repos quasi nulle. La mesure du pilote ne compte pas toute la carte : à la prise, retirer une carte de ce type économise souvent 10 à 20 W." \
+      "Activez l'iGPU dans le BIOS, passez le transcodage sur /dev/dri/renderD128 (Intel), puis retirez la carte si plus rien ne l'utilise"
+  fi
+
+  ((${#mes[@]})) && info "Consommation mesurée" "$(printf '%s\n' "${mes[@]}" | awk -F'\t' '{print $1 " : " $2}')" \
+    "Pour savoir ce qui empêche le processeur de dormir : \`sudo powertop\` (onglets « Idle stats » et « Tunables »). Évitez \`powertop --auto-tune\` en bloc : la veille USB automatique peut couper un onduleur ou un disque USB."
+  ((nwarn)) || ok "Aucun réglage n'empêche les économies d'énergie" "Gouverneur, états de veille du processeur et ASPM ne sont pas bridés."
+  ((${#mes[@]})) && tbl "Consommation mesurée" < <(printf 'Composant\tPuissance\tSource\n'; printf '%s\n' "${mes[@]}")
+  ((${#rows[@]})) && tbl "Réglages d'énergie" < <(printf 'Réglage\tValeur\tRecommandé\tÉtat\n'; printf '%s\n' "${rows[@]}")
 }
 
 check_reseau() {
@@ -2199,6 +2442,7 @@ prechauffer() {   # analyses longues et indépendantes : lancées tout de suite,
     fond domaines domaines_lancer; liste+="domaines, "
   fi
   fond f_ww fichiers_ww; fond f_dpkg fichiers_dpkg; liste+="intégrité des fichiers système, "
+  fond klog tmo 120 journalctl -k -b --no-pager -q   # journal du noyau depuis le démarrage (lent sur un gros journal ; lu par la section GPU)
   ((QUICK)) && { note "Lancé en arrière-plan : ${liste%, }"; return 0; }
   fond f_wd fichiers_wd; fond f_suid fichiers_suid
   if have lynis; then
@@ -2454,9 +2698,10 @@ for i in (list(itfs) if itfs is not None else []):
     if ip and sn and ip[0].isdigit() and i.tag != "wan":
         try:
             net = ipaddress.ip_interface(f"{ip}/{sn}").network
-            if net.is_private:
+            if net.is_private and not net.is_loopback and present(i, "enable"):
                 print(US.join(["N", str(net)]))
-                if present(i, "enable"): reseaux[i.tag] = net
+                print(US.join(["R", ip, descr]))   # adresse du routeur sur ce réseau
+                reseaux[i.tag] = net
         except ValueError: pass
 def nom(itf): return ", ".join(names.get(x, x) for x in itf.split(",")) if itf else "?"
 
@@ -2598,10 +2843,24 @@ if opn is not None and any(c.tag.lower() == "crowdsec" for c in opn): F("OK", "C
 PY
 }
 OPN_NETS="" OPN_FWD=""
+declare -A OPN_ROUTEUR=() OPN_ARP=()   # adresses du routeur → interface ; table ARP du routeur : IP → MAC␟fabricant␟nom
 opn_api() {   # opn_api chemin fichier → code HTTP (identifiants passés par l'entrée standard, pas sur la ligne de commande)
   local -a k=(); oui "$(cfg OPNSENSE_VERIFIER_TLS oui)" || k=(-k)
   printf 'user = "%s:%s"\n' "$(cfg OPNSENSE_KEY)" "$(cfg OPNSENSE_SECRET)" \
     | tmo 40 curl -sS -m 30 "${k[@]}" -K - -o "$2" -w '%{http_code}' "$(cfg OPNSENSE_URL)$1" 2>/dev/null || echo 000
+}
+
+opn_arp() {   # table ARP du routeur : MAC, fabricant et nom des appareils des autres réseaux (le scan du NAS ne voit pas leur MAC)
+  local f="$WORK/opn_arp.json" code ip mac fab nom
+  code=$(opn_api /api/diagnostics/interface/getArp "$f")
+  case $code in
+    200) while IFS=$TAB read -r ip mac fab nom; do
+           [[ $ip =~ ^[0-9.]+$ && -n $mac ]] && OPN_ARP[$ip]="${mac,,}$US$fab$US$nom"
+         done < <(jq -r '(if type == "array" then . else (.rows // []) end)[] | [.ip // "", .mac // "", .manufacturer // "", .hostname // ""] | @tsv' "$f" 2>/dev/null) ;;
+    401|403) info "OPNsense : table ARP illisible (HTTP $code)" "Sans elle, les appareils des autres réseaux apparaissent sans adresse MAC ni fabricant, et un changement d'adresse IP les fait passer pour de nouveaux appareils." \
+               "Ajoutez le privilège « Diagnostics: ARP Table » à l'utilisateur de la clé API (Système > Accès > Utilisateurs)" ;;
+  esac
+  rm -f "$f"
 }
 
 check_opnsense() {
@@ -2632,10 +2891,17 @@ check_opnsense() {
     st=$(jq -r '.status // empty' "$fw" 2>/dev/null); msg=$(jq -r '.status_msg // empty' "$fw" 2>/dev/null)
     case $st in
       update|upgrade) warn "OPNsense ${pv:+$pv }: mises à jour disponibles" "${msg:-Des mises à jour du routeur attendent.}" "OPNsense > Système > Firmware > Mises à jour" ;;
-      none|"") ok "OPNsense ${pv:+$pv }: aucune mise à jour en attente" "${msg:-Dernière vérification faite par le routeur.}" ;;
+      none|"")
+        if [[ ${msg,,} == *"check for update"* || ${msg,,} == *"requires to check"* ]]; then
+          info "OPNsense ${pv:+$pv }: mises à jour jamais vérifiées récemment" "Le routeur ne sait pas encore s'il existe des mises à jour : il faut d'abord qu'il interroge ses dépôts (l'audit, en lecture seule, ne le déclenche pas)." \
+            "OPNsense > Système > Firmware > Statut > « Vérifier les mises à jour » ; pour que ce soit automatique : Système > Paramètres > Cron, ajoutez une tâche quotidienne avec la commande de vérification périodique du firmware"
+        else
+          ok "OPNsense ${pv:+$pv }: aucune mise à jour en attente" "${msg:-Dernière vérification faite par le routeur.}"
+        fi ;;
       *) info "OPNsense ${pv:+$pv }: état du firmware « $st »" "$msg" ;;
     esac
   fi
+  opn_arp
   local xml="$WORK/opn_config.xml"
   code=$(opn_api /api/core/backup/download/this "$xml")
   if [[ $code != 200 ]] || ! grep -q '<opnsense>' "$xml" 2>/dev/null; then
@@ -2652,6 +2918,7 @@ check_opnsense() {
       F) add "$a" "$b" "${c//\\n/$NL}" "$d" ;;
       N) OPN_NETS+="$a " ;;
       X) OPN_FWD+="$a " ;;
+      R) OPN_ROUTEUR[$a]=$b ;;
       T) [[ -n ${TB[$a]:-} ]] || { TB[$a]="$WORK/opn_t_${#TB[@]}.tsv"; TORD+=("$a"); }; printf '%s\n' "$b" >> "${TB[$a]}" ;;
     esac
   done < <(opn_py > "$WORK/opn.py"; python3 -I "$WORK/opn.py" "$xml" "$(hostname -I 2>/dev/null)" "${!ECOUTE[*]}")
@@ -2718,16 +2985,31 @@ check_lan() {
   if [[ $LAN_ETAT == vide ]]; then info "Aucun réseau à scanner" "" "Renseignez SCAN_RESEAUX dans /etc/audite-moi/audit.conf"; return; fi
   local -a ok_c=("${LAN_RES[@]}")
   local origine=$LAN_ORIGINE
-  local x="$WORK/nmap.xml"
+  local x="$WORK/nmap.xml" ip name mac vendor ports
   attendre nmap
   [[ -s $x ]] || { warn "Le scan nmap a échoué" "" "Lancez-le à la main : \`sudo nmap -T4 --top-ports 200 --open ${ok_c[*]}\`"; return; }
   local res; res=$(nmap_py > "$WORK/nmap.py"; python3 -I "$WORK/nmap.py" "$x")
+  if ((${#OPN_ARP[@]} || ${#OPN_ROUTEUR[@]})); then   # compléter avec ce que sait le routeur
+    local l2="" a_mac a_fab a_nom
+    while IFS=$US read -r ip name mac vendor ports; do
+      [[ -n $ip ]] || continue
+      if [[ -n ${OPN_ROUTEUR[$ip]:-} ]]; then name="OPNsense (${OPN_ROUTEUR[$ip]})"
+      elif [[ -n ${OPN_ARP[$ip]:-} ]]; then
+        IFS=$US read -r a_mac a_fab a_nom <<< "${OPN_ARP[$ip]}"
+        [[ -z $mac ]] && mac=$a_mac
+        [[ -z $vendor ]] && vendor=$a_fab
+        [[ -z $name ]] && name=$a_nom
+      fi
+      l2+="$ip$US$name$US$mac$US$vendor$US$ports$NL"
+    done <<< "$res"
+    res=${l2%"$NL"}
+  fi
   local n; n=$(nlines "$res")
   info "$n appareil(s) trouvé(s) sur ${ok_c[*]}" "Réseaux pris dans : $origine. Le scan montre ce que le NAS peut joindre : un appareil d'un autre sous-réseau peut voir autre chose selon les règles d'OPNsense."
   local -A RISK=([23]="Telnet (non chiffré)" [21]="FTP (non chiffré)" [2375]="API Docker sans TLS" [3389]="Bureau à distance (RDP)" [5900]="VNC"
     [6379]="Redis" [27017]="MongoDB" [9200]="Elasticsearch" [11211]="Memcached" [3306]="MySQL/MariaDB" [5432]="PostgreSQL" [1883]="MQTT non chiffré" [554]="flux vidéo RTSP (caméra)")
   local -a rows=() risq=() crit2375=() pl=()
-  local ip name mac vendor ports p num me
+  local p num me
   local myips=" $(hostname -I 2>/dev/null) "
   while IFS=$US read -r ip name mac vendor ports; do
     [[ -n $ip ]] || continue
@@ -2753,7 +3035,7 @@ check_lan() {
   local inv="$OUTDIR/.inventaire-reseau" nouveaux=""
   local actuel; actuel=$(awk -F"$US" '{print ($3 != "" ? tolower($3) : $1) "\t" $1 "\t" $2 "\t" $4}' <<< "$res" | sort -u)
   if [[ -f $inv ]]; then
-    nouveaux=$(awk -F'\t' 'NR == FNR {vu[$1] = 1; next} !($1 in vu) {printf "%s%s%s%s\n", $2, ($3 != "" ? " (" $3 ")" : ""), ($1 != $2 ? " — " $1 : ""), ($4 != "" ? " — " $4 : "")}' "$inv" - <<< "$actuel")
+    nouveaux=$(awk -F'\t' 'NR == FNR {vu[$1] = 1; if ($1 == $2) ipseule[$2] = 1; next} !($1 in vu) && !($2 in ipseule) {printf "%s%s%s%s\n", $2, ($3 != "" ? " (" $3 ")" : ""), ($1 != $2 ? " — " $1 : ""), ($4 != "" ? " — " $4 : "")}' "$inv" - <<< "$actuel")
     if [[ -n $nouveaux ]]; then
       info "Nouveaux appareils depuis le dernier scan : $(nlines "$nouveaux")" "$nouveaux" "Vérifiez que vous les reconnaissez (adresse MAC et fabricant) ; un appareil inconnu peut signaler un intrus sur le Wi-Fi"
     else
@@ -4268,6 +4550,7 @@ main() {
   check_zfs
   check_docker
   check_gpu
+  check_energie
   check_reseau
   check_sauvegardes
   check_cloudflare
