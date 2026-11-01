@@ -188,10 +188,16 @@ def cmd_paquets(a):
         for vu in (r or {}).get("vulns", []) or []:
             ids.setdefault(vu["id"], set()).add(n)
     failles = {}   # CVE → paquets
-    for vid in list(ids)[:200]:
+
+    def detail(vid):
         try:
-            d = http_json("https://api.osv.dev/v1/vulns/" + urllib.parse.quote(vid), cache_h=168)
+            return vid, http_json("https://api.osv.dev/v1/vulns/" + urllib.parse.quote(vid), cache_h=168)
         except Echec:
+            return vid, None
+    with concurrent.futures.ThreadPoolExecutor(8) as ex:   # détails en parallèle (première fois : jusqu'à 200 requêtes)
+        details = list(ex.map(detail, list(ids)[:200]))
+    for vid, d in details:
+        if d is None:
             continue
         corrige = any(ev.get("fixed") for af in d.get("affected", []) if af.get("package", {}).get("name") in ids[vid]
                       for rg in af.get("ranges", []) for ev in rg.get("events", []))

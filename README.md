@@ -129,6 +129,8 @@ Sans installation, le script fonctionne aussi seul : `sudo ./audite-moi.sh` (les
 
 Codes de sortie : `0` rien à signaler, `1` avertissements, `2` problèmes critiques, `3` erreur.
 
+**Durée.** Les analyses longues et indépendantes tournent **en parallèle** des autres contrôles : Lynis, rkhunter, Trivy, le parcours du disque système (droits, fichiers SUID, intégrité des paquets) et les domaines démarrent dès le début de l'audit ; le scan du réseau local démarre dès que les réseaux à scanner sont connus (après la lecture d'OPNsense). Le temps total est à peu près celui de la plus longue d'entre elles, et non leur somme. Trivy analyse les images une par une (son cache ne supporte pas plusieurs analyses simultanées). Sans clé API NVD, la vérification des versions du réseau est volontairement lente (limite de débit de la base publique) : une clé gratuite (Réglages › Vulnérabilités) la rend quasi instantanée. La fin de l'audit, le rapport texte et le JSON (`durees_sections`) indiquent les sections les plus longues.
+
 ![Rapport](docs/rapport.png)
 
 ## Contrôles réseau : Internet, applications, OPNsense, réseau local

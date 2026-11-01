@@ -111,13 +111,36 @@ SMB_CONF=${AUDITE_MOI_SMB_CONF:-/etc/samba/smb.conf}
 SYS_BLOCK=${AUDITE_MOI_SYS_BLOCK:-/sys/block}
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/audite-moi.XXXXXX") || { echo "mktemp a échoué" >&2; exit 3; }
-trap 'rm -rf "$WORK"' EXIT
+trap 'arreter_fond; rm -rf "$WORK"' EXIT
 trap 'echo >&2; echo "Interrompu." >&2; exit 130' INT TERM
 
 # -------------------------------------------------------------------- outils --
 have()   { command -v "$1" >/dev/null 2>&1; }
 tmo()    { local t=$1; shift; timeout -k 5 "$t" "$@"; }
 isint()  { [[ ${1:-} =~ ^-?[0-9]+$ ]]; }
+
+# Tâches de fond : les analyses longues et indépendantes (Lynis, rkhunter, Trivy, scan du réseau,
+# domaines) démarrent dès que possible et tournent pendant les autres contrôles ; chaque section
+# attend ensuite le résultat dont elle a besoin. Le temps total devient celui de la plus longue.
+declare -A FOND_PID=() FOND_DEBUT=()
+fond() {   # fond nom commande… : sortie dans $WORK/fond/nom.out, code de retour dans nom.rc
+  local n=$1; shift
+  mkdir -p "$WORK/fond"
+  ( "$@" > "$WORK/fond/$n.out" 2> "$WORK/fond/$n.err"; echo $? > "$WORK/fond/$n.rc" ) &
+  FOND_PID[$n]=$!; FOND_DEBUT[$n]=$SECONDS
+}
+attendre() {   # attendre nom : 0 si la tâche a été lancée (et est maintenant finie), 1 sinon
+  local n=$1
+  [[ -n ${FOND_PID[$n]:-} ]] || return 1
+  if kill -0 "${FOND_PID[$n]}" 2>/dev/null; then note "En attente de la tâche de fond « $n » (lancée il y a $((SECONDS - FOND_DEBUT[$n])) s)…"; fi
+  wait "${FOND_PID[$n]}" 2>/dev/null
+  unset 'FOND_PID[$n]'
+  return 0
+}
+arreter_fond() {   # sortie anticipée : ne pas laisser de tâche tourner après l'audit
+  local p
+  for p in "${FOND_PID[@]}"; do pkill -TERM -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; done
+}
 note()   { printf '  %s%s%s\n' "$C_D" "$*" "$C_0"; }
 nlines() { grep -c . <<< "${1:-}"; }
 NOW=$(date +%s)
@@ -215,7 +238,11 @@ declare -A SEC_CAT=(
 )
 declare -A LVL_FR=([CRIT]="Critique" [WARN]="Attention" [OK]="OK" [INFO]="Info" [ACC]="Accepté")
 
+declare -A SEC_DUREE=()
+SEC_T0=0
 section() {
+  [[ -n $CUR ]] && SEC_DUREE[$CUR]=$(( ${SEC_DUREE[$CUR]:-0} + SECONDS - SEC_T0 ))
+  SEC_T0=$SECONDS
   CUR=$1; SEC_N=$((SEC_N + 1))
   printf '\n%s[%d/%d] %s%s\n' "$C_BOLD" "$SEC_N" "${#SEC_ORDER[@]}" "${SEC_TITLE[$1]}" "$C_0"
 }
@@ -2105,17 +2132,21 @@ for f in "${AUDITE_MOI_ANALYSE:-}" "$(dirname "$(readlink -f "$0")")/audite-moi-
   [[ -n $f && -f $f ]] && { ANALYSE=$f; break; }
 done
 CACHE_DIR=${AUDITE_MOI_CACHE:-/var/lib/audite-moi/cache}
-analyse() {   # analyse commande arguments… (la clé NVD passe par l'environnement, jamais sur la ligne de commande)
+analyse_lancer() {   # analyse_lancer commande arguments… : lignes F/T sur la sortie (la clé NVD passe par l'environnement)
+  [[ -d $CACHE_DIR && -w $CACHE_DIR ]] || mkdir -p -m 700 "$CACHE_DIR" 2>/dev/null || CACHE_DIR="$WORK/cache"
+  AUDITE_MOI_NVD_CLE=$(cfg NVD_API_KEY) tmo 1500 python3 -I "$ANALYSE" --cache "$CACHE_DIR" --inventaire "$WORK/inventaire" "$@" 2>>"$WORK/analyse.err"
+}
+analyse() { analyse_lire < <(analyse_lancer "$@"); }
+analyse_lire() {   # lignes F/T → constats et tableaux de la section en cours
   local -A TB=()
   local -a TORD=()
   local kind a b c d t
-  [[ -d $CACHE_DIR && -w $CACHE_DIR ]] || mkdir -p -m 700 "$CACHE_DIR" 2>/dev/null || CACHE_DIR="$WORK/cache"
   while IFS=$US read -r kind a b c d; do
     case $kind in
       F) add "$a" "$b" "${c//\\n/$NL}" "$d" ;;
       T) [[ -n ${TB[$a]:-} ]] || { TB[$a]="$WORK/an_t_${RANDOM}_${#TB[@]}.tsv"; TORD+=("$a"); }; printf '%s\n' "$b" >> "${TB[$a]}" ;;
     esac
-  done < <(AUDITE_MOI_NVD_CLE=$(cfg NVD_API_KEY) tmo 1500 python3 -I "$ANALYSE" --cache "$CACHE_DIR" --inventaire "$WORK/inventaire" "$@" 2>>"$WORK/analyse.err")
+  done
   for t in "${TORD[@]}"; do tbl "$t" < "${TB[$t]}"; done
 }
 ip_publique() {
@@ -2133,10 +2164,50 @@ check_domaines() {
   fi
   [[ -n $ANALYSE ]] || { info "Module d'analyse introuvable (audite-moi-analyse.py) : réinstallez Audite-moi"; return; }
   have python3 || { info "python3 absent : analyse des domaines impossible"; return; }
-  note "Domaines : DNS, messagerie, sous-domaines et certificats de ${doms}…"
-  local -a o=(--selecteurs "$(cfg DKIM_SELECTEURS)" --ip-publique "$(ip_publique)")
+  if attendre domaines; then
+    analyse_lire < "$WORK/fond/domaines.out"
+  else
+    note "Domaines : DNS, messagerie, sous-domaines et certificats de ${doms}…"
+    analyse_lire < <(domaines_lancer)
+  fi
+}
+domaines_lancer() {
+  local -a o=(--selecteurs "$(cfg DKIM_SELECTEURS)" --ip-publique "$PUB_IP")
   oui "$(cfg SOUS_DOMAINES oui)" && o+=(--sous-domaines)
-  analyse domaines "$doms" "${o[@]}"
+  analyse_lancer domaines "$(cfg DOMAINES)" "${o[@]}"
+}
+
+trivy_tout() {   # images en service analysées une par une (Trivy partage un cache verrouillé) : $WORK/trivy-brut/N.{img,json}
+  local ids i=0 img
+  ids=$(tmo 30 docker ps -aq --no-trunc 2>/dev/null)
+  [[ -n $ids ]] || return 0
+  mkdir -p "$WORK/trivy-brut"
+  # shellcheck disable=SC2086
+  while IFS= read -r img; do
+    [[ -n $img ]] || continue
+    printf '%s' "$img" > "$WORK/trivy-brut/$i.img"
+    tmo 600 trivy image --quiet --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --format json "$img" > "$WORK/trivy-brut/$i.json" 2>/dev/null \
+      || rm -f "$WORK/trivy-brut/$i.json"
+    i=$((i + 1))
+  done < <(tmo 60 docker inspect $ids 2>/dev/null | jq -r '.[] | select(.State.Status == "running") | .Config.Image' 2>/dev/null | sort -u)
+}
+
+prechauffer() {   # analyses longues et indépendantes : lancées tout de suite, en parallèle des autres contrôles
+  local liste=""
+  if [[ -n $(cfg DOMAINES) && -n $ANALYSE ]] && have python3; then
+    ip_publique >/dev/null
+    fond domaines domaines_lancer; liste+="domaines, "
+  fi
+  fond f_ww fichiers_ww; fond f_dpkg fichiers_dpkg; liste+="intégrité des fichiers système, "
+  ((QUICK)) && { note "Lancé en arrière-plan : ${liste%, }"; return 0; }
+  fond f_wd fichiers_wd; fond f_suid fichiers_suid
+  if have lynis; then
+    fond lynis tmo 900 lynis audit system --quick --no-colors --quiet --logfile "$WORK/lynis.log" --report-file "$WORK/lynis-report.dat"; liste+="Lynis, "
+  fi
+  have rkhunter && { fond rkhunter tmo 900 rkhunter --check --sk --nocolors --rwo; liste+="rkhunter, "; }
+  have trivy && have docker && { fond trivy trivy_tout; liste+="Trivy, "; }
+  [[ -n $liste ]] && note "Lancé en arrière-plan : ${liste%, }"
+  return 0
 }
 
 inventaire_base() {   # ce serveur et ses conteneurs, pour la page Inventaire
@@ -2610,31 +2681,45 @@ for h in ET.parse(sys.argv[1]).getroot().findall("host"):
     print("\x1f".join([ip, name, mac, vendor, ", ".join(ports)]))
 PY
 }
-check_lan() {
-  section lan
-  if ! oui "$(cfg SCAN_RESEAU oui)"; then info "Scan du réseau désactivé (SCAN_RESEAU=non dans audit.conf)"; return; fi
-  if ((QUICK)); then info "Scan du réseau non exécuté (mode rapide)"; return; fi
-  if ! have nmap; then info "nmap non installé : scan du réseau impossible" "" "\`sudo apt install nmap\`"; return; fi
+LAN_ETAT="" LAN_ORIGINE="" LAN_TROP=""
+declare -a LAN_RES=()
+lan_lancer() {   # choisit les réseaux à scanner et lance nmap en tâche de fond (résultat lu par check_lan)
+  if ! oui "$(cfg SCAN_RESEAU oui)"; then LAN_ETAT=desactive; return; fi
+  if ((QUICK)); then LAN_ETAT=rapide; return; fi
+  if ! have nmap; then LAN_ETAT=absent; return; fi
   local cibles; cibles=$(cfg SCAN_RESEAUX)
-  local origine="audit.conf (SCAN_RESEAUX)"
-  if [[ -z $cibles && -n $OPN_NETS ]]; then cibles=$OPN_NETS; origine="interfaces d'OPNsense"; fi
+  LAN_ORIGINE="audit.conf (SCAN_RESEAUX)"
+  if [[ -z $cibles && -n $OPN_NETS ]]; then cibles=$OPN_NETS; LAN_ORIGINE="interfaces d'OPNsense"; fi
   if [[ -z $cibles ]]; then
-    origine="réseaux du NAS"
+    LAN_ORIGINE="réseaux du NAS"
     cibles=$(ip -o -f inet addr show 2>/dev/null | awk '$2 !~ /^(lo|docker|br-|veth|virbr|tailscale|wg|tun)/ {print $4}' \
       | while read -r c; do python3 -c 'import ipaddress,sys; n=ipaddress.ip_interface(sys.argv[1]).network; print(n) if n.is_private else None' "$c" 2>/dev/null; done | sort -u | tr '\n' ' ')
   fi
-  local -a ok_c=() trop=()
   local c
+  LAN_RES=() LAN_TROP=""
   for c in $cibles; do
-    if [[ $c =~ /([0-9]+)$ ]] && ((BASH_REMATCH[1] < 22)); then trop+=("$c"); else ok_c+=("$c"); fi
+    if [[ $c =~ /([0-9]+)$ ]] && ((BASH_REMATCH[1] < 22)); then LAN_TROP+="$c "; else LAN_RES+=("$c"); fi
   done
-  ((${#trop[@]})) && info "Réseaux trop grands ignorés : ${trop[*]}" "Le scan est limité aux réseaux de 1 024 adresses au plus." "Indiquez des sous-réseaux plus précis dans SCAN_RESEAUX (audit.conf)"
-  if ((${#ok_c[@]} == 0)); then info "Aucun réseau à scanner" "" "Renseignez SCAN_RESEAUX dans /etc/audite-moi/audit.conf"; return; fi
-  note "Scan nmap de ${ok_c[*]} (quelques minutes)…"
-  local x="$WORK/nmap.xml"
+  ((${#LAN_RES[@]})) || { LAN_ETAT=vide; return; }
   local -a sv=()
   oui "$(cfg VERSIONS_LAN oui)" && sv=(-sV --version-light)   # versions des services : croisées avec les failles connues (section Vulnérabilités)
-  tmo 2400 nmap -T4 --top-ports 200 --open --host-timeout 180s "${sv[@]}" -oX "$x" "${ok_c[@]}" >/dev/null 2>&1
+  note "Scan nmap de ${LAN_RES[*]} lancé en arrière-plan…"
+  fond nmap tmo 2400 nmap -T4 --top-ports 200 --open --host-timeout 180s "${sv[@]}" -oX "$WORK/nmap.xml" "${LAN_RES[@]}"
+}
+
+check_lan() {
+  section lan
+  case $LAN_ETAT in
+    desactive) info "Scan du réseau désactivé (SCAN_RESEAU=non dans audit.conf)"; return ;;
+    rapide) info "Scan du réseau non exécuté (mode rapide)"; return ;;
+    absent) info "nmap non installé : scan du réseau impossible" "" "\`sudo apt install nmap\`"; return ;;
+  esac
+  [[ -n $LAN_TROP ]] && info "Réseaux trop grands ignorés : ${LAN_TROP% }" "Le scan est limité aux réseaux de 1 024 adresses au plus." "Indiquez des sous-réseaux plus précis dans SCAN_RESEAUX (audit.conf)"
+  if [[ $LAN_ETAT == vide ]]; then info "Aucun réseau à scanner" "" "Renseignez SCAN_RESEAUX dans /etc/audite-moi/audit.conf"; return; fi
+  local -a ok_c=("${LAN_RES[@]}")
+  local origine=$LAN_ORIGINE
+  local x="$WORK/nmap.xml"
+  attendre nmap
   [[ -s $x ]] || { warn "Le scan nmap a échoué" "" "Lancez-le à la main : \`sudo nmap -T4 --top-ports 200 --open ${ok_c[*]}\`"; return; }
   local res; res=$(nmap_py > "$WORK/nmap.py"; python3 -I "$WORK/nmap.py" "$x")
   local n; n=$(nlines "$res")
@@ -3455,12 +3540,13 @@ check_fichiers() {
     ok "Droits des fichiers système sensibles corrects"
   fi
 
-  local ww; ww=$(tmo 120 find /etc /usr /boot /opt /var/spool/cron -xdev -type f -perm -0002 2>/dev/null | head -n 30)
+  local ww
+  if attendre f_ww; then ww=$(head -n 30 "$WORK/fond/f_ww.out"); else ww=$(fichiers_ww | head -n 30); fi
   [[ -n $ww ]] && warn "Fichiers système modifiables par tous" "$ww" "\`sudo chmod o-w <fichier>\`, et cherchez qui les a modifiés"
   if ((!QUICK)); then
-    note "Recherche des dossiers ouverts à tous et des fichiers SUID…"
-    local wd; wd=$(tmo 180 find / -xdev \( -path /proc -o -path /sys -o -path /dev -o -path /run -o -path /tmp -o -path /var/tmp -o -path /snap -o -path /var/snap -o -path /var/lib/docker -o -path /var/lib/containerd \) -prune \
-      -o -type d -perm -0002 ! -perm -1000 -print 2>/dev/null | head -n 30)
+    local wd
+    if attendre f_wd; then wd=$(head -n 30 "$WORK/fond/f_wd.out")
+    else note "Recherche des dossiers ouverts à tous et des fichiers SUID…"; wd=$(fichiers_wd | head -n 30); fi
     [[ -n $wd ]] && warn "Dossiers modifiables par tous sans « sticky bit »" "$wd" "\`sudo chmod o-w <dossier>\` (ou \`sudo chmod +t <dossier>\` s'il doit rester partagé)"
     check_suid
   fi
@@ -3476,13 +3562,8 @@ check_fichiers() {
   ((${#pk[@]})) && warn "Clés SSH privées lisibles par d'autres" "$(printf '%s\n' "${pk[@]}")" "\`chmod 600 <clé>\`"
 
   # Intégrité des paquets critiques (fichiers modifiés hors du gestionnaire de paquets)
-  local p vout=""
-  for p in openssh-server openssh-client sudo passwd login util-linux coreutils procps iproute2 findutils bash libpam-modules libpam-runtime cron systemd docker-ce docker.io containerd.io; do
-    dpkg -s "$p" >/dev/null 2>&1 || continue
-    vout+=$(tmo 60 dpkg -V "$p" 2>/dev/null | awk -v p="$p" '$2 != "c" && substr($1, 3, 1) == "5" {print p " : " $NF}')
-    vout+=$NL
-  done
-  vout=$(grep . <<< "$vout")
+  local vout
+  if attendre f_dpkg; then vout=$(grep . "$WORK/fond/f_dpkg.out"); else vout=$(fichiers_dpkg | grep .); fi
   if [[ -n $vout ]]; then
     crit "Fichiers système modifiés hors du gestionnaire de paquets" "$vout" \
       "Si ce n'est pas une modification volontaire, réinstallez le paquet (\`sudo apt install --reinstall <paquet>\`) et suspectez une compromission"
@@ -3491,10 +3572,27 @@ check_fichiers() {
   fi
 }
 
+# Parcours du disque système : lancés en tâche de fond par prechauffer (ou ici si besoin)
+fichiers_ww()   { tmo 120 find /etc /usr /boot /opt /var/spool/cron -xdev -type f -perm -0002 2>/dev/null; }
+fichiers_wd()   {
+  tmo 180 find / -xdev \( -path /proc -o -path /sys -o -path /dev -o -path /run -o -path /tmp -o -path /var/tmp -o -path /snap -o -path /var/snap -o -path /var/lib/docker -o -path /var/lib/containerd \) -prune \
+    -o -type d -perm -0002 ! -perm -1000 -print 2>/dev/null
+}
+fichiers_suid() {
+  tmo 180 find / -xdev \( -path /proc -o -path /sys -o -path /dev -o -path /run -o -path /snap -o -path /var/snap -o -path /var/lib/docker -o -path /var/lib/containerd -o -path /var/lib/lxd \) -prune \
+    -o -type f \( -perm -4000 -o -perm -2000 \) -print 2>/dev/null
+}
+fichiers_dpkg() {   # intégrité des paquets critiques : fichiers modifiés hors du gestionnaire de paquets
+  local p
+  for p in openssh-server openssh-client sudo passwd login util-linux coreutils procps iproute2 findutils bash libpam-modules libpam-runtime cron systemd docker-ce docker.io containerd.io; do
+    dpkg -s "$p" >/dev/null 2>&1 || continue
+    tmo 60 dpkg -V "$p" 2>/dev/null | awk -v p="$p" '$2 != "c" && substr($1, 3, 1) == "5" {print p " : " $NF}'
+  done
+}
+
 check_suid() {
   local -a suid=() unowned=() retry=()
-  mapfile -t suid < <(tmo 180 find / -xdev \( -path /proc -o -path /sys -o -path /dev -o -path /run -o -path /snap -o -path /var/snap -o -path /var/lib/docker -o -path /var/lib/containerd -o -path /var/lib/lxd \) -prune \
-    -o -type f \( -perm -4000 -o -perm -2000 \) -print 2>/dev/null)
+  if attendre f_suid; then mapfile -t suid < "$WORK/fond/f_suid.out"; else mapfile -t suid < <(fichiers_suid); fi
   ((${#suid[@]})) || return 0
   local owned f alt
   owned=$(dpkg -S "${suid[@]}" 2>/dev/null | grep -oE ': /.*$' | cut -c3-)
@@ -3698,9 +3796,13 @@ check_outils() {
     if ((QUICK)); then
       info "Lynis non exécuté (mode rapide)"
     else
-      note "Lynis : audit en cours (1 à 3 minutes)…"
       local lr="$WORK/lynis-report.dat" ll="$WORK/lynis.log"
-      tmo 900 lynis audit system --quick --no-colors --quiet --logfile "$ll" --report-file "$lr" > "$WORK/lynis.out" 2>&1
+      if attendre lynis; then
+        cat "$WORK/fond/lynis.out" "$WORK/fond/lynis.err" > "$WORK/lynis.out" 2>/dev/null
+      else
+        note "Lynis : audit en cours (1 à 3 minutes)…"
+        tmo 900 lynis audit system --quick --no-colors --quiet --logfile "$ll" --report-file "$lr" > "$WORK/lynis.out" 2>&1
+      fi
       if [[ -s $lr ]]; then
         local hi lw ns lvl=INFO
         hi=$(awk -F= '/^hardening_index=/ {print $2}' "$lr")
@@ -3725,9 +3827,14 @@ check_outils() {
       local -a imgs=() trows=()
       local img out c h tc=0 nexp
       mapfile -t imgs < <(jq -r '.[] | select(.State.Status == "running") | .Config.Image' "$INSPECT" | sort -u)
-      note "Trivy : analyse de ${#imgs[@]} image(s)…"
+      [[ -n ${FOND_PID[trivy]:-} ]] || note "Trivy : analyse de ${#imgs[@]} image(s)…"
+      attendre trivy
+      local -A pret=()
+      local f
+      for f in "$WORK"/trivy-brut/*.img; do [[ -s ${f%.img}.json ]] && pret[$(< "$f")]=${f%.img}.json; done
       for img in "${imgs[@]}"; do
-        out=$(tmo 600 trivy image --quiet --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --format json "$img" 2>/dev/null) || continue
+        if [[ -n ${pret[$img]:-} ]]; then out=$(< "${pret[$img]}")
+        else out=$(tmo 600 trivy image --quiet --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --format json "$img" 2>/dev/null) || continue; fi
         mkdir -p "$WORK/trivy"; printf '%s' "$out" > "$WORK/trivy/${#trows[@]}.json"
         c=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' <<< "$out" 2>/dev/null)
         h=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' <<< "$out" 2>/dev/null)
@@ -3746,8 +3853,9 @@ check_outils() {
   fi
 
   if have rkhunter && ((!QUICK)); then
-    note "rkhunter…"
-    local rk; rk=$(tmo 900 rkhunter --check --sk --nocolors --rwo 2>/dev/null)
+    local rk
+    if attendre rkhunter; then rk=$(cat "$WORK/fond/rkhunter.out" 2>/dev/null)
+    else note "rkhunter…"; rk=$(tmo 900 rkhunter --check --sk --nocolors --rwo 2>/dev/null); fi
     if [[ -n $rk ]]; then
       warn "Avertissements rkhunter" "$(head -n 15 <<< "$rk")" "rkhunter produit des faux positifs : vérifiez chaque point (\`sudo less /var/log/rkhunter.log\`)"
     else
@@ -4056,6 +4164,7 @@ render_txt() {
   printf '%s\n' "======================================================================"
   printf ' Santé : %s (%s/100)    Sécurité : %s (%s/100)\n' "$(grade "$hs")" "$hs" "$(grade "$ss")" "$ss"
   printf ' %d critique(s), %d avertissement(s), %d OK, %d info(s)\n' "$nC" "$nW" "$nO" "$nI"
+  printf ' Durée : %s s%s\n' "$(( $(date +%s) - START ))" "${DUREE_LENTES:+ — sections les plus longues : $DUREE_LENTES}"
   local smod; smod=$(seuils_modifies)
   [[ -n $smod ]] && printf '\n Seuils personnalisés :\n%s\n' "$(sed 's/^/   • /' <<< "$smod")"
   printf '\nPLAN D’ACTION\n-------------\n'
@@ -4088,6 +4197,19 @@ render_txt() {
   done
 }
 
+DUREE_LENTES=""
+section_fin() {   # clôt le chronométrage de la dernière section, résume les plus longues
+  [[ -n $CUR ]] && SEC_DUREE[$CUR]=$(( ${SEC_DUREE[$CUR]:-0} + SECONDS - SEC_T0 ))
+  CUR=""
+  local t k
+  while read -r t k; do [[ -n $k ]] && ((t >= 5)) && DUREE_LENTES+="${SEC_SHORT[$k]:-$k} $t s, "; done \
+    < <(for k in "${!SEC_DUREE[@]}"; do printf '%s %s\n' "${SEC_DUREE[$k]}" "$k"; done | sort -rn | head -n 5)
+  DUREE_LENTES=${DUREE_LENTES%, }
+}
+durees_json() {   # {section: secondes}
+  local k
+  for k in "${!SEC_DUREE[@]}"; do printf '%s\t%s\n' "$k" "${SEC_DUREE[$k]}"; done | jq -Rn '[inputs | split("\t") | {key: .[0], value: (.[1] | tonumber)}] | from_entries'
+}
 inventaire_json() {   # fragments $WORK/inventaire/*.json → {nom: contenu}
   local obj='{}' f
   for f in "$WORK"/inventaire/*.json; do
@@ -4107,8 +4229,8 @@ render_json() {
       --arg os "$OS_PRETTY" --arg noyau "$KERNEL" --argjson duree "$dur" --arg mode "$( ((QUICK)) && echo rapide || echo complet)" \
       --argjson hs "$hs" --argjson ss "$ss" --arg hg "$(grade "$hs")" --arg sg "$(grade "$ss")" \
       --argjson c "$nC" --argjson w "$nW" --argjson o "$nO" --argjson n "$nI" --arg base "$base" --argjson secs "$secs" --arg smod "$(seuils_modifies)" \
-      --argjson inv "$(inventaire_json)" '
-    {version: $version, inventaire: $inv, seuils_modifies: ($smod | split("\n") | map(select(length > 0))), hote: $hote, date: $date, horodatage: $horodatage, os: $os, noyau: $noyau, duree_s: $duree, mode: $mode,
+      --argjson inv "$(inventaire_json)" --argjson durees "$(durees_json)" '
+    {version: $version, durees_sections: $durees, inventaire: $inv, seuils_modifies: ($smod | split("\n") | map(select(length > 0))), hote: $hote, date: $date, horodatage: $horodatage, os: $os, noyau: $noyau, duree_s: $duree, mode: $mode,
      notes: {sante: {score: $hs, lettre: $hg}, securite: {score: $ss, lettre: $sg}},
      compteurs: {CRIT: $c, WARN: $w, OK: $o, INFO: $n},
      fichiers: {html: ($base + ".html"), txt: ($base + ".txt"), json: ($base + ".json")},
@@ -4139,6 +4261,7 @@ main() {
   ((QUICK)) && note "Mode rapide : analyses longues désactivées."
   read_arc
   zfs_prep
+  prechauffer
   check_systeme
   check_materiel
   check_disques
@@ -4152,7 +4275,7 @@ main() {
   check_domaines
   check_applis
   check_opnsense
-  check_lan
+  lan_lancer            # les réseaux à scanner sont connus (OPNsense) : nmap tourne pendant la suite
   check_maj
   check_comptes
   check_ssh
@@ -4162,7 +4285,9 @@ main() {
   check_noyau
   check_journaux
   check_outils
+  check_lan
   check_vulns
+  section_fin
   appliquer_acceptes
   appliquer_references
 
@@ -4187,6 +4312,7 @@ main() {
   printf '\n%s══ Résultat ══%s\n' "$C_BOLD" "$C_0"
   printf '  Santé : %s (%s/100)    Sécurité : %s (%s/100)\n' "$(grade "$hs")" "$hs" "$(grade "$ss")" "$ss"
   printf '  %s%d critique(s)%s, %s%d avertissement(s)%s, %d OK, %d info(s) — %d s\n' "$C_R" "$nC" "$C_0" "$C_Y" "$nW" "$C_0" "$nO" "$nI" "$dur"
+  [[ -n $DUREE_LENTES ]] && note "Sections les plus longues (attente des tâches de fond comprise) : $DUREE_LENTES"
   local i shown=0 lvl
   for lvl in CRIT WARN; do
     for i in "${!R_LVL[@]}"; do
