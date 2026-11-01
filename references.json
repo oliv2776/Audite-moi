@@ -487,6 +487,72 @@
       "id": "cloudflared — deprecated releases",
       "titre": "Seules les versions de moins d'un an sont prises en charge",
       "url": "https://developers.cloudflare.com/tunnel/downloads/"
+    },
+    "rfc7208": {
+      "source": "IETF",
+      "id": "RFC 7208",
+      "titre": "Sender Policy Framework (SPF)",
+      "url": "https://www.rfc-editor.org/rfc/rfc7208"
+    },
+    "rfc6376": {
+      "source": "IETF",
+      "id": "RFC 6376",
+      "titre": "DomainKeys Identified Mail (DKIM) Signatures",
+      "url": "https://www.rfc-editor.org/rfc/rfc6376"
+    },
+    "rfc7489": {
+      "source": "IETF",
+      "id": "RFC 7489",
+      "titre": "Domain-based Message Authentication, Reporting, and Conformance (DMARC)",
+      "url": "https://www.rfc-editor.org/rfc/rfc7489"
+    },
+    "rfc8461": {
+      "source": "IETF",
+      "id": "RFC 8461",
+      "titre": "SMTP MTA Strict Transport Security (MTA-STS)",
+      "url": "https://www.rfc-editor.org/rfc/rfc8461"
+    },
+    "rfc8460": {
+      "source": "IETF",
+      "id": "RFC 8460",
+      "titre": "SMTP TLS Reporting",
+      "url": "https://www.rfc-editor.org/rfc/rfc8460"
+    },
+    "rfc8659": {
+      "source": "IETF",
+      "id": "RFC 8659",
+      "titre": "DNS Certification Authority Authorization (CAA) Resource Record",
+      "url": "https://www.rfc-editor.org/rfc/rfc8659"
+    },
+    "rfc4033": {
+      "source": "IETF",
+      "id": "RFC 4033",
+      "titre": "DNS Security Introduction and Requirements (DNSSEC)",
+      "url": "https://www.rfc-editor.org/rfc/rfc4033"
+    },
+    "rfc7505": {
+      "source": "IETF",
+      "id": "RFC 7505",
+      "titre": "A \"Null MX\" No Service Resource Record",
+      "url": "https://www.rfc-editor.org/rfc/rfc7505"
+    },
+    "owasp-wstg-conf-10": {
+      "source": "OWASP WSTG",
+      "id": "WSTG-CONF-10",
+      "titre": "Test for Subdomain Takeover",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/10-Test_for_Subdomain_Takeover"
+    },
+    "cisa-kev": {
+      "source": "CISA",
+      "id": "KEV",
+      "titre": "Known Exploited Vulnerabilities Catalog",
+      "url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog"
+    },
+    "first-epss": {
+      "source": "FIRST",
+      "id": "EPSS",
+      "titre": "Exploit Prediction Scoring System",
+      "url": "https://www.first.org/epss/"
     }
   },
   "regles": [
@@ -985,6 +1051,79 @@
       "refs": [
         "anssi-ssh-r2",
         "anssi-r80"
+      ]
+    },
+    {
+      "section": "domaines",
+      "motif": "SPF",
+      "refs": [
+        "rfc7208"
+      ]
+    },
+    {
+      "section": "domaines",
+      "motif": "DMARC",
+      "refs": [
+        "rfc7489"
+      ]
+    },
+    {
+      "section": "domaines",
+      "motif": "DKIM",
+      "refs": [
+        "rfc6376"
+      ]
+    },
+    {
+      "section": "domaines",
+      "motif": "MTA-STS",
+      "refs": [
+        "rfc8461",
+        "rfc8460"
+      ]
+    },
+    {
+      "section": "domaines",
+      "motif": "\\(CAA\\)",
+      "refs": [
+        "rfc8659"
+      ]
+    },
+    {
+      "section": "domaines",
+      "motif": "DNSSEC",
+      "refs": [
+        "rfc4033"
+      ]
+    },
+    {
+      "section": "domaines",
+      "motif": "repris|nom disparu",
+      "refs": [
+        "owasp-wstg-conf-10"
+      ]
+    },
+    {
+      "section": "domaines",
+      "motif": "sans e-mail",
+      "refs": [
+        "rfc7505",
+        "rfc7208",
+        "rfc7489"
+      ]
+    },
+    {
+      "section": "vulns",
+      "motif": "exploitée",
+      "refs": [
+        "cisa-kev"
+      ]
+    },
+    {
+      "section": "vulns",
+      "motif": "probabilité d'exploitation",
+      "refs": [
+        "first-epss"
       ]
     }
   ]

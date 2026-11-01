@@ -37,7 +37,7 @@ import time
 import urllib.parse
 from datetime import datetime
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 COOKIE = "audite_moi_session"
 ITERATIONS = 600_000
 NOM_RAPPORT = re.compile(r"^rapport-[A-Za-z0-9._-]+-\d{8}-\d{4}\.(html|txt|json)$")
@@ -864,6 +864,10 @@ select{max-width:100%}
 .tile[aria-pressed=true]{outline:2px solid var(--accent);outline-offset:-1px;background:var(--sel)}
 a.tile,button.tile{display:block;color:inherit;white-space:normal;font-weight:inherit;line-height:1.5}a.tile.score,button.tile.score{display:flex}a.tile:hover{text-decoration:none;border-color:var(--muted)}
 .grid2c+.card{margin-top:1rem}
+.kpis.cinq{grid-template-columns:repeat(5,minmax(0,1fr))}.kpis .tile{cursor:default}
+@media (max-width:980px){.kpis.cinq{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:620px){.kpis.cinq{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.card h3.lbl{margin:1rem 0 .3rem}
 @media (max-width:1440px){.hero{grid-template-columns:repeat(4,minmax(0,1fr))}.hero .score{grid-column:span 2}}
 .tile .v{white-space:nowrap}
 @media (max-width:620px){.hero{grid-template-columns:repeat(2,minmax(0,1fr));gap:.6rem}.hero .score{grid-column:span 1;gap:8px;padding:.8rem}.hero .grade{width:36px;height:36px;font-size:19px}
@@ -898,7 +902,7 @@ dl.kv dt{color:var(--muted)}dl.kv dd{margin:0;overflow-wrap:anywhere}
 .pastille{display:inline-flex;align-items:center;gap:.35rem;font-size:.82rem;font-weight:600;padding:.1rem .55rem;border-radius:999px;background:var(--soft);color:var(--muted)}
 .pastille.ok{background:var(--ok-bg);color:var(--ok)}.pastille.warn{background:var(--warn-bg);color:var(--warn)}.pastille.crit{background:var(--crit-bg);color:var(--crit)}
 /* onglets et formulaires (Réglages) */
-.tabs{display:flex;gap:.25rem;border-bottom:1px solid var(--line);margin-bottom:1.25rem;overflow-x:auto;scrollbar-width:thin}
+.tabs{display:flex;flex-wrap:wrap;gap:0 .15rem;border-bottom:1px solid var(--line);margin-bottom:1.25rem}
 .tabs a{border-bottom:2px solid transparent;margin-bottom:-1px;padding:.6rem .8rem;font-weight:600;color:var(--muted);white-space:nowrap;display:flex;align-items:center;gap:.45rem}
 .tabs a:hover{color:var(--ink);text-decoration:none}
 .tabs a[aria-current=page]{color:var(--ink);border-bottom-color:var(--accent)}
@@ -1011,6 +1015,7 @@ ICONES = {
     "corrections": '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.2L4 16.8 7.2 20l5.3-5.3a4 4 0 0 0 5.2-5.4l-2.4 2.4-2.6-.6-.6-2.6z"/>',
     "historique": '<path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3.5 4.5V9H8"/><path d="M12 7.5V12l3 2"/>',
     "rapport": '<path d="M6.5 3.5h7l4 4v13h-11z"/><path d="M13.5 3.5v4h4M9 12h6M9 15.5h6"/>',
+    "inventaire": '<circle cx="12" cy="5.5" r="2"/><circle cx="5.5" cy="18" r="2"/><circle cx="18.5" cy="18" r="2"/><path d="M12 7.5v4M12 11.5l-5.2 4.8M12 11.5l5.2 4.8"/>',
     "reglages": '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
     "deconnexion": '<path d="M14 4.5h4A1.5 1.5 0 0 1 19.5 6v12a1.5 1.5 0 0 1-1.5 1.5h-4"/><path d="m10 8-4 4 4 4M6 12h9"/>',
     "menu": '<path d="M4 7h16M4 12h16M4 17h16"/>',
@@ -1106,7 +1111,7 @@ def barre_laterale(csrf, actif, ctx):
 <div class="sb-head"><a class="brand" href="/">{logo}<span>Audite-moi</span></a><button type="button" class="sb-close" aria-label="Fermer le menu">{fermer}</button></div>
 <div class="sb-host" title="Serveur audité">{hote}</div>
 <div class="sb-audit">{audit}</div>
-<nav class="sb-nav">{tdb}{constats}{materiel}
+<nav class="sb-nav">{tdb}{constats}{materiel}{inventaire}
 <p class="sb-group" id="nav-suivi">Suivi</p><div role="group" aria-labelledby="nav-suivi">{corr}{hist}{rapport}</div></nav>
 <div class="sb-foot"><nav class="sb-nav" aria-label="Configuration">{regl}</nav>
 <div class="sb-row"><label class="sb-theme"><span class="cache">Thème</span><select id="theme" aria-label="Thème"><option value="auto">Thème auto</option><option value="light">Thème clair</option><option value="dark">Thème sombre</option></select></label></div>
@@ -1115,7 +1120,7 @@ def barre_laterale(csrf, actif, ctx):
         menu=icone("menu"), logo=LOGO, fermer=icone("fermer"), deco=icone("deconnexion"), hote=esc(ctx["hote"]), audit=audit, c=esc(csrf),
         mpb='<a class="mobile-pb" href="/constats">{} à corriger</a>'.format(pb[0] + pb[1]) if pb[0] + pb[1] else "",
         tdb=lien("/", "tdb", "Tableau de bord", "tdb"), constats=lien("/constats", "constats", "Constats", "constats", cpt),
-        materiel=lien("/materiel", "materiel", "Matériel", "materiel"), corr=lien("/corrections", "corrections", "Corrections", "corrections"),
+        materiel=lien("/materiel", "materiel", "Matériel", "materiel"), inventaire=lien("/inventaire", "inventaire", "Inventaire", "inventaire"), corr=lien("/corrections", "corrections", "Corrections", "corrections"),
         hist=lien("/historique", "historique", "Historique", "historique"), rapport=rapport, regl=lien("/reglages", "reglages", "Réglages", "reglages"))
 
 
@@ -1303,6 +1308,16 @@ def tableau_bord(app, csrf, nonce, message):
             cl = "crit" if pct >= seuil_c else "warn" if pct >= seuil_a else "ok"
             txt.append('<span class="pastille {}">{} {:.0f} %</span>'.format(cl, esc(x["nom"]), pct))
         kv.append(("Pools ZFS", " ".join(txt)))
+    inv = (ctx["der"] or {}).get("inventaire") or {}
+    if inv.get("internet") is not None and "internet" in inv:
+        ports = sorted({p for v in inv["internet"] for p in v.get("ports") or []})
+        kv.append(("Vu depuis Internet", ('<span class="pastille warn">{} port(s) ouvert(s)</span>'.format(len(ports)) if ports else
+                                          '<span class="pastille ok">aucun port visible</span>') + ' <a href="/inventaire">Inventaire</a>'))
+    doms = [d for d in inv.get("domaines") or [] if d.get("expiration_jours") is not None]
+    if inv.get("domaines"):
+        j = min([d["expiration_jours"] for d in doms] or [None]) if doms else None
+        kv.append(("Domaines", "{} surveillé(s){}".format(len(inv["domaines"]), " · expiration la plus proche : " + (
+            '<span class="pastille {}">{} j</span>'.format("crit" if j < 30 else "warn" if j < 60 else "ok", j)) if j is not None else "")))
     journal = donnees.corrections()
     if journal:
         e = journal[-1]
@@ -1447,6 +1462,114 @@ def page_corrections(app, csrf, nonce, message):
         out.append('<script src="{}" defer></script>'.format(statique("dialogue.js")))
     return coque(donnees, csrf, nonce, "corrections", "Corrections", "".join(out), ctx,
                  "Appliquées depuis l’interface, en root, avec votre mot de passe · chacune peut être annulée")
+
+
+def expo(niveau):
+    return {"internet": '<span class="pastille crit">Internet</span>', "lan": '<span class="pastille warn">Réseau local</span>'}.get(
+        niveau, '<span class="pastille">Interne</span>')
+
+
+def page_inventaire(app, csrf, nonce):
+    donnees = app.donnees
+    ctx = contexte(donnees)
+    der = ctx["der"]
+    inv = (der or {}).get("inventaire") or {}
+    out = []
+    if not der:
+        out.append(aucun_rapport())
+        return coque(donnees, csrf, nonce, "inventaire", "Inventaire", "".join(out), ctx)
+    if not inv:
+        out.append('<div class="card"><p class="muted">Le dernier rapport ne contient pas encore d’inventaire : il sera dressé au prochain audit complet.</p></div>')
+        return coque(donnees, csrf, nonce, "inventaire", "Inventaire", "".join(out), ctx)
+    srv, net, doms = inv.get("serveur") or {}, inv.get("internet") or [], inv.get("domaines") or []
+    imgs = {i.get("image"): i for i in inv.get("images") or []}
+    cont, apps = inv.get("conteneurs") or [], inv.get("appareils") or []
+    nas_ips = set(srv.get("ip") or [])
+    ports_pub = sum(len(v.get("ports") or []) for v in net)
+    exploitees = len({c for i in imgs.values() for c in i.get("exploitees", [])} | {c for a in apps for s in a.get("services", []) for c in s.get("exploitees", [])}
+                     | set((inv.get("paquets") or {}).get("exploitees") or []))
+    exposes = sum(1 for c in cont if c.get("internet")) + sum(1 for a in apps if a.get("expose"))
+    kp = [("Appareils sur le réseau", len(apps), ""), ("Conteneurs", len(cont), ""), ("Domaines", len(doms), ""),
+          ("Exposés à Internet", exposes + ports_pub, "k-WARN" if exposes + ports_pub else "k-OK"),
+          ("Failles exploitées activement", exploitees, "k-CRIT" if exploitees else "k-OK")]
+    out.append('<div class="kpis cinq">{}</div>'.format("".join(
+        '<div class="tile kpi {c}"><div class="v">{v}</div><div class="l">{l}</div></div>'.format(c=c, v=v, l=l) for l, v, c in kp)))
+    # Ce serveur et sa vue depuis Internet
+    kv = [("Nom", esc(srv.get("hote", ctx["hote"]))), ("Système", esc(srv.get("os", ""))), ("Noyau", esc(srv.get("noyau", ""))),
+          ("Adresses locales", esc(", ".join(srv.get("ip") or []) or "—")), ("Adresse publique", esc(srv.get("ip_publique") or "inconnue"))]
+    if srv.get("ipv6"):
+        kv.append(("IPv6 publique", esc(", ".join(srv["ipv6"]))))
+    if (inv.get("paquets") or {}).get("failles"):
+        p = inv["paquets"]
+        kv.append(("Failles corrigeables", '{} (mises à jour en attente){}'.format(p["failles"], ', <span class="pastille crit">{} exploitée(s)</span>'.format(
+            len(p.get("exploitees") or [])) if p.get("exploitees") else "")))
+    vue = []
+    for v in net:
+        if not v.get("ports"):
+            vue.append('<dt>{}</dt><dd><span class="pastille ok">aucun port visible</span></dd>'.format(esc(v["ip"])))
+        else:
+            vue.append('<dt>{}</dt><dd>{}{}</dd>'.format(esc(v["ip"]), " ".join('<span class="pastille warn">{}</span>'.format(esc(p)) for p in v["ports"]),
+                       '<br><span class="small muted">failles associées : {}</span>'.format(esc(", ".join(v.get("vulns", [])[:8]))) if v.get("vulns") else ""))
+    out.append('<div class="grid2c"><div class="card"><h2>Ce serveur</h2><dl class="kv">{}</dl></div>'
+               '<div class="card"><h2>Vu depuis Internet <span class="mini">Shodan InternetDB</span></h2>{}</div></div>'.format(
+                   "".join("<dt>{}</dt><dd>{}</dd>".format(a, b) for a, b in kv),
+                   '<dl class="kv">{}</dl>'.format("".join(vue)) if vue else '<p class="muted">Non consulté (Réglages › Vulnérabilités).</p>'))
+    # Domaines
+    for d in doms:
+        j = d.get("expiration_jours")
+        etat = [("Expiration", '<span class="pastille {}">dans {} jours</span>'.format("crit" if j < 30 else "warn" if j < 60 else "ok", j) if j is not None else "inconnue"),
+                ("Verrou de transfert", '<span class="pastille ok">oui</span>' if d.get("verrou") else '<span class="pastille warn">non</span>' if d.get("verrou") is False else "inconnu"),
+                ("DNSSEC", '<span class="pastille ok">signé</span>' if d.get("dnssec") else '<span class="pastille">non signé</span>'),
+                ("E-mails", ("MX : " + esc(", ".join(d.get("mx") or []))) if d.get("mx") else "aucun MX"),
+                ("SPF / DMARC", "{} / {}".format('<span class="pastille ok">oui</span>' if d.get("spf") else '<span class="pastille warn">absent</span>',
+                                                 '<span class="pastille ok">oui</span>' if d.get("dmarc") else '<span class="pastille warn">absent</span>'))]
+        if d.get("mx"):
+            etat.append(("DKIM", esc(", ".join(d.get("dkim") or [])) or '<span class="pastille">non trouvé</span>'))
+        rows = []
+        for r in d.get("sous_domaines") or []:
+            if not r.get("ips") and not r.get("alerte"):
+                continue
+            j2 = r.get("cert_jours")
+            cert = "—" if j2 is None and r.get("cert_valide") is None else ('<span class="pastille crit">expiré</span>' if j2 is not None and j2 < 0 else
+                   '<span class="pastille warn">invalide</span>' if r.get("cert_valide") is False else "{} j".format(j2) if j2 is not None else "?")
+            rem = {"prise": '<span class="pastille crit">reprise possible</span>', "pendant": '<span class="pastille warn">pointe vers un nom disparu</span>'}.get(r.get("alerte"), "")
+            if not rem and r.get("maison") and not r.get("cloudflare"):
+                rem = '<span class="pastille warn">adresse de la maison</span>'
+            rows.append('<tr><td>{n}</td><td>{a}</td><td>{c}</td><td>{ce}</td><td class="etat">{r}</td></tr>'.format(
+                n=esc(r["nom"]), a=esc(", ".join((r.get("ips") or [])[:2]) or ("→ " + r.get("cname", ""))), c="oui" if r.get("cloudflare") else "non", ce=cert, r=rem))
+        out.append('<div class="card"><h2>{}</h2><dl class="kv">{}</dl>{}</div>'.format(esc(d.get("domaine", "")),
+                   "".join("<dt>{}</dt><dd>{}</dd>".format(a, b) for a, b in etat),
+                   '<h3 class="lbl">Sous-domaines en service</h3><div class="tw"><table><thead><tr><th>Nom</th><th>Adresse</th><th>Cloudflare</th><th>Certificat</th><th>Remarque</th></tr></thead><tbody>{}</tbody></table></div>'.format("".join(rows)) if rows else ""))
+    if not doms:
+        out.append('<div class="card"><h2>Domaines</h2><p class="muted">Aucun domaine surveillé : <a href="/reglages/domaines">ajoutez vos noms de domaine</a>.</p></div>')
+    # Conteneurs
+    if cont:
+        rows = []
+        for c in sorted(cont, key=lambda c: (not c.get("internet"), not c.get("ports"), c.get("nom", ""))):
+            i = imgs.get(c.get("image")) or {}
+            niveau = "internet" if c.get("internet") else "lan" if any(not p.startswith("127.") for p in c.get("ports") or []) else ""
+            f = ('<span class="pastille crit">{} exploitée(s)</span> '.format(len(i["exploitees"])) if i.get("exploitees") else "") + \
+                ("{} critique(s), {} élevée(s)".format(i.get("critiques", 0), i.get("hautes", 0)) if i else '<span class="muted">non analysée</span>')
+            rows.append('<tr><td><b>{n}</b><span class="modele">{im}</span></td><td>{e}</td><td class="etat">{p}</td><td>{x}</td><td class="etat">{f}</td></tr>'.format(
+                n=esc(c.get("nom", "")), im=esc(c.get("image", "")), e=esc(c.get("etat", "")), p=esc(", ".join(c.get("ports") or [])) or "—", x=expo(niveau), f=f))
+        out.append('<div class="card"><h2>Conteneurs <span class="mini">failles des images : Trivy, corrigeables uniquement</span></h2><div class="tw"><table><thead><tr><th>Conteneur</th><th>État</th>'
+                   '<th>Ports publiés</th><th>Exposition</th><th>Failles</th></tr></thead><tbody>{}</tbody></table></div></div>'.format("".join(rows)))
+    # Appareils du réseau
+    if apps:
+        rows = []
+        for a in sorted(apps, key=lambda a: [int(x) if x.isdigit() else 0 for x in a.get("ip", "0").split(".")]):
+            sv = a.get("services") or []
+            ex = sorted({c for s in sv for c in s.get("exploitees", [])})
+            nf = sum(s.get("failles", 0) for s in sv)
+            versions = ", ".join("{} {}".format(s["port"], " ".join(x for x in (s.get("produit"), s.get("version")) if x) or s.get("service", "")) for s in sv[:6])
+            rows.append('<tr><td><b>{ip}</b>{moi}<span class="modele">{nom}</span></td><td class="etat">{v}</td><td>{x}</td><td class="etat">{f}</td></tr>'.format(
+                ip=esc(a.get("ip", "")), moi=" (ce NAS)" if a.get("ip") in nas_ips else "", nom=esc(" · ".join(x for x in (a.get("nom"), a.get("fabricant")) if x)),
+                v=esc(versions) or "—", x=expo("internet" if a.get("expose") else "lan"),
+                f=('<span class="pastille crit">{} exploitée(s)</span> '.format(len(ex)) if ex else "") + ("{} connue(s)".format(nf) if nf else '<span class="muted">aucune connue</span>')))
+        out.append('<div class="card"><h2>Appareils du réseau <span class="mini">versions détectées par nmap, failles d’après la base NVD</span></h2><div class="tw"><table><thead><tr><th>Appareil</th>'
+                   '<th>Services et versions</th><th>Exposition</th><th>Failles</th></tr></thead><tbody>{}</tbody></table></div></div>'.format("".join(rows)))
+    return coque(donnees, csrf, nonce, "inventaire", "Inventaire", "".join(out), ctx,
+                 "Ce qui tourne chez vous, ce qui est exposé, et les failles connues · d’après l’audit du <b>{}</b>".format(esc(der.get("date", ""))))
 
 
 def page_historique(app, csrf, nonce):
@@ -1910,11 +2033,13 @@ def charger_configurer(conf):
     return None
 
 
-ONGLETS = [("seuils", "Seuils"), ("controles", "Réseau"), ("sauvegardes", "Sauvegardes"), ("opnsense", "OPNsense"),
+ONGLETS = [("seuils", "Seuils"), ("controles", "Réseau"), ("domaines", "Domaines"), ("vulnerabilites", "Vulnérabilités"),
+           ("sauvegardes", "Sauvegardes"), ("opnsense", "OPNsense"),
            ("telegram", "Telegram"), ("planification", "Planification"), ("interface", "Interface"),
            ("acceptes", "Acceptés"), ("journal", "Journal")]
 ACTIONS_CONFIG = {   # chemin POST → (action du service root, onglet, mot de passe redemandé)
     "controles": ("controles", "controles", True), "sauvegardes": ("sauvegardes", "sauvegardes", True),
+    "domaines": ("domaines", "domaines", True), "vulnerabilites": ("vulnerabilites", "vulnerabilites", True),
     "opnsense": ("opnsense", "opnsense", True), "opnsense-tester": ("opnsense-tester", "opnsense", False),
     "opnsense-effacer": ("opnsense-effacer", "opnsense", True), "telegram": ("telegram", "telegram", True),
     "telegram-tester": ("telegram-tester", "telegram", False), "telegram-effacer": ("telegram-effacer", "telegram", True),
@@ -1922,7 +2047,9 @@ ACTIONS_CONFIG = {   # chemin POST → (action du service root, onglet, mot de p
     "mot-de-passe": ("interface", "interface", False),
 }
 JOURS_FR = [("lun", "lundi"), ("mar", "mardi"), ("mer", "mercredi"), ("jeu", "jeudi"), ("ven", "vendredi"), ("sam", "samedi"), ("dim", "dimanche")]
-SECRETS_FORM = {"jeton", "cle", "secret", "mot_de_passe", "actuel", "nouveau", "confirmation"}
+SECRETS_FORM = {"jeton", "cle", "secret", "mot_de_passe", "actuel", "nouveau", "confirmation", "nvd_cle"}
+DOMAINES_DEF = {"domaines": "", "selecteurs": "", "sous_domaines": True}
+VULNS_DEF = {"actif": True, "versions_lan": True, "internetdb": True, "nvd_cle_definie": False}
 
 
 def champ(nom, label, valeur="", hint="", type_="text", attrs="", id_=None):
@@ -1958,6 +2085,18 @@ def valeurs_config(action, f, mod):
              "scan_reseaux": f.get("scan_reseaux", "")}
         mod.domaines(v["domaines_extra"])
         mod.reseaux(v["scan_reseaux"])
+        return v
+    if action == "domaines":
+        v = {"domaines": f.get("domaines", ""), "selecteurs": f.get("selecteurs", ""), "sous_domaines": oui_form(f, "sous_domaines")}
+        if len(mod.domaines(v["domaines"]).split()) > 10:
+            raise mod.Refus("10 domaines au plus")
+        mod.selecteurs(v["selecteurs"])
+        return v
+    if action == "vulnerabilites":
+        v = {"actif": oui_form(f, "actif"), "versions_lan": oui_form(f, "versions_lan"), "internetdb": oui_form(f, "internetdb"),
+             "nvd_cle": f.get("nvd_cle", "").strip(), "nvd_effacer": oui_form(f, "nvd_effacer")}
+        if v["nvd_cle"] and not mod.CLE_NVD.fullmatch(v["nvd_cle"]):
+            raise mod.Refus("clé API NVD invalide (format 8-4-4-4-12)")
         return v
     if action == "sauvegardes":
         lignes = []
@@ -2001,6 +2140,8 @@ def onglets(actif, conf):
         pts["opnsense"] = "ok" if conf["opnsense"]["cle_definie"] else ""
         pts["sauvegardes"] = "ok" if conf["sauvegardes"] else ""
         pts["planification"] = "ok" if conf["planification"].get("actif") else "warn"
+        pts["domaines"] = "ok" if (conf.get("domaines") or {}).get("domaines") else ""
+        pts["vulnerabilites"] = "ok" if (conf.get("vulnerabilites") or VULNS_DEF).get("actif") else "warn"
     return '<nav class="tabs" aria-label="Sections des réglages">{}</nav>'.format("".join(
         '<a href="{h}"{c}>{d}{t}</a>'.format(h="/reglages" if k == "seuils" else "/reglages/" + k, c=' aria-current="page"' if k == actif else "",
                                             d='<span class="dot {}"></span>'.format(pts[k]) if k in pts else "", t=t) for k, t in ONGLETS))
@@ -2077,6 +2218,47 @@ def r_controles(app, csrf, conf, s):
         res=champ("scan_reseaux", "Réseaux à scanner", v("scan_reseaux"),
                   "Vide : les réseaux déclarés dans OPNsense, sinon ceux du NAS. Sinon, ex. <code>192.168.1.0/24 10.10.20.0/24</code> (1 024 adresses au plus par réseau)."),
         bar=barre_enregistrer()))
+
+
+def r_domaines(app, csrf, conf, s):
+    d = dict(DOMAINES_DEF, **(conf.get("domaines") or {}))
+    v = lambda k: s.get(k, d[k]) if s else d[k]
+    coche = (s.get("sous_domaines") in ("oui", "on")) if s else d["sous_domaines"]
+    return form("domaines", csrf, """<div class="etroit"><div class="card"><h2>Vos noms de domaine</h2>
+<p class="muted">À chaque audit, chaque domaine est vérifié comme le ferait un attaquant, avec les données publiques : expiration et verrou de transfert,
+DNSSEC, autorités de certification (CAA), protection contre l’usurpation des e-mails (SPF, DKIM, DMARC, MTA-STS), sous-domaines oubliés ou qui
+pointent vers un service supprimé (reprise possible), adresse de la maison qui fuit, certificats HTTPS expirés.</p>
+{dom}{sel}{sous}</div>{b}</div>""".format(
+        dom=champ("domaines", "Domaines à surveiller", v("domaines"), "Séparés par des espaces, ex. <code>exemple.fr mon-autre-domaine.com</code> (10 au plus). "
+                  "Un domaine sans e-mail est aussi vérifié : il doit être protégé contre l’usurpation.", attrs=' placeholder="exemple.fr"'),
+        sel=champ("selecteurs", "Sélecteurs DKIM (facultatif)", v("selecteurs"),
+                  "Les plus courants sont essayés automatiquement. Le vôtre figure dans l’en-tête <code>DKIM-Signature</code> d’un e-mail envoyé (champ <code>s=</code>)."),
+        sous=case("sous_domaines", "Rechercher les sous-domaines dans les journaux publics de certificats (crt.sh)", coche,
+                  "Tout nom pour lequel un certificat a été émis y figure : c’est par là qu’un attaquant commence. Chacun est ensuite résolu et vérifié."),
+        b=barre_enregistrer()))
+
+
+def r_vulnerabilites(app, csrf, conf, s):
+    d = dict(VULNS_DEF, **(conf.get("vulnerabilites") or {}))
+    coche = lambda k: (s.get(k) in ("oui", "on")) if s else d[k]
+    nvd = ('<p class="etat-ligne"><span class="pastille ok">Clé NVD enregistrée</span></p>' if d["nvd_cle_definie"] else "")
+    return form("vulnerabilites", csrf, """<div class="etroit"><div class="card"><h2>Vulnérabilités connues</h2>
+<p class="muted">Les versions installées sont croisées avec les bases publiques de failles, puis classées par risque réel : faille exploitée par des attaquants
+(catalogue CISA KEV), probabilité d’exploitation (EPSS), et exposition (Internet, réseau local).</p>
+{actif}{lan}{inet}</div>
+<div class="card"><h2>Clé API NVD (facultative)</h2>{nvd}<p class="muted">Sans clé, la base NVD limite le débit : les versions des appareils du réseau sont vérifiées
+petit à petit, sur plusieurs audits. Une clé gratuite (<a href="https://nvd.nist.gov/developers/request-an-api-key" target="_blank" rel="noopener noreferrer">demande sur nvd.nist.gov</a>)
+accélère la vérification.</p>{cle}{eff}</div>{b}</div>""".format(
+        actif=case("actif", "Rechercher les vulnérabilités connues à chaque audit", coche("actif"),
+                   "Paquets du serveur (OSV.dev), images Docker (Trivy), services des appareils du réseau (NVD)."),
+        lan=case("versions_lan", "Détecter les versions des services du réseau local (nmap -sV)", coche("versions_lan"),
+                 "Rend le scan du réseau plus long (quelques minutes) mais permet de repérer caméras, box ou NAS au logiciel vulnérable."),
+        inet=case("internetdb", "Consulter ce qu’Internet voit de votre adresse publique (Shodan InternetDB)", coche("internetdb"),
+                  "Ports ouverts et failles que les scanners d’Internet associent à votre adresse. Seule votre adresse IP publique est envoyée."),
+        nvd=nvd, cle=champ("nvd_cle", "Clé API NVD", "", "", "password",
+                           (' placeholder="déjà enregistrée : laisser vide pour conserver"' if d["nvd_cle_definie"] else ' placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"') + ' autocomplete="off"'),
+        eff=case("nvd_effacer", "Effacer la clé enregistrée", False) if d["nvd_cle_definie"] else "",
+        b=barre_enregistrer()))
 
 
 def r_sauvegardes(app, csrf, conf, s):
@@ -2279,6 +2461,8 @@ def r_journal(app):
 SOUS_TITRES = {
     "seuils": "Niveaux d’alerte des contrôles de santé (températures, usure, remplissage…)",
     "controles": "Ce que l’audit teste sur le réseau : services publiés et réseau local",
+    "domaines": "DNS, messagerie, sous-domaines et certificats de vos noms de domaine",
+    "vulnerabilites": "Failles connues des logiciels du serveur, des conteneurs et des appareils du réseau",
     "sauvegardes": "Les sauvegardes dont l’audit vérifie la fraîcheur",
     "opnsense": "Lecture de la configuration du routeur par son API (lecture seule)",
     "telegram": "Prévenu sur votre téléphone quand quelque chose change",
@@ -2309,6 +2493,7 @@ def page_reglages(app, csrf, nonce, onglet="seuils", q=None, erreurs=None, saisi
         else:
             s = {k: v for k, v in (saisie or {}).items() if k not in SECRETS_FORM} if saisie else None
             corps.append({"controles": lambda: r_controles(app, csrf, conf, s), "sauvegardes": lambda: r_sauvegardes(app, csrf, conf, s),
+                          "domaines": lambda: r_domaines(app, csrf, conf, s), "vulnerabilites": lambda: r_vulnerabilites(app, csrf, conf, s),
                           "opnsense": lambda: r_opnsense(app, csrf, conf, s), "telegram": lambda: r_telegram(app, csrf, conf, s, hote),
                           "planification": lambda: r_planification(app, csrf, conf, s)}[onglet]())
     return coque(app.donnees, csrf, nonce, "reglages", "Réglages", "".join(corps), sous_titre=SOUS_TITRES.get(onglet, ""),
@@ -2469,6 +2654,8 @@ class Gestionnaire(http.server.BaseHTTPRequestHandler):
             return self.envoyer(200, page_constats(self.app, s["csrf"], nonce, m, choix), csp=self.csp_page(nonce))
         if chemin.path == "/corrections":
             return self.envoyer(200, page_corrections(self.app, s["csrf"], nonce, m), csp=self.csp_page(nonce))
+        if chemin.path == "/inventaire":
+            return self.envoyer(200, page_inventaire(self.app, s["csrf"], nonce), csp=self.csp_page(nonce))
         if chemin.path == "/historique":
             return self.envoyer(200, page_historique(self.app, s["csrf"], nonce), csp=self.csp_page(nonce))
         if chemin.path == "/reglages/resultat.json":

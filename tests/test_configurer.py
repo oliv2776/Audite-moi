@@ -200,6 +200,28 @@ class TestService(unittest.TestCase):
         journal = json.load(open(os.path.join(self.etat, "configuration-journal.json")))
         self.assertEqual([e["action"] for e in journal], ["controles", "sauvegardes"])
 
+    def test_domaines_et_vulnerabilites(self):
+        r = self.lancer("domaines", {"domaines": "Exemple.fr autre.org", "selecteurs": "s1 perso", "sous_domaines": "non"})
+        self.assertTrue(r["ok"], r)
+        c = cfg.lire_conf(self.conf)
+        self.assertEqual((c["DOMAINES"], c["DKIM_SELECTEURS"], c["SOUS_DOMAINES"]), ("exemple.fr autre.org", "s1 perso", "non"))
+        for mauvais in ({"domaines": "exemple.fr; rm"}, {"domaines": "a.fr", "selecteurs": "s1$(id)"}):
+            r = self.lancer("domaines", mauvais, "demande-0002")
+            self.assertFalse(r["ok"], mauvais)
+        cle = "12345678-abcd-4ef0-9876-0123456789ab"
+        r = self.lancer("vulnerabilites", {"actif": "oui", "versions_lan": "non", "internetdb": "oui", "nvd_cle": cle}, "demande-0003")
+        self.assertTrue(r["ok"], r)
+        c = cfg.lire_conf(self.conf)
+        self.assertEqual((c["VULNERABILITES"], c["VERSIONS_LAN"], c["NVD_API_KEY"]), ("oui", "non", cle))
+        vue = json.load(open(os.path.join(self.etat, "configuration.json")))
+        self.assertEqual(vue["vulnerabilites"], {"actif": True, "versions_lan": False, "internetdb": True, "nvd_cle_definie": True})
+        self.assertEqual(vue["domaines"]["domaines"], "exemple.fr autre.org")
+        self.assertNotIn(cle, self.tout_le_texte())
+        r = self.lancer("vulnerabilites", {"actif": "oui", "nvd_cle": "pas-une-cle"}, "demande-0004")
+        self.assertFalse(r["ok"])
+        r = self.lancer("vulnerabilites", {"actif": "oui", "nvd_effacer": "oui"}, "demande-0005")
+        self.assertEqual(cfg.lire_conf(self.conf)["NVD_API_KEY"], "")
+
     def test_planification(self):
         r = self.lancer("planification", {"actif": "oui", "frequence": "quotidien", "heure": "02:30", "garder": "90"})
         self.assertTrue(r["ok"], r)

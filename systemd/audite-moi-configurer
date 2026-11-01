@@ -70,6 +70,20 @@ def domaines(v):
     return " ".join(dict.fromkeys(noms))
 
 
+SELECTEUR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
+CLE_NVD = re.compile(r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$")
+
+
+def selecteurs(v):
+    s = [x for x in re.split(r"[\s,;]+", str(v or "").strip()) if x]
+    if len(s) > 10:
+        raise Refus("10 sélecteurs DKIM au plus")
+    for x in s:
+        if not SELECTEUR.fullmatch(x):
+            raise Refus("sélecteur DKIM invalide : {}".format(x[:40]))
+    return " ".join(dict.fromkeys(s))
+
+
 def reseaux(v):
     res = []
     for x in [x for x in re.split(r"[\s,;]+", str(v or "").strip()) if x]:
@@ -467,6 +481,34 @@ def act_opnsense_tester(v, cx):
     return ok, msg, [], ok
 
 
+def act_domaines(v, cx):
+    doms = domaines(v.get("domaines"))
+    if len(doms.split()) > 10:
+        raise Refus("10 domaines au plus")
+    modifier_conf(cx.conf, {"DOMAINES": doms, "DKIM_SELECTEURS": selecteurs(v.get("selecteurs")),
+                            "SOUS_DOMAINES": oui_non(v.get("sous_domaines"), "recherche des sous-domaines")})
+    n = len(doms.split()) if doms else 0
+    return True, "{} domaine(s) surveillé(s) : vérification au prochain audit.".format(n) if n else "Aucun domaine surveillé.", ["domaines surveillés"]
+
+
+def act_vulnerabilites(v, cx):
+    valeurs = {"VULNERABILITES": oui_non(v.get("actif"), "recherche des vulnérabilités"),
+               "VERSIONS_LAN": oui_non(v.get("versions_lan"), "versions des services du réseau"),
+               "INTERNETDB": oui_non(v.get("internetdb"), "vue depuis Internet")}
+    changes = ["recherche des vulnérabilités"]
+    cle = str(v.get("nvd_cle", "")).strip()
+    if v.get("nvd_effacer") in ("oui", "on", "1"):
+        valeurs["NVD_API_KEY"] = ""
+        changes.append("clé NVD effacée")
+    elif cle:
+        if not CLE_NVD.fullmatch(cle):
+            raise Refus("clé API NVD invalide (format 8-4-4-4-12, reçue par e-mail après la demande sur nvd.nist.gov)")
+        valeurs["NVD_API_KEY"] = cle
+        changes.append("clé NVD")
+    modifier_conf(cx.conf, valeurs)
+    return True, "Réglages enregistrés : ils s'appliquent au prochain audit.", changes
+
+
 def act_opnsense_effacer(v, cx):
     modifier_conf(cx.conf, {"OPNSENSE_URL": "", "OPNSENSE_KEY": "", "OPNSENSE_SECRET": ""})
     return True, "Clé API d'OPNsense effacée : pensez à la supprimer aussi dans OPNsense.", ["OPNsense (clé effacée)"]
@@ -563,6 +605,8 @@ ACTIONS = {
     "telegram": ("Alertes Telegram", act_telegram),
     "telegram-tester": ("Test des alertes Telegram", act_telegram_tester),
     "telegram-effacer": ("Désactivation des alertes Telegram", act_telegram_effacer),
+    "domaines": ("Domaines surveillés", act_domaines),
+    "vulnerabilites": ("Vulnérabilités connues", act_vulnerabilites),
     "planification": ("Planification des audits", act_planification),
     "interface": ("Interface web", act_interface),
 }
@@ -586,6 +630,10 @@ def exporter(cx):
                      "verifier_tls": est_oui(c.get("OPNSENSE_VERIFIER_TLS", "oui"))},
         "telegram": {"jeton_defini": bool(c.get("TELEGRAM_TOKEN")), "chat_id": c.get("TELEGRAM_CHAT_ID", ""),
                      "alertes": est_oui(c.get("ALERTES", "oui")), "interface_url": c.get("INTERFACE_URL", "")},
+        "domaines": {"domaines": c.get("DOMAINES", ""), "selecteurs": c.get("DKIM_SELECTEURS", ""),
+                     "sous_domaines": est_oui(c.get("SOUS_DOMAINES", "oui"))},
+        "vulnerabilites": {"actif": est_oui(c.get("VULNERABILITES", "oui")), "versions_lan": est_oui(c.get("VERSIONS_LAN", "oui")),
+                           "internetdb": est_oui(c.get("INTERNETDB", "oui")), "nvd_cle_definie": bool(c.get("NVD_API_KEY"))},
         "planification": p,
         "interface": {"ecoute": web.get("ecoute", ""), "port": web.get("port", ""), "https": bool(web.get("tls_cert")),
                       "duree_session_h": web.get("duree_session_h", 12)},

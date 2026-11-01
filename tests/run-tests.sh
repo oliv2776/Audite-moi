@@ -34,6 +34,10 @@ for d in sda:0 sdb:0 sdc:1 sdd:1 sde:1 nvme0n1:0; do mkdir -p "$S/block/${d%%:*}
 printf 'x x x\nname type data\nsize 4 12884901888\nc_min 4 1073741824\nc_max 4 16777216000\nhits 4 98765432\nmisses 4 1234567\n' > "$TMP/arcstats"
 
 export AUDITE_MOI_SUDO_TRACE=$TMP/appels-sudo.txt
+# services publics interrogés par audite-moi-analyse.py : réponses simulées, aucun accès réseau
+export AUDITE_MOI_HTTP_MOCK; AUDITE_MOI_HTTP_MOCK=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import http_simule; print(http_simule.ecrire(sys.argv[2]))' "$ROOT/tests" "$TMP/http")
+export AUDITE_MOI_CERTS; AUDITE_MOI_CERTS=$(python3 -c 'import sys, json; sys.path.insert(0, sys.argv[1]); import http_simule; print(json.dumps(http_simule.CERTS))' "$ROOT/tests")
+export AUDITE_MOI_CACHE=$TMP/cache
 export AUDITE_MOI_FIX=$ROOT/tests/fixtures AUDITE_MOI_DRI_DIR=$TMP/dri AUDITE_MOI_DRM_CLASS=$S/drm \
        AUDITE_MOI_ARCSTATS=$TMP/arcstats AUDITE_MOI_SYS_BLOCK=$S/block AUDITE_MOI_SMB_CONF=$ROOT/tests/fixtures/smb.conf
 
@@ -48,6 +52,8 @@ OPNSENSE_KEY=clef-api
 OPNSENSE_SECRET="secret+/="
 SCAN_RESEAU=oui
 SAUVEGARDES="photos-usb:zfs:stockage/photos:26 cle-usb:fichier:/chemin/introuvable:48"
+DOMAINES="exemple.fr sansmail.fr"
+DKIM_SELECTEURS="perso"
 EOC
 chmod 644 "$TMP/audit.conf"
 maintenant=$(date +%s)
@@ -74,6 +80,25 @@ expect() {   # expect NIVEAU "motif dans le titre"
   if jq -e --arg l "$1" --arg t "$2" '.constats[] | select(.niveau == $l and (.titre | contains($t)))' "$J" >/dev/null; then ok "[$1] $2"
   else ko "constat attendu absent : [$1] $2"; fi
 }
+# vulnérabilités connues, vue depuis Internet, domaines, cloisonnement (réseau simulé : tests/http_simule.py)
+expect CRIT "1 faille(s) exploitée(s) activement, corrigée(s) par les mises à jour en attente"
+expect CRIT "192.168.20.5 (camera-entree) : Boa HTTPd 0.94.14rc21 sur le port 80"
+expect INFO "appareil(s) administré(s) en HTTP non chiffré"
+expect CRIT "Internet voit 2 port(s) ouvert(s) sur 203.0.113.7"
+expect CRIT "Shodan associe 1 faille(s) connue(s) à 203.0.113.7"
+expect CRIT "Le domaine exemple.fr expire dans"
+expect WARN "Domaine exemple.fr : DMARC en mode observation"
+expect CRIT "vieux.exemple.fr : sous-domaine pouvant être repris"
+expect WARN "Domaine exemple.fr : 1 nom(s) révèlent l'adresse de la maison"
+expect WARN "Domaine sansmail.fr : sans e-mail, mais pas protégé"
+expect WARN "Le réseau « IOT » (192.168.20.0/24) peut joindre les autres réseaux internes"
+jq -e '.inventaire | (.serveur.hote != null) and (.conteneurs | length > 0) and (.appareils | length == 4) and (.domaines | length == 2)
+  and (.internet | length == 2) and (.paquets.exploitees == ["CVE-2024-0001"])' "$J" >/dev/null \
+  && ok "inventaire complet dans le rapport (serveur, conteneurs, appareils, domaines, vue depuis Internet)" || ko "inventaire incomplet dans le rapport"
+jq -e '.inventaire.images[] | select((.image | startswith("nextcloud")) and .critiques == 1 and .hautes == 2)' "$J" >/dev/null && ok "inventaire : failles des images (Trivy)" || ko "inventaire : failles des images"
+jq -e '.inventaire.serveur.ip == ["192.168.1.10"]' "$J" >/dev/null && ok "inventaire : adresses du serveur sans les ponts Docker" || ko "inventaire : adresses du serveur"
+jq -e '.inventaire.conteneurs[] | select(.nom == "jellyfin" and .internet == true)' "$J" >/dev/null && ok "inventaire : conteneur exposé à Internet repéré" || ko "inventaire : exposition des conteneurs"
+grep -q 'cpe:2.3:a:boa' "$J" && ok "versions des services du réseau conservées (CPE)" || ko "CPE des services absents de l'inventaire"
 expect WARN "Pool rapide rempli à 83"
 expect WARN "Pool stockage : erreurs d'entrées/sorties"
 expect WARN "le dernier scrub a réparé"
@@ -312,12 +337,14 @@ if python3 "$ROOT/tests/test_web.py" > "$TMP/web.txt" 2>&1; then ok "tests de l'
 else ko "tests de l'interface web"; tail -n 25 "$TMP/web.txt"; fi
 if python3 "$ROOT/tests/test_mesures.py" > "$TMP/mesures.txt" 2>&1; then ok "tests de robustesse de l'inventaire SMART"
 else ko "tests de robustesse de l'inventaire SMART"; tail -n 25 "$TMP/mesures.txt"; fi
+if python3 "$ROOT/tests/test_analyse.py" > "$TMP/analyse.txt" 2>&1; then ok "tests du module d'analyse (failles connues, Internet, domaines)"
+else ko "tests du module d'analyse"; tail -n 25 "$TMP/analyse.txt"; fi
 if python3 "$ROOT/tests/test_configurer.py" > "$TMP/configurer.txt" 2>&1; then ok "tests du service de réglages (validation, secrets, journal)"
 else ko "tests du service de réglages"; tail -n 25 "$TMP/configurer.txt"; fi
 if python3 "$ROOT/tests/test_corriger.py" > "$TMP/corriger.txt" 2>&1; then ok "tests de sécurité du moteur de correction"
 else ko "tests du moteur de correction"; tail -n 25 "$TMP/corriger.txt"; fi
 for f in "$ROOT"/install.sh "$ROOT"/uninstall.sh "$ROOT"/systemd/audite-moi-run "$SCRIPT"; do bash -n "$f" || ko "syntaxe : $f"; done
-python3 -c "import ast,sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]" "$ROOT/systemd/audite-moi-mesures" "$ROOT/systemd/audite-moi-configurer" "$ROOT/web/audite-moi-web.py" && ok "syntaxe Python" || ko "syntaxe Python"
+python3 -c "import ast,sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]" "$ROOT/systemd/audite-moi-mesures" "$ROOT/systemd/audite-moi-configurer" "$ROOT/audite-moi-analyse.py" "$ROOT/web/audite-moi-web.py" && ok "syntaxe Python" || ko "syntaxe Python"
 if command -v shellcheck >/dev/null; then
   shellcheck -S warning "$SCRIPT" "$ROOT/install.sh" "$ROOT/uninstall.sh" "$ROOT/systemd/audite-moi-run" && ok "shellcheck sans avertissement" || ko "shellcheck"
   # SC2006 est de niveau « style » : sans ce contrôle, un `…` non échappé dans un

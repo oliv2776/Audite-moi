@@ -8,7 +8,7 @@
 <host><status state="up" reason="localhost-response"/>
 <address addr="192.168.1.10" addrtype="ipv4"/>
 <hostnames><hostname name="nas-demo" type="PTR"/></hostnames>
-<ports><port protocol="tcp" portid="22"><state state="open"/><service name="ssh"/></port>
+<ports><port protocol="tcp" portid="22"><state state="open"/><service name="ssh" product="OpenSSH" version="9.6p1 Ubuntu 3ubuntu13.5"><cpe>cpe:/a:openbsd:openssh:9.6p1</cpe><cpe>cpe:/o:linux:linux_kernel</cpe></service></port>
 <port protocol="tcp" portid="445"><state state="open"/><service name="microsoft-ds"/></port></ports></host>
 <host><status state="up" reason="arp-response"/>
 <address addr="192.168.1.30" addrtype="ipv4"/><address addr="52:54:00:AA:BB:CC" addrtype="mac" vendor="QEMU virtual NIC"/>
@@ -18,6 +18,7 @@
 <address addr="192.168.20.5" addrtype="ipv4"/>
 <hostnames><hostname name="camera-entree" type="PTR"/></hostnames>
 <ports><port protocol="tcp" portid="23"><state state="open"/><service name="telnet"/></port>
+<port protocol="tcp" portid="80"><state state="open"/><service name="http" product="Boa HTTPd" version="0.94.14rc21"><cpe>cpe:/a:boa:boa:0.94.14rc21</cpe></service></port>
 <port protocol="tcp" portid="554"><state state="open"/><service name="rtsp"/></port></ports></host>
 <host><status state="down" reason="no-response"/><address addr="192.168.20.6" addrtype="ipv4"/></host>
 </nmaprun>
