@@ -2569,7 +2569,7 @@ check_opnsense() {
   code=$(opn_api /api/core/backup/download/this "$xml")
   if [[ $code != 200 ]] || ! grep -q '<opnsense>' "$xml" 2>/dev/null; then
     info "OPNsense : configuration illisible (HTTP $code)" "Sans la configuration, les redirections de ports et les règles ne peuvent pas être vérifiées." \
-      "Ajoutez le privilège « Diagnostics: Backup & Restore » (ou « System: Configuration: Backups ») à l'utilisateur de la clé API (voir README)"
+      "Ajoutez le privilège « Diagnostics: Configuration History » à l'utilisateur de la clé API (c'est lui qui ouvre l'API api/core/backup ; « System: Configuration: Backups » ne suffit pas)"
     rm -f "$xml"; return
   fi
   ecoutes_prep

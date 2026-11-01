@@ -2302,7 +2302,7 @@ def r_opnsense(app, csrf, conf, s):
     verif = (s.get("verifier_tls") in ("oui", "on")) if s else o["verifier_tls"]
     aide = """<details class="card"><summary><b>Créer la clé API dans OPNsense</b> (lecture seule)</summary>
 <ol class="etapes"><li><b>Système › Accès › Utilisateurs › +</b> : utilisateur <code>audite-moi</code>, cochez « Générer un mot de passe brouillé » (il ne se connectera jamais).</li>
-<li>Dans <b>Privilèges effectifs</b>, ajoutez uniquement <b>System: Firmware</b> et <b>Diagnostics: Backup &amp; Restore</b> (selon la version : <b>System: Configuration: Backups</b>).</li>
+<li>Dans <b>Privilèges effectifs</b>, ajoutez uniquement <b>System: Firmware</b> et <b>Diagnostics: Configuration History</b> (c’est lui qui ouvre l’API de téléchargement de la configuration ; « System: Configuration: Backups » ne suffit pas).</li>
 <li>Rouvrez l’utilisateur, section <b>Clés API</b>, bouton <b>+</b> : OPNsense télécharge <code>apikey.txt</code> avec <code>key=</code> et <code>secret=</code>.</li></ol>
 <p class="hint">Ces privilèges permettent de lire toute la configuration (redirections, règles, empreintes de mots de passe) : la clé reste dans
 <code>/etc/audite-moi/audit.conf</code>, lisible par root seulement, et n’est jamais renvoyée à cette page ni écrite dans les rapports.</p></details>"""
