@@ -698,5 +698,64 @@
       },
       "Ports": {}
     }
+  },
+  {
+    "Id": "000000000000000000000000000000000000000000000000000000000000000a",
+    "Name": "/watchtower",
+    "Path": "/watchtower",
+    "Args": [],
+    "State": {
+      "Status": "restarting",
+      "Running": false,
+      "Restarting": true,
+      "ExitCode": 1,
+      "StartedAt": "2026-10-31T20:00:00.123456789Z",
+      "OOMKilled": false,
+      "Pid": 0
+    },
+    "RestartCount": 26,
+    "Image": "sha256:000000000000000000000000000000000000000000000000000000000000006d",
+    "Config": {
+      "Image": "containrrr/watchtower",
+      "User": "",
+      "Env": [
+        "WATCHTOWER_CLEANUP=true"
+      ],
+      "Labels": {}
+    },
+    "HostConfig": {
+      "Privileged": false,
+      "NetworkMode": "proxy",
+      "PidMode": "",
+      "IpcMode": "private",
+      "CapAdd": null,
+      "SecurityOpt": null,
+      "ReadonlyRootfs": false,
+      "Memory": 0,
+      "RestartPolicy": {
+        "Name": "unless-stopped"
+      },
+      "Devices": null,
+      "DeviceRequests": null,
+      "Runtime": "runc",
+      "GroupAdd": null,
+      "LogConfig": {
+        "Type": "json-file",
+        "Config": {
+          "max-size": "10m"
+        }
+      }
+    },
+    "Mounts": [],
+    "NetworkSettings": {
+      "Networks": {
+        "bridge": {
+          "Aliases": [],
+          "DNSNames": [],
+          "IPAddress": ""
+        }
+      },
+      "Ports": {}
+    }
   }
 ]

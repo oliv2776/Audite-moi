@@ -48,6 +48,7 @@ case $url in
     if [[ $code == 200 ]]; then
       case $url in
         */api/core/firmware/status) reponse 200 '{"product_version":"25.7.3","status":"update","status_msg":"There are 12 updates available, total download size is 48.2MiB."}' ;;
+        */api/diagnostics/interface/getArp) reponse 200 '[{"ip":"192.168.20.5","mac":"AA:BB:CC:00:00:05","manufacturer":"Hangzhou Hikvision","hostname":"","intf":"vlan0.20"},{"ip":"192.168.1.1","mac":"00:0d:b9:11:22:33","manufacturer":"PC Engines","hostname":"","permanent":true}]' ;;
         */api/core/backup/download/this) reponse 200 "$(cat "$F/opnsense-config.xml")" ;;
         *) reponse 404 '' ;;
       esac

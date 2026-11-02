@@ -30,6 +30,26 @@ echo 28000000 > "$H/power1_average"
 for n in renderD128:0000:00:02.0 renderD129:0000:03:00.0; do
   mkdir -p "$S/drm/${n%%:*}"; ln -s "../../pci/${n#*:}" "$S/drm/${n%%:*}/device"; touch "$TMP/dri/${n%%:*}"
 done
+# Faux /sys pour la section Énergie : processeur bridé en « performance », ASPM partiel, SATA sans économie, carte AMD bloquée
+Y=$TMP/sysroot
+for c in 0 1; do
+  mkdir -p "$Y/devices/system/cpu/cpu$c/cpufreq"
+  echo intel_pstate > "$Y/devices/system/cpu/cpu$c/cpufreq/scaling_driver"; echo performance > "$Y/devices/system/cpu/cpu$c/cpufreq/scaling_governor"
+  echo performance > "$Y/devices/system/cpu/cpu$c/cpufreq/energy_performance_preference"
+done
+for st in 0:POLL:0 1:C1:1000 2:C6:5000000; do
+  IFS=: read -r i n t <<< "$st"; mkdir -p "$Y/devices/system/cpu/cpu0/cpuidle/state$i"
+  echo "$n" > "$Y/devices/system/cpu/cpu0/cpuidle/state$i/name"; echo 0 > "$Y/devices/system/cpu/cpu0/cpuidle/state$i/disable"; echo "$t" > "$Y/devices/system/cpu/cpu0/cpuidle/state$i/time"
+done
+mkdir -p "$Y/module/pcie_aspm/parameters" "$Y/bus/pci/devices/0000:01:00.0/link" "$Y/bus/pci/devices/0000:02:00.0/link" "$Y/bus/pci/devices/0000:01:00.0/power" \
+  "$Y/class/scsi_host/host0" "$Y/class/scsi_host/host1" "$Y/class/powercap/intel-rapl:0"
+echo '[default] performance powersave powersupersave' > "$Y/module/pcie_aspm/parameters/policy"
+echo 0 > "$Y/bus/pci/devices/0000:01:00.0/link/l1_aspm"; echo 1 > "$Y/bus/pci/devices/0000:02:00.0/link/l1_aspm"; echo on > "$Y/bus/pci/devices/0000:01:00.0/power/control"
+echo max_performance > "$Y/class/scsi_host/host0/link_power_management_policy"; echo med_power_with_dipm > "$Y/class/scsi_host/host1/link_power_management_policy"
+echo package-0 > "$Y/class/powercap/intel-rapl:0/name"; echo 123456789 > "$Y/class/powercap/intel-rapl:0/energy_uj"
+echo 'BOOT_IMAGE=/vmlinuz root=/dev/mapper/vg-root ro quiet intel_idle.max_cstate=1' > "$TMP/cmdline"
+mkdir -p "$S/drm/card1"; ln -s "../../pci/0000:03:00.0" "$S/drm/card1/device"; echo high > "$S/pci/0000:03:00.0/power_dpm_force_performance_level"
+export AUDITE_MOI_SYS=$Y AUDITE_MOI_CMDLINE=$TMP/cmdline AUDITE_MOI_RAPL_DELAI=0.1
 for d in sda:0 sdb:0 sdc:1 sdd:1 sde:1 nvme0n1:0; do mkdir -p "$S/block/${d%%:*}/queue"; echo "${d#*:}" > "$S/block/${d%%:*}/queue/rotational"; done
 printf 'x x x\nname type data\nsize 4 12884901888\nc_min 4 1073741824\nc_max 4 16777216000\nhits 4 98765432\nmisses 4 1234567\n' > "$TMP/arcstats"
 
@@ -221,8 +241,22 @@ jq -e '[.constats[] | select(.niveau == "WARN" and (.accepte | not))] | length =
 jq -e '[.constats[].actions[]?.type] | (index("zfs-scrub") and index("zfs-autotrim") and index("nc-debug-off") and index("nc-2fa-imposer"))' "$J" >/dev/null \
   && ok "corrections en un clic proposées (scrub, TRIM, Nextcloud)" || ko "corrections proposées"
 jq -e '[.constats[] | select(.cle | test("[0-9]"))] | length == 0' "$J" >/dev/null && ok "identifiants de constats sans chiffres" || ko "identifiants de constats"
+# Consommation électrique
+expect WARN "Processeur réglé en mode « performance »"
+expect WARN "Options de démarrage qui limitent les économies d'énergie"
+expect WARN "Carte graphique AMD bloquée en mode « high »"
+expect INFO "Veille PCIe (ASPM L1) désactivée sur 1 lien(s)"
+expect INFO "Ports SATA sans économie d'énergie du lien"
+expect INFO "Consommation mesurée"
+jq -e '.constats[] | select(.titre == "Le processeur ne peut pas entrer en veille profonde (C6)")' "$J" >/dev/null && ko "C6 pris pour un état léger" || ok "C6 reconnu comme veille profonde"
+# Docker 29 et images abandonnées
+jq -e '.constats[] | select(.titre == "Conteneur watchtower en boucle de redémarrage") | (.detail | contains("archivé")) and (.correctif | contains("nickfedor/watchtower"))' "$J" >/dev/null \
+  && ok "watchtower incompatible avec Docker 29 expliqué" || ko "cause du plantage de watchtower"
 # Réseau local
 expect INFO "Réseaux trop grands ignorés : 10.30.0.0/16"
+jq -e '.constats[] | select(.titre | startswith("Réseaux trop grands")) | .titre | contains("127.0.0.0")' "$J" >/dev/null && ko "boucle locale d'OPNsense scannée" || ok "boucle locale d'OPNsense ignorée"
+grep -q 'OPNsense (LAN)' "$OUT"/rapport-*.txt && ok "adresse du routeur nommée dans l'inventaire" || ko "adresse du routeur non nommée"
+grep -q 'Hangzhou Hikvision' "$OUT"/rapport-*.txt && ok "fabricant complété par la table ARP d'OPNsense" || ko "table ARP d'OPNsense non utilisée"
 expect INFO "4 appareil(s) trouvé(s) sur 192.168.1.0/24 192.168.20.0/24"
 expect CRIT "API Docker sans TLS ouverte sur le réseau : 192.168.1.30"
 expect WARN "Services risqués sur d'autres appareils du réseau"

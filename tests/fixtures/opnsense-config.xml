@@ -50,6 +50,13 @@
       <ipaddr>10.30.0.1</ipaddr>
       <subnet>16</subnet>
     </opt2>
+    <lo0>
+      <if>lo0</if>
+      <descr>Loopback</descr>
+      <enable>1</enable>
+      <ipaddr>127.0.0.1</ipaddr>
+      <subnet>8</subnet>
+    </lo0>
   </interfaces>
   <nat>
     <rule>
