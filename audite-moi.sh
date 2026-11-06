@@ -756,7 +756,15 @@ check_disques() {
   note "Lecture SMART de ${#devs[@]} disque(s)…"
 
   local -a rows=() okd=() notest=() oldtest=()
-  local e
+  # Historique CRC du relevé horaire (audite-moi-mesures) : le compteur ne redescend jamais,
+  # seule une hausse récente est inquiétante
+  local -A crc_avant=() crc_hausse=()
+  local e n v h
+  if [[ -r $MESURES_FILE ]]; then
+    while IFS=$US read -r n v h; do [[ -n $n ]] && { crc_avant[$n]=$v; crc_hausse[$n]=$h; }; done \
+      < <(jq -r '.disques[]? | select(.nom != null) | [.nom, (.crc // "" | tostring), (.crc_hausse // "" | tostring)] | join("\u001f")' "$MESURES_FILE" 2>/dev/null)
+  fi
+  local fenetre=${SEUIL[disque_crc_fenetre_jours]:-7} maintenant; maintenant=$(date +%s)
   for e in "${devs[@]}"; do
     local dev=${e%%"$US"*} typ=${e#*"$US"}
     local j="$WORK/smart_${dev//\//_}.json"
@@ -815,7 +823,24 @@ check_disques() {
       if ((offu >= ${SEUIL[disque_en_attente_critique]:-10})); then lvl=CRIT; else lvl=$(worst "$lvl" WARN); fi; iss+=("$offu secteur(s) irrécupérable(s)")
     fi
     if isint "$repu" && ((repu > 0)); then lvl=$(worst "$lvl" WARN); iss+=("$repu erreur(s) non corrigée(s) signalée(s)"); fi
-    if isint "$crc" && ((crc > 0)); then lvl=$(worst "$lvl" WARN); iss+=("$crc erreur(s) CRC de liaison"); cablefix=1; CRC_DISQUES+=("$dev"); fi
+    local crcnote=""
+    if isint "$crc" && ((crc > 0)); then
+      local cn=${dev##*/} ch
+      ch=${crc_hausse[$cn]:-}; ch=${ch%.*}
+      if [[ ${crc_avant[$cn]:-} == "$crc" ]] && isint "$ch" && ((maintenant - ch >= fenetre * 86400)); then
+        # compteur figé depuis plus de la fenêtre : erreurs anciennes, câble réglé
+        crcnote="Les $crc erreurs CRC sont anciennes : le compteur n'a pas bougé depuis le $(date -d "@$ch" '+%d/%m/%Y') (relevé horaire). Il ne redescend jamais ; tant qu'il reste stable, la liaison est saine."
+        iss+=("$crc erreur(s) CRC de liaison")
+      else
+        lvl=$(worst "$lvl" WARN); iss+=("$crc erreur(s) CRC de liaison"); cablefix=1; CRC_DISQUES+=("$dev")
+        if isint "${crc_avant[$cn]:-x}" && ((${crc_avant[$cn]} < crc)); then
+          crcnote="Le compteur a augmenté depuis le dernier relevé horaire (${crc_avant[$cn]} → $crc) : la liaison a encore des problèmes."
+        elif isint "$ch" && [[ -n ${crc_avant[$cn]:-} ]]; then
+          if ((maintenant - ch < 86400 * 2)); then crcnote="Le compteur a augmenté récemment (dernière hausse le $(date -d "@$ch" '+%d/%m à %H:%M')) : la liaison a encore des problèmes."
+          else crcnote="Dernière hausse du compteur le $(date -d "@$ch" '+%d/%m à %H:%M') : s'il ne bouge plus d'ici le $(date -d "@$((ch + fenetre * 86400))" '+%d/%m'), l'avertissement deviendra une simple note."; fi
+        fi
+      fi
+    fi
     if isint "$grown" && ((grown > 0)); then lvl=$(worst "$lvl" WARN); iss+=("$grown défaut(s) acquis"); fi
     local tw=${SEUIL[disque_temp_hdd_attention]:-50} tc=${SEUIL[disque_temp_hdd_critique]:-60}
     case $kind in SSD) tw=${SEUIL[disque_temp_ssd_attention]:-60} tc=${SEUIL[disque_temp_ssd_critique]:-70} ;; NVMe) tw=${SEUIL[disque_temp_nvme_attention]:-70} tc=${SEUIL[disque_temp_nvme_critique]:-80} ;; esac
@@ -853,7 +878,9 @@ check_disques() {
       notest+=("$dev")
     fi
 
-    if [[ $lvl == OK ]]; then
+    if [[ $lvl == OK && -n $crcnote ]]; then
+      info "Disque $dev ($model) : $(join_list ', ' "${iss[@]}")" "$kind, $(hbytes "$cap"), pool : $pool, n° de série $serial$NL$crcnote"
+    elif [[ $lvl == OK ]]; then
       okd+=("$dev")
     else
       local fix pz=""
@@ -865,7 +892,7 @@ check_disques() {
       else
         fix="Surveillez l'évolution en relançant l'audit ; test long : \`sudo smartctl -t long $dev\`"
       fi
-      add "$lvl" "Disque $dev ($model) : $(join_list ', ' "${iss[@]}")" "$kind, $(hbytes "$cap"), pool : $pool, n° de série $serial" "$fix"
+      add "$lvl" "Disque $dev ($model) : $(join_list ', ' "${iss[@]}")" "$kind, $(hbytes "$cap"), pool : $pool, n° de série $serial${crcnote:+$NL$crcnote}" "$fix"
     fi
     local cell
     case $lvl in OK) cell="@OK OK" ;; WARN) cell="@WARN à surveiller" ;; *) cell="@CRIT DÉFAILLANT" ;; esac

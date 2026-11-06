@@ -81,7 +81,8 @@ jq -n --argjson n "$maintenant" '{debut: ($n - 864000), releves: 1400, ports: {"
   "tcp/8096": {vu: $n, publiques: 2, exemples_publics: ["81.56.12.34", "90.1.2.3"]}, "tcp/9443": {vu: ($n - 3456000)}}}' > "$TMP/trafic.json"
 printf '{"parefeu|Docker contourne UFW : # port(s) publié(s) sur toutes les interfaces": {"raison": "voulu : accès local", "date": 1}}\n' > "$TMP/acceptes.json"
 echo '{"pools": [{"nom": "rapide", "tendance": {"octets_par_jour": 5368709120, "jours_observes": 30, "jours_avant_critique": 10, "jours_avant_plein": 28}},
-  {"nom": "stockage", "tendance": {"octets_par_jour": 21474836480, "jours_observes": 30, "jours_avant_critique": 400, "jours_avant_plein": 510}}]}' > "$TMP/mesures-audit.json"
+  {"nom": "stockage", "tendance": {"octets_par_jour": 21474836480, "jours_observes": 30, "jours_avant_critique": 400, "jours_avant_plein": 510}}]}' \
+  | jq --argjson n "$maintenant" '. + {disques: [{nom: "sdd", crc: 3, crc_hausse: ($n - 30 * 86400)}]}' > "$TMP/mesures-audit.json"
 export AUDITE_MOI_TRAFIC=$TMP/trafic.json AUDITE_MOI_ACCEPTES=$TMP/acceptes.json AUDITE_MOI_MESURES=$TMP/mesures-audit.json
 mkdir -p "$OUT" && printf '00:0d:b9:11:22:33\t192.168.1.1\trouteur.maison\tPC Engines\n' > "$OUT/.inventaire-reseau"
 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT" --config "$TMP/audit.conf" --no-color --keep 5 > "$TMP/sortie.txt" 2> "$TMP/erreurs.txt"
@@ -131,6 +132,8 @@ expect WARN "Pool rapide (SSD) : aucun TRIM"
 expect WARN "Pool rapide : aucun snapshot"
 expect OK   "Pool stockage : 52 snapshots"
 expect WARN "Disque /dev/sdd"
+jq -e '.constats[] | select(.titre | startswith("Disque /dev/sdd")) | .detail | contains("erreurs CRC sont anciennes")' "$J" >/dev/null \
+  && ok "erreurs CRC figées depuis 30 jours : présentées comme anciennes" || ko "historique CRC du relevé horaire ignoré"
 expect OK   "5 disque(s) en bonne santé SMART"
 expect WARN "Erreurs matérielles ou système"
 expect OK   "Espace disque suffisant"
@@ -165,12 +168,15 @@ expect CRIT "SSH exposé à Internet avec authentification par mot de passe"
 expect WARN "mise(s) à jour de sécurité en attente"
 # Un échec de apt list ne doit pas être assimilé à une liste vide.
 OUT_APT=$TMP/rapports-apt-indisponible
-AUDITE_MOI_APT_LIST_ECHEC=1 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_APT" --config "$TMP/audit.conf" --no-color --quick >/dev/null 2>&1
+jq --argjson n "$maintenant" '.disques = [{nom: "sdd", crc: 2, crc_hausse: ($n - 3600)}]' "$TMP/mesures-audit.json" > "$TMP/mesures-crc-hausse.json"
+AUDITE_MOI_MESURES=$TMP/mesures-crc-hausse.json AUDITE_MOI_APT_LIST_ECHEC=1 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_APT" --config "$TMP/audit.conf" --no-color --quick >/dev/null 2>&1
 JA=$(ls "$OUT_APT"/rapport-*.json 2>/dev/null | head -n 1)
 jq -e '.constats[] | select(.niveau == "INFO" and .titre == "Inventaire des mises à jour APT indisponible")' "$JA" >/dev/null \
   && ok "apt list en erreur : inventaire signalé indisponible" || ko "apt list en erreur : état indéterminé attendu"
 jq -e '.constats[] | select(.titre == "Tous les paquets sont à jour")' "$JA" >/dev/null \
   && ko "apt list en erreur ne doit pas annoncer que tout est à jour" || ok "pas de fausse conclusion sur les mises à jour APT"
+jq -e '.constats[] | select(.titre | startswith("Disque /dev/sdd")) | .detail | contains("a augmenté")' "$JA" >/dev/null \
+  && ok "erreurs CRC en hausse depuis le dernier relevé : signalées" || ko "hausse des erreurs CRC non signalée"
 expect WARN "Partages Samba accessibles sans mot de passe"
 expect WARN "sharenfs=on"
 expect WARN "La box redirige des ports vers ce serveur (UPnP)"
