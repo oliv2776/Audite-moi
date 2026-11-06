@@ -49,8 +49,14 @@ echo max_performance > "$Y/class/scsi_host/host0/link_power_management_policy"; 
 echo package-0 > "$Y/class/powercap/intel-rapl:0/name"; echo 123456789 > "$Y/class/powercap/intel-rapl:0/energy_uj"
 echo 'BOOT_IMAGE=/vmlinuz root=/dev/mapper/vg-root ro quiet intel_idle.max_cstate=1' > "$TMP/cmdline"
 mkdir -p "$S/drm/card1"; ln -s "../../pci/0000:03:00.0" "$S/drm/card1/device"; echo high > "$S/pci/0000:03:00.0/power_dpm_force_performance_level"
+# sdd branché sur le port ata4 (en veille de lien med_power_with_dipm), où le journal du noyau montre des coupures
+P4=$S/devices/pci0000:00/0000:00:17.0/ata4
+mkdir -p "$P4/host3/target3:0:0/3:0:0:0" "$P4/host3/scsi_host/host3" "$Y/class/ata_port/ata4"
+echo 'ST4000DM004-2CV1 ' > "$P4/host3/target3:0:0/3:0:0:0/model"; echo med_power_with_dipm > "$P4/host3/scsi_host/host3/link_power_management_policy"
+ln -s "$P4" "$Y/class/ata_port/ata4/device"
 export AUDITE_MOI_SYS=$Y AUDITE_MOI_CMDLINE=$TMP/cmdline AUDITE_MOI_RAPL_DELAI=0.1
 for d in sda:0 sdb:0 sdc:1 sdd:1 sde:1 nvme0n1:0; do mkdir -p "$S/block/${d%%:*}/queue"; echo "${d#*:}" > "$S/block/${d%%:*}/queue/rotational"; done
+ln -s "$P4/host3/target3:0:0/3:0:0:0" "$S/block/sdd/device"
 printf 'x x x\nname type data\nsize 4 12884901888\nc_min 4 1073741824\nc_max 4 16777216000\nhits 4 98765432\nmisses 4 1234567\n' > "$TMP/arcstats"
 
 export AUDITE_MOI_SUDO_TRACE=$TMP/appels-sudo.txt
@@ -165,12 +171,15 @@ expect CRIT "SSH exposé à Internet avec authentification par mot de passe"
 expect WARN "mise(s) à jour de sécurité en attente"
 # Un échec de apt list ne doit pas être assimilé à une liste vide.
 OUT_APT=$TMP/rapports-apt-indisponible
-AUDITE_MOI_APT_LIST_ECHEC=1 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_APT" --config "$TMP/audit.conf" --no-color --quick >/dev/null 2>&1
+AUDITE_MOI_ZPOOL_DEGRADE=1 AUDITE_MOI_APT_LIST_ECHEC=1 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_APT" --config "$TMP/audit.conf" --no-color --quick >/dev/null 2>&1
 JA=$(ls "$OUT_APT"/rapport-*.json 2>/dev/null | head -n 1)
 jq -e '.constats[] | select(.niveau == "INFO" and .titre == "Inventaire des mises à jour APT indisponible")' "$JA" >/dev/null \
   && ok "apt list en erreur : inventaire signalé indisponible" || ko "apt list en erreur : état indéterminé attendu"
 jq -e '.constats[] | select(.titre == "Tous les paquets sont à jour")' "$JA" >/dev/null \
   && ko "apt list en erreur ne doit pas annoncer que tout est à jour" || ok "pas de fausse conclusion sur les mises à jour APT"
+# Pool dégradé (même passage) : le disque absent est identifié par son numéro de série
+jq -e '.constats[] | select(.niveau == "CRIT" and .titre == "Pool rapide DÉGRADÉ") | (.detail | contains("disque n° S6PTNM0R100002") and contains("ne voit plus ce disque")) and (.correctif | contains("zpool online rapide 14395652433688540140") and contains("mettez à l'"'"'abri"))' "$JA" >/dev/null \
+  && ok "pool dégradé : disque absent identifié" || ko "pool dégradé : disque absent non identifié"
 expect WARN "Partages Samba accessibles sans mot de passe"
 expect WARN "sharenfs=on"
 expect WARN "La box redirige des ports vers ce serveur (UPnP)"
@@ -252,7 +261,10 @@ expect WARN "Processeur réglé en mode « performance »"
 expect WARN "Options de démarrage qui limitent les économies d'énergie"
 expect WARN "Carte graphique AMD bloquée en mode « high »"
 expect INFO "Veille PCIe (ASPM L1) désactivée sur 1 lien(s)"
-expect INFO "Ports SATA sans économie d'énergie du lien"
+jq -e '.constats[] | select(.titre == "Ports SATA sans économie d'"'"'énergie du lien")' "$J" >/dev/null && ko "veille SATA conseillée malgré des coupures de lien" || ok "veille SATA non conseillée quand des liens se coupent"
+expect WARN "Coupures de liaison SATA sur des ports en économie d'énergie"
+jq -e '.constats[] | select(.titre == "Erreurs matérielles ou système dans le journal du noyau (24 h)") | .detail | contains("ata4 = /dev/sdd (ST4000DM004-2CV1") and contains("med_power_with_dipm") and contains("le lien s’est coupé")' "$J" >/dev/null \
+  && ok "port ata relié à son disque et à sa veille de lien" || ko "port ata non relié à son disque"
 expect INFO "Consommation mesurée"
 jq -e '.constats[] | select(.titre == "Le processeur ne peut pas entrer en veille profonde (C6)")' "$J" >/dev/null && ko "C6 pris pour un état léger" || ok "C6 reconnu comme veille profonde"
 # Docker 29 et images abandonnées
