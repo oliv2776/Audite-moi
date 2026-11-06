@@ -8,6 +8,32 @@ fi
 if [[ ${AUDITE_MOI_ZPOOL_VIDE:-0} == 1 && $args == "list -H -o name" ]]; then
   exit 0
 fi
+if [[ ${AUDITE_MOI_ZPOOL_DEGRADE:-0} == 1 ]]; then
+  case "$args" in
+    "list -H -p -o size,alloc,free,frag,cap,health,dedupratio rapide") printf '996432412672\t826538905600\t169893507072\t31\t83\tDEGRADED\t1.00\n'; exit 0 ;;
+    status*rapide)
+      if [[ $args == *-LP* ]]; then d1=/dev/sda1; else d1=ata-Samsung_SSD_870_EVO_1TB_S6PTNM0R100001-part1; fi
+      cat <<EOT
+  pool: rapide
+ state: DEGRADED
+status: One or more devices could not be used because the label is missing or
+	invalid.  Sufficient replicas exist for the pool to continue
+	functioning in a degraded state.
+action: Replace the device using 'zpool replace'.
+  scan: scrub repaired 0B in 00:21:13 with 0 errors on Sun Oct 11 00:45:14 2026
+config:
+
+	NAME                                              STATE     READ WRITE CKSUM
+	rapide                                            DEGRADED     0     0     0
+	  mirror-0                                        DEGRADED     0     0     0
+	    $d1   ONLINE       0     0     0
+	    14395652433688540140                          UNAVAIL      0     0     0  was /dev/disk/by-id/ata-Samsung_SSD_870_EVO_1TB_S6PTNM0R100002-part1
+
+errors: No known data errors
+EOT
+      exit 0 ;;
+  esac
+fi
 case "$args" in
   "list -H -o name") printf 'rapide\nstockage\n' ;;
   "list -H -p -o size,alloc,free,frag,cap,health,dedupratio rapide") printf '996432412672\t826538905600\t169893507072\t31\t83\tONLINE\t1.00\n' ;;

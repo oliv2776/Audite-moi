@@ -266,6 +266,24 @@ action() {
   a=$(jq -cn --arg t "$1" --arg c "$2" --arg l "$3" --arg p "$4" '{type: $t, cible: $c, libelle: $l, apercu: $p}')
   if [[ -z ${R_ACT[i]} ]]; then R_ACT[i]="[$a]"; else R_ACT[i]="${R_ACT[i]%]},$a]"; fi
 }
+lire1() { local v; [[ -r $1 ]] && IFS= read -r v < "$1" 2>/dev/null && printf '%s' "$v"; }
+ata_disque() {   # ata_disque ata5 → « /dev/sdg (modèle, pool …) », ou « aucun disque » si le port est vide
+  local a=$1 d lien m
+  for d in "$SYS_BLOCK"/sd*; do
+    lien=$(readlink -f "$d/device" 2>/dev/null) || continue
+    [[ $lien == */"$a"/* ]] || continue
+    d=${d##*/}; m=$(lire1 "$SYS_BLOCK/$d/device/model"); m=${m%"${m##*[![:space:]]}"}
+    printf '/dev/%s%s' "$d" "${m:+ ($m${DISK_POOL[$d]:+, pool ${DISK_POOL[$d]}})}"
+    return
+  done
+  printf 'aucun disque visible sur ce port'
+}
+ata_lpm() {   # ata_lpm ata5 → politique de veille du lien SATA de ce port
+  local f
+  for f in "${AUDITE_MOI_SYS:-/sys}/class/ata_port/$1/device"/host*/scsi_host/host*/link_power_management_policy; do
+    [[ -r $f ]] && { lire1 "$f"; return; }
+  done
+}
 cle_constat() {   # identifiant stable d'un constat : section|titre, chiffres remplacés par « # »
   local k="$1|$2"
   k=${k//[0-9]/#}
@@ -356,6 +374,7 @@ START=$NOW
 
 # Variables partagées entre sections
 declare -A DISK_POOL=() POOL_MEDIA=() POOL_NVME=() SNAP_COUNT=() SNAP_LAST=()
+SATA_LIEN_ERR=0             # coupures de liens SATA dans le journal du noyau (section Énergie : ne pas conseiller la veille SATA)
 declare -a CRC_DISQUES=()   # disques avec erreurs de liaison (section Énergie : prudence avec la veille SATA)
 IGPU_MASQUE=0               # iGPU Intel présent mais désactivé (section Énergie)
 declare -A EXPOSED=() REACHABLE=() PORTMAP=() CNAMES=() CF_NETMODE=() VIA_PORT=()
@@ -546,8 +565,21 @@ check_systeme() {
       [[ -n $fst ]] && warn "Entrée en double dans /etc/fstab ($fst)" "systemd signale le même point de montage deux fois (à chaque rechargement) : au démarrage, le montage peut échouer ou masquer l'autre entrée." \
         "Repérez le doublon : \`grep -v '^#' /etc/fstab\`, supprimez une des deux lignes (gardez celle avec UUID=…), puis \`sudo systemctl daemon-reload && sudo mount -a\`"
       if [[ -n $hits ]]; then
-        warn "Erreurs matérielles ou système dans le journal du noyau (24 h)" "$hits" \
+        local ports; ports=$(grep -oE 'ata[0-9]+' <<< "$kerr" | sort -u -V)
+        local qui="" a lp; local -a lpmerr=()
+        local coupe
+        for a in $ports; do
+          lp=$(ata_lpm "$a")
+          coupe=""; grep -E "$a(\.[0-9]+)?: " <<< "$kerr" | grep -qiE 'PHYRdyChg|hard resetting link|COMRESET|SATA link down|frozen' && { coupe=1; SATA_LIEN_ERR=1; }
+          qui+="$a = $(ata_disque "$a")${lp:+ — veille du lien : $lp}${coupe:+ — le lien s’est coupé}$NL"
+          [[ -n $coupe && -n $lp && $lp != max_performance && $lp != keep_firmware_settings ]] && lpmerr+=("$a ($lp)")
+        done
+        warn "Erreurs matérielles ou système dans le journal du noyau (24 h)" "${qui:+${qui}$NL}$hits" \
           "Croisez avec la section « Disques (SMART) » ; détail : \`journalctl -k -p err --since '24 hours ago'\`"
+        if ((${#lpmerr[@]})); then
+          warn "Coupures de liaison SATA sur des ports en économie d'énergie" "Ports concernés : ${lpmerr[*]}.$NL« PHYRdyChg », « hard resetting link » ou « failed command … FPDMA » : le lien SATA s'est coupé puis rétabli. La mise en veille du lien (ALPM) provoque exactement ces coupures avec certains SSD (dont des Crucial) et contrôleurs ; les commandes en cours échouent et ZFS peut écarter le disque du pool." \
+            "Pour tester sans redémarrer : \`echo max_performance | sudo tee /sys/class/scsi_host/host*/link_power_management_policy\`. Pour que ça dure, ajoutez \`ahci.mobile_lpm_policy=1\` à GRUB_CMDLINE_LINUX_DEFAULT dans /etc/default/grub, puis \`sudo update-grub\` et redémarrez. Si les coupures continuent ensuite, c'est le câble, l'alimentation (répartiteur SATA) ou le port"
+        fi
       elif [[ -n $kerr ]]; then
         info "$(nlines "$kerr") message(s) d'erreur du noyau (24 h)" "$(tail -n 5 <<< "$kerr")"
       else
@@ -932,8 +964,37 @@ check_zfs() {
     case $health in
       ONLINE) ;;
       DEGRADED)
-        crit "Pool $p DÉGRADÉ" "La redondance est réduite : une panne supplémentaire peut entraîner une perte de données.${bad:+$NL$bad}${stx:+$NL$stx}" \
-          "Identifiez le disque en cause (\`zpool status -v $p\`), remplacez-le puis \`sudo zpool replace $p <ancien> <nouveau>\`" ;;
+        local absents="" dfix="" l guid etat ancien serie visible
+        # membre introuvable : « 14395652433688540140  UNAVAIL  0 0 0  was /dev/disk/by-id/ata-…-part1 »
+        while read -r l; do
+          guid=$(awk '{print $1}' <<< "$l"); etat=$(awk '{print $2}' <<< "$l")
+          ancien=$(grep -oE 'was [^ ]+' <<< "$l" | cut -c5-)
+          local base=${ancien%-part[0-9]*} inconnu=""
+          serie="" visible=""
+          if [[ $base == */by-id/* ]]; then
+            [[ $base =~ _([A-Za-z0-9]+)$ ]] && serie=${BASH_REMATCH[1]}
+            [[ -e $base ]] && visible=$base
+            if [[ -z $visible && -n $serie ]]; then
+              local bi
+              for bi in /dev/disk/by-id/*_"$serie"; do [[ -e $bi ]] && { visible=$bi; break; }; done
+            fi
+          else
+            inconnu=1   # /dev/sdX : ce nom a pu passer à un autre disque depuis, on ne conclut pas
+          fi
+          absents+="Membre $guid ($etat)${ancien:+, autrefois $ancien}${serie:+ — disque n° $serie}"
+          if [[ -n $inconnu ]]; then
+            absents+=" : repérez son numéro de série (\`ls -l /dev/disk/by-id/\`) avant toute manipulation.$NL"
+            dfix+="Identifiez le disque absent (\`zpool status -v $p\`, \`ls -l /dev/disk/by-id/\`) ; s'il est revenu : \`sudo zpool online $p $guid\`, sinon remplacez-le puis \`sudo zpool replace $p $guid /dev/disk/by-id/<nouveau disque>\`. "
+          elif [[ -n $visible ]]; then
+            absents+=" : le disque est de nouveau visible ($visible).$NL"
+            dfix+="Le disque est revenu : \`sudo zpool online $p $guid\` ; si ZFS refuse (étiquette illisible), reconstruisez-le dessus : \`sudo zpool replace $p $guid $visible\` (vérifiez d'abord le numéro de série). "
+          else
+            absents+=" : le système ne voit plus ce disque du tout (débranché, câble ou alimentation, port SATA ou disque mort).$NL"
+            dfix+="Éteignez le NAS, rebranchez le câble de données ET l'alimentation du disque${serie:+ n° $serie} (autre câble, autre port si possible), redémarrez : s'il réapparaît, \`sudo zpool online $p $guid\`. S'il reste invisible, il est mort : remplacez-le puis \`sudo zpool replace $p $guid /dev/disk/by-id/<nouveau disque>\`. "
+          fi
+        done < <(awk '/^config:/ {c = 1; next} /^errors:/ {c = 0} c && $2 ~ /^(UNAVAIL|FAULTED|REMOVED)$/ && $1 !~ /^(raidz|mirror|draid)/' <<< "$st")
+        crit "Pool $p DÉGRADÉ" "La redondance est réduite : une panne supplémentaire peut entraîner une perte de données.${absents:+$NL${absents%"$NL"}}${bad:+$NL$bad}${stx:+$NL$stx}" \
+          "D'abord, mettez à l'abri ce qui n'existe nulle part ailleurs (ex. \`sudo zfs snapshot -r $p@avant-reparation && sudo zfs send -R $p@avant-reparation | sudo zfs recv -u <autre pool>/copie-$p\`). ${dfix:-Identifiez le disque en cause (\`zpool status -v $p\`), remplacez-le puis \`sudo zpool replace $p <ancien> <nouveau>\`. }La reconstruction (resilver) démarre seule ; suivez-la avec \`zpool status $p\`" ;;
       *)
         crit "Pool $p : état ${health:-inconnu}" "${bad}${stx:+$NL$stx}" "${act:-\`zpool status -v $p\`}" ;;
     esac
@@ -1402,7 +1463,6 @@ check_gpu() {
 }
 
 # ------------------------------------------------- consommation électrique --
-lire1() { local v; [[ -r $1 ]] && IFS= read -r v < "$1" 2>/dev/null && printf '%s' "$v"; }
 rapl_watts() {   # rapl_watts dossier_powercap délai → puissance moyenne (W) mesurée sur le délai
   local d=$1 t=$2 e1 e2 max
   e1=$(lire1 "$d/energy_uj") && isint "$e1" || return 1
@@ -1425,11 +1485,12 @@ check_energie() {
     nom=$(lire1 "$d/name"); w=$(rapl_watts "$d" "$delai") || continue
     mes+=("Processeur (${nom:-paquet})$TAB$w W$TAB""compteur RAPL, moyenne sur $delai s")
   done
-  local dgpu_w="" card dev vend lvl hw p
+  local dgpu_w="" dgpu_busy="" card dev vend lvl hw p
   for card in "$DRM_CLASS"/card[0-9]*; do
     [[ $card =~ card[0-9]+$ ]] || continue
     dev=$card/device; vend=$(lire1 "$dev/vendor")
     [[ $vend == 0x1002 ]] || continue
+    p=$(lire1 "$dev/gpu_busy_percent"); isint "$p" && dgpu_busy=$p
     for hw in "$dev"/hwmon/hwmon*; do
       p=$(lire1 "$hw/power1_average") || p=$(lire1 "$hw/power1_input") || continue
       isint "$p" || continue
@@ -1526,6 +1587,8 @@ check_energie() {
       [[ $(lire1 "$st/disable") == 1 ]] && continue
       profond=$(lire1 "$st/name"); ptime=${t:-0}
     done
+    local idrv; idrv=$(lire1 "$sysr/devices/system/cpu/cpuidle/current_driver")
+    [[ -n $idrv ]] && rows+=("Pilote des états de veille${TAB}$idrv${TAB}intel_idle (Intel), acpi_idle (AMD)${TAB}$( [[ $idrv == acpi_idle && ${CPU_MODEL:-} == *Intel* ]] && echo "@INFO C-states limités par le BIOS ?" || echo "@OK conforme")")
     up=$(awk '{printf "%d", $1 * 1e6}' /proc/uptime 2>/dev/null)
     local pct=""; isint "$up" && ((up > 0)) && isint "$ptime" && pct=$(awk -v a="$ptime" -v b="$up" 'BEGIN {v = 100 * a / b; if (v > 100) v = 100; printf "%.0f", v}')
     case ${profond^^} in
@@ -1591,7 +1654,9 @@ check_energie() {
   done
   if ((${#lpm[@]})); then
     local resume=""; for k in "${!lpm[@]}"; do resume+="$k ×${lpm[$k]}, "; done; resume=${resume%, }
-    if [[ -n ${lpm[max_performance]:-} ]]; then
+    if ((SATA_LIEN_ERR)); then
+      rows+=("Ports SATA : gestion d'énergie du lien${TAB}$resume${TAB}max_performance tant que des liens se coupent${TAB}@INFO à laisser")
+    elif [[ -n ${lpm[max_performance]:-} ]]; then
       rows+=("Ports SATA : gestion d'énergie du lien${TAB}$resume${TAB}med_power_with_dipm${TAB}@INFO à améliorer")
       local crcw=""; ((${#CRC_DISQUES[@]})) && crcw=" Des erreurs de liaison (CRC) ont été relevées sur ${CRC_DISQUES[*]} : réglez d'abord ce problème de câble, puis activez ce réglage et vérifiez que le compteur n'augmente pas."
       info "Ports SATA sans économie d'énergie du lien" "${lpm[max_performance]} port(s) en max_performance : les liens SATA restent actifs, ce qui empêche le processeur d'atteindre ses états de veille les plus profonds.$crcw" \
@@ -1620,11 +1685,17 @@ check_energie() {
 
   # Carte graphique dédiée alors que l'iGPU pourrait transcoder
   if ((IGPU_MASQUE)) && [[ -n $dgpu_w ]]; then
-    info "Carte graphique dédiée allumée en permanence (${dgpu_w} W mesurés par son pilote)" "L'iGPU du processeur (Quick Sync) est désactivé ; il transcode aussi bien pour Jellyfin, Plex ou Tdarr, pour une consommation au repos quasi nulle. La mesure du pilote ne compte pas toute la carte : à la prise, retirer une carte de ce type économise souvent 10 à 20 W." \
+    local occ="Pendant l'audit, elle consommait ${dgpu_w} W selon son pilote"
+    if isint "${dgpu_busy:-x}" && ((dgpu_busy >= 20)); then occ+=", occupée à $dgpu_busy % (transcodage en cours) : c'est sa consommation au travail, pas au repos."
+    else occ+=" (sans compter toute la carte)."; fi
+    info "Carte graphique dédiée allumée en permanence" "$occ L'iGPU du processeur (Quick Sync) est désactivé ; il transcode aussi bien pour Jellyfin, Plex ou Tdarr, avec une consommation bien plus faible. Au repos, une carte dédiée de ce type coûte encore souvent 10 à 20 W à la prise." \
       "Activez l'iGPU dans le BIOS, passez le transcodage sur /dev/dri/renderD128 (Intel), puis retirez la carte si plus rien ne l'utilise"
   fi
 
-  ((${#mes[@]})) && info "Consommation mesurée" "$(printf '%s\n' "${mes[@]}" | awk -F'\t' '{print $1 " : " $2}')" \
+  local charge ncoeurs ctx=""
+  charge=$(awk '{print $1}' /proc/loadavg 2>/dev/null); ncoeurs=$(nproc 2>/dev/null)
+  [[ -n $charge ]] && ctx="Mesures instantanées, prises avec une charge moyenne de $charge${ncoeurs:+ pour $ncoeurs cœurs}${dgpu_busy:+ et un GPU occupé à $dgpu_busy %} : elles ne valent consommation au repos que si le NAS ne faisait rien."
+  ((${#mes[@]})) && info "Consommation mesurée" "$(printf '%s\n' "${mes[@]}" | awk -F'\t' '{print $1 " : " $2}')${ctx:+$NL$ctx}" \
     "Pour savoir ce qui empêche le processeur de dormir : \`sudo powertop\` (onglets « Idle stats » et « Tunables »). Évitez \`powertop --auto-tune\` en bloc : la veille USB automatique peut couper un onduleur ou un disque USB."
   ((nwarn)) || ok "Aucun réglage n'empêche les économies d'énergie" "Gouverneur, états de veille du processeur et ASPM ne sont pas bridés."
   ((${#mes[@]})) && tbl "Consommation mesurée" < <(printf 'Composant\tPuissance\tSource\n'; printf '%s\n' "${mes[@]}")
