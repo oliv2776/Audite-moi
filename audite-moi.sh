@@ -360,6 +360,7 @@ declare -a CRC_DISQUES=()   # disques avec erreurs de liaison (section Énergie 
 IGPU_MASQUE=0               # iGPU Intel présent mais désactivé (section Énergie)
 declare -A EXPOSED=() REACHABLE=() PORTMAP=() CNAMES=() CF_NETMODE=() VIA_PORT=()
 declare -a POOLS=() ZFS_MOUNTS=() INGRESS=() PERM_BAD=()
+declare -a CF_INJ=()   # services injoignables par les tunnels : tunnel␟service␟erreurs␟date de la dernière erreur
 DOCKER_OK=0 SSH_EXPOSED=0 SSH_PASS=0 REBOOT_REQ=0 CF_FOUND=0 CF_NETS="" IPV6_GLOBAL="" TRIM_SCHED=""
 ZFS_SCAN_OK=0
 ARC_SIZE=0 ARC_MIN=0 ARC_MAX=0 ARC_HITS=0 ARC_MISS=0
@@ -1922,12 +1923,15 @@ cf_analyse() {   # cf_analyse nom méta récent pid type(docker|host) référenc
   local outd; outd=$(grep -i 'outdated' "$meta" | tail -n 1 | sed -E 's/^[^ ]+ +[A-Z]{3} +//')
   [[ -n $outd ]] && ((!warned)) && info "cloudflared « $name » signale une mise à jour" "$outd" "$upd"
 
-  local nerr origins
+  local nerr o n t
   nerr=$(grep -c ' ERR ' "$recent")
-  origins=$(grep ' ERR ' "$recent" | grep -oE 'originService=[^ ]+' | sort | uniq -c | sort -rn | head -n 5 | awk '{sub(/originService=/, "", $2); printf "%s (%d erreur(s))\n", $2, $1}')
-  if [[ -n $origins ]]; then
-    warn "Tunnel « $name » : service(s) injoignable(s) (24 h)" "cloudflared n'a pas pu joindre :$NL$origins" \
-      "Vérifiez que ces conteneurs tournent et partagent un réseau Docker avec cloudflared (\`docker network inspect <réseau>\`)"
+  # services d'origine injoignables : jugés plus loin (cf_exposure), une fois connus le conteneur visé et son état
+  while IFS=$US read -r o n t; do
+    [[ -n $o ]] && CF_INJ+=("$name$US$o$US$n$US$t")
+  done < <(grep ' ERR ' "$recent" | awk '{if (match($0, /originService=[^ ]+/)) {o = substr($0, RSTART + 14, RLENGTH - 14); n[o]++; t[o] = ($1 ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}T/) ? $1 : "-"}}
+    END {for (o in n) printf "%s\037%d\037%s\n", o, n[o], t[o]}' | sort -t $'\037' -k2,2nr | head -n 8)
+  if ((${#CF_INJ[@]})); then
+    :
   elif ((nerr > 20)); then
     warn "Tunnel « $name » : $nerr erreurs en 24 h" "$(grep ' ERR ' "$recent" | tail -n 3 | cut -c1-300)" "\`$logcmd\`"
   elif ((nerr > 0)); then
@@ -2039,6 +2043,66 @@ cf_host() {
   done
 }
 
+cf_cible() {   # cf_cible service tunnel → CIBLE (conteneur, « hôte, port N », externe…), CHOTE, CPORT ; 1 si ce n'est pas une URL
+  local s=$1 tn=$2 scheme nm
+  CIBLE="—" CHOTE="" CPORT=""
+  [[ $s =~ ^([a-z0-9+.-]+)://\[?([^]/:]+)\]?(:([0-9]+))? ]] || return 1
+  scheme=${BASH_REMATCH[1]} CHOTE=${BASH_REMATCH[2]} CPORT=${BASH_REMATCH[4]}
+  if [[ -z $CPORT ]]; then case $scheme in https) CPORT=443 ;; http) CPORT=80 ;; ssh) CPORT=22 ;; rdp) CPORT=3389 ;; esac; fi
+  nm=${CF_NETMODE[$tn]:-}
+  if [[ -n ${IDX[$CHOTE]:-} ]]; then
+    CIBLE=${IDX[$CHOTE]}
+  elif [[ $myips == *" $CHOTE "* ]]; then
+    if [[ $nm == container:* ]]; then
+      CIBLE=$(jq -r --arg c "${nm#container:}" '.[] | select(.Id == $c or (.Name | ltrimstr("/")) == $c) | .Name | ltrimstr("/")' "$INSPECT")
+    elif [[ $nm == host || ( $CHOTE != 127.0.0.1 && $CHOTE != localhost && $CHOTE != ::1 ) ]]; then
+      CIBLE=${PORTMAP[$CPORT]:-"hôte, port $CPORT"}
+    else
+      CIBLE="? (localhost dans le conteneur cloudflared)"
+    fi
+  else
+    CIBLE="externe : $CHOTE"
+  fi
+}
+
+cf_injoignables() {   # un constat par service injoignable, jugé selon l'état de ce qu'il vise (appelé par cf_exposure)
+  local r tn o n t noms h s pa ac tn2 lib etat debut te ts qui
+  local fixreseau="Vérifiez que le conteneur tourne et partage un réseau Docker avec cloudflared (\`docker network inspect <réseau>\`) ; détail : \`docker logs --since 24h <conteneur cloudflared>\`"
+  local fixvoulu="Si c'est voulu, cliquez « C'est voulu… » sous ce constat (il ne reviendra que pour ce nom d'hôte). Pour retirer le service d'Internet, supprimez plutôt sa route : Zero Trust > Networks > Tunnels"
+  for r in "${CF_INJ[@]}"; do
+    IFS=$US read -r tn o n t <<< "$r"
+    noms=""
+    for h in "${INGRESS[@]}"; do
+      IFS=$US read -r h s pa ac tn2 <<< "$h"
+      [[ $s == "$o" && $tn2 == "$tn" && $h != "*" && ", $noms, " != *", $h, "* ]] && noms+="${noms:+, }$h"
+    done
+    lib=${noms:-$o}
+    cf_cible "$o" "$tn"
+    qui=""
+    if [[ -n ${CNAMES[$CIBLE]:-} ]]; then qui=$CIBLE
+    elif [[ $CIBLE == "hôte, port "* && -n ${ECOUTE_ARRET[tcp/$CPORT]:-} ]]; then qui=${ECOUTE_ARRET[tcp/$CPORT]}
+    fi
+    [[ $t == - ]] && t=""
+    local ttl="Tunnel « $tn » : $lib injoignable" det="$n erreur(s) en 24 h vers $o${t:+ (dernière : $(date -d "$t" '+%d/%m à %H:%M' 2>/dev/null))}."
+    if [[ -n $qui ]]; then
+      IFS=$US read -r etat debut < <(jq -r --arg n "$qui" '.[] | select((.Name | ltrimstr("/")) == $n) | [.State.Status, (.State.StartedAt // "")] | join("\u001f")' "$INSPECT")
+      te=""; [[ -n $t ]] && te=$(date -d "$t" +%s 2>/dev/null); ts=$(date -d "$debut" +%s 2>/dev/null)
+      if [[ $etat != running ]]; then
+        info "$ttl" "$det Le conteneur $qui est arrêté (état : $etat) : les visiteurs reçoivent une erreur 502." "$fixvoulu ; sinon \`docker start $qui\`"
+      elif isint "$te" && isint "$ts" && ((te < ts)); then
+        info "$ttl" "$det Le conteneur $qui a été (re)démarré depuis, le $(date -d "$debut" '+%d/%m à %H:%M') : aucune erreur depuis, il était sans doute arrêté." "$fixvoulu"
+      else
+        warn "$ttl" "$det Le conteneur $qui tourne, mais cloudflared ne l'atteint pas." "$fixreseau"
+      fi
+    elif [[ $CIBLE == "hôte, port "* && -z ${ECOUTE[tcp/$CPORT]:-} ]]; then
+      info "$ttl" "$det Rien n'écoute sur le port $CPORT du serveur : la route ne sert à rien aujourd'hui, mais le jour où un programme ou un conteneur utilisera ce port, il sera publié sur Internet sans que vous l'ayez décidé." \
+        "Si le service n'existe plus : supprimez la route (Zero Trust > Networks > Tunnels > $tn > Public hostnames) et son enregistrement DNS. Si c'est voulu (service lancé de temps en temps), cliquez « C'est voulu… » sous ce constat"
+    else
+      warn "$ttl" "$det" "$fixreseau"
+    fi
+  done
+}
+
 cf_exposure() {
   local -A IDX=()
   local k v
@@ -2047,32 +2111,15 @@ cf_exposure() {
        + [((.NetworkSettings.Networks // {}) | to_entries[] | .value | ((.Aliases // []) + (.DNSNames // []) + [(.IPAddress // "")])[])]
        | map(select(. != null and . != "")) | unique)[] | "\(.)\u001f\($n)"' "$INSPECT")
   local myips; myips=" 127.0.0.1 localhost ::1 host.docker.internal $(hostname -I 2>/dev/null) "
+  ecoutes_prep
   local -a irows=()
-  local r h s pa ac tn host port scheme tgt nm
+  local r h s pa ac tn host port tgt
   for r in "${INGRESS[@]}"; do
     IFS=$US read -r h s pa ac tn <<< "$r"
-    tgt="" host=""
-    if [[ $s =~ ^([a-z0-9+.-]+)://\[?([^]/:]+)\]?(:([0-9]+))? ]]; then
-      scheme=${BASH_REMATCH[1]} host=${BASH_REMATCH[2]} port=${BASH_REMATCH[4]}
-      if [[ -z $port ]]; then case $scheme in https) port=443 ;; http) port=80 ;; ssh) port=22 ;; rdp) port=3389 ;; esac; fi
-      nm=${CF_NETMODE[$tn]:-}
-      if [[ -n ${IDX[$host]:-} ]]; then
-        tgt=${IDX[$host]}
-      elif [[ $myips == *" $host "* ]]; then
-        if [[ $nm == container:* ]]; then
-          tgt=$(jq -r --arg c "${nm#container:}" '.[] | select(.Id == $c or (.Name | ltrimstr("/")) == $c) | .Name | ltrimstr("/")' "$INSPECT")
-        elif [[ $nm == host || ( $host != 127.0.0.1 && $host != localhost && $host != ::1 ) ]]; then
-          tgt=${PORTMAP[$port]:-"hôte, port $port"}
-        else
-          tgt="? (localhost dans le conteneur cloudflared)"
-        fi
-      else
-        tgt="externe : $host"
-      fi
-    else
+    if ! cf_cible "$s" "$tn"; then
       [[ $h == "*" && $s == http_status:* ]] && continue   # règle par défaut normale
-      tgt="—"
     fi
+    tgt=$CIBLE host=$CHOTE port=$CPORT
     if [[ $h == "*" ]]; then
       warn "Tunnel « $tn » : la règle par défaut mène à un service ($s)" "Tout nom d'hôte pointant vers ce tunnel atteindra ce service." "Terminez la liste des routes par \`service: http_status:404\`"
     fi
@@ -2080,6 +2127,7 @@ cf_exposure() {
       [[ ", ${EXPOSED[$tgt]:-}, " == *", $h, "* ]] || EXPOSED[$tgt]+="${EXPOSED[$tgt]:+, }$h"
       [[ $myips == *" ${host:-?} "* && ${PORTMAP[$port]:-} == "$tgt" ]] && VIA_PORT[$tgt]+=" $port "
     fi
+    [[ $tgt == "hôte, port "* && -n ${ECOUTE_ARRET[tcp/$port]:-} ]] && tgt="${ECOUTE_ARRET[tcp/$port]} (arrêté)"
     irows+=("$h$TAB$s${pa:+ (chemin $pa)}$TAB${tgt:-—}$TAB$( [[ $ac == true ]] && echo "@OK exigé par le tunnel" || echo "@INFO à vérifier côté Cloudflare")$TAB$tn")
   done
   if ((${#irows[@]})); then
@@ -2107,6 +2155,7 @@ cf_exposure() {
     info "Routage des tunnels non visible depuis le serveur" "$rmsg" \
       "Redémarrez le conteneur cloudflared (il journalise ses routes au démarrage), puis relancez l'audit"
   fi
+  cf_injoignables
   local pp
   for c in "${!EXPOSED[@]}"; do
     pp=$(jq -r --arg n "$c" '.[] | select((.Name | ltrimstr("/")) == $n) | (.NetworkSettings.Ports // {}) | to_entries[] | select(.value != null)
