@@ -164,6 +164,28 @@ class TestCoupuresSATA(unittest.TestCase):
         self.assertIn("ata6 → port vide : 1 message(s)", coupure[0])
 
 
+class TestAdressesInternes(unittest.TestCase):
+    def test_reseau_docker_sur_plage_publique(self):
+        routes = ("Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
+                  "br1\t00000000\t01010A0A\t0003\t0\t0\t425\t00000000\t0\t0\t0\n"
+                  "br-776\t00003CAC\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            f = os.path.join(tmp, "route")
+            with open(f, "w") as h:
+                h.write(routes)
+            trafic = os.path.join(tmp, "trafic.json")
+            with open(trafic, "w") as h:
+                json.dump({"ports": {"tcp/8080": {"publiques": 2, "exemples_publics": ["172.60.0.15", "45.148.10.12"]}}}, h)
+            with patch.object(mesures, "ROUTES", f), patch.object(mesures, "_LOCAUX", None), patch.object(mesures, "connexions", return_value=set()):
+                self.assertFalse(mesures.publique("172.60.0.15"))
+                self.assertTrue(mesures.publique("45.148.10.12"))
+                mesures.trafic(trafic, [], {}, 1000, "root")
+            with open(trafic) as h:
+                e = json.load(h)["ports"]["tcp/8080"]
+        self.assertEqual(e["exemples_publics"], ["45.148.10.12"])
+        self.assertEqual(e["publiques"], 1)
+
+
 class TestRedemarrage(unittest.TestCase):
     def lancer(self, boot_avant, fin_precedent, rc=0):
         with tempfile.TemporaryDirectory() as tmp:

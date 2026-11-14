@@ -3892,6 +3892,24 @@ check_dockersec() {
       ok "Socket Docker protégé ($sm)"
     fi
   fi
+  # Réseaux Docker sur une plage d'adresses publiques (ex. 172.60.0.0/24 : seul 172.16.0.0/12 est privé)
+  local rpub
+  rpub=$(tmo 30 docker network ls -q 2>/dev/null | xargs -r docker network inspect --format '{{.Name}}{{range .IPAM.Config}} {{.Subnet}}{{end}}' 2>/dev/null \
+    | python3 -I -c '
+import ipaddress, sys
+for l in sys.stdin:
+    c = l.split()
+    for r in c[1:]:
+        try:
+            n = ipaddress.ip_network(r, strict=False)
+        except ValueError:
+            continue
+        if n.version == 4 and n.is_global:
+            print("{} : {}".format(c[0], n))' 2>/dev/null)
+  if [[ -n $rpub ]]; then
+    warn "Réseau Docker sur des adresses publiques" "$rpub$NL""Ces adresses appartiennent à des machines d'Internet (les plages privées sont 10.0.0.0/8, 172.16.0.0/12 et 192.168.0.0/16). Le serveur envoie tout ce trafic vers ses conteneurs : les vrais sites qui utilisent ces adresses lui sont injoignables, et les journaux confondent vos conteneurs avec des visiteurs venus d'Internet." \
+      "Dans le docker-compose, choisissez une plage privée libre (ex. \`subnet: 172.28.0.0/24\` et des \`ipv4_address\` en 172.28.0.x), puis \`docker compose down && docker compose up -d\`. Pensez aux réglages qui citent ces adresses (proxy, listes blanches des applications)"
+  fi
   local tcp; tcp=$( { systemctl cat docker 2>/dev/null; cat /etc/docker/daemon.json 2>/dev/null; } | grep -oE 'tcp://[^" ]+' | sort -u | tr '\n' ' ')
   if [[ -n $tcp ]]; then
     if [[ $tcp == *":2375"* ]] || ! { grep -qs '"tlsverify"[[:space:]]*:[[:space:]]*true' /etc/docker/daemon.json || systemctl cat docker 2>/dev/null | grep -q -- '--tlsverify'; }; then

@@ -380,11 +380,40 @@ def ecoutes():
     return res
 
 
+ROUTES = os.environ.get("AUDITE_MOI_ROUTES", "/proc/net/route")
+_LOCAUX = None
+
+
+def reseaux_locaux():
+    """Réseaux IPv4 directement raccordés (sans passerelle) : réseau local, ponts Docker…"""
+    global _LOCAUX
+    if _LOCAUX is None:
+        _LOCAUX = []
+        try:
+            lignes = open(ROUTES, encoding="ascii").read().splitlines()[1:]
+        except OSError:
+            lignes = []
+        for l in lignes:
+            c = l.split()
+            if len(c) < 8 or c[2] != "00000000" or c[7] == "00000000":
+                continue
+            try:
+                dest = ipaddress.IPv4Address(bytes(reversed(bytes.fromhex(c[1]))))
+                masque = ipaddress.IPv4Address(bytes(reversed(bytes.fromhex(c[7]))))
+                _LOCAUX.append(ipaddress.ip_network("{}/{}".format(dest, masque), strict=False))
+            except ValueError:
+                pass
+    return _LOCAUX
+
+
 def publique(ip):
+    """Adresse d'Internet : globale, et hors des réseaux raccordés au serveur (un réseau Docker sur
+    une plage publique, comme 172.60.0.0/24, reste interne)."""
     try:
-        return ipaddress.ip_address(ip).is_global
+        a = ipaddress.ip_address(ip)
     except ValueError:
         return False
+    return a.is_global and not any(a in n for n in reseaux_locaux() if n.version == a.version)
 
 
 def connexions(ips, ecoute):
@@ -425,6 +454,11 @@ def trafic(chemin, ips, ecoute, maintenant, groupe):
     t.setdefault("debut", maintenant)
     t["releves"] = t.get("releves", 0) + 1
     ports = t.setdefault("ports", {})
+    for e in ports.values():   # relevés anciens : retirer les adresses internes comptées comme publiques
+        ex = e.get("exemples_publics")
+        if ex and any(not publique(x) for x in ex):
+            e["exemples_publics"] = [x for x in ex if publique(x)]
+            e["publiques"] = len(e["exemples_publics"])
     for proto, port, src in connexions(ips, ecoute):
         e = ports.setdefault("{}/{}".format(proto, port), {})
         if e.get("vu") != maintenant:
