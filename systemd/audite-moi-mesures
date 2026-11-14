@@ -660,6 +660,31 @@ def coupures_sata(depuis):
     return vus
 
 
+FIN_PROPRE = re.compile(r"Journal stopped|systemd-shutdown|Reached target .*(Power-Off|Reboot|Halt|Shutdown)|Shutting down\.|reboot: (Restarting system|Power down)")
+BOOT_ID = "/proc/sys/kernel/random/boot_id"
+
+
+def redemarrage(st):
+    """Message si le serveur a redémarré depuis le dernier relevé : propre, ou brutal (plantage, coupure, gel)."""
+    try:
+        with open(BOOT_ID, encoding="ascii") as f:
+            actuel = f.read().strip()
+    except OSError:
+        return None
+    avant, st["boot_id"] = st.get("boot_id"), actuel
+    if not avant or avant == actuel:
+        return None
+    rc, fin = cmd("journalctl", "-b", "-1", "-n", "60", "-o", "short-iso", "--no-pager", "-q", timeout=60)
+    if rc != 0 or not fin.strip():
+        return "ℹ️ <b>{} a redémarré</b>\nImpossible de lire la fin du démarrage précédent (journal non persistant ?).".format(e(socket.gethostname()))
+    if FIN_PROPRE.search(fin):
+        return "ℹ️ <b>{} a redémarré</b> (extinction propre).".format(e(socket.gethostname()))
+    derniere = fin.strip().splitlines()[-1]
+    return ("🔴 <b>{} a redémarré après un arrêt brutal</b>\nLe démarrage précédent ne s'est pas éteint proprement : coupure de courant, plantage "
+            "ou gel suivi d'un redémarrage forcé. Pendant ce temps, tous les services étaient injoignables.\nDernier message enregistré :\n<code>{}</code>\n"
+            "Détail : journalctl -b -1 -n 80").format(e(socket.gethostname()), e(derniere[:300]))
+
+
 def alertes(conf, mes, ecoute, chemin_etat, rapports, maintenant, groupe):
     st = lire_json(chemin_etat, {})
     actif = bool(conf.get("TELEGRAM_TOKEN") and conf.get("TELEGRAM_CHAT_ID")) or bool(os.environ.get("AUDITE_MOI_TELEGRAM_FICHIER"))
@@ -667,6 +692,10 @@ def alertes(conf, mes, ecoute, chemin_etat, rapports, maintenant, groupe):
     premier = not st.get("actif")         # première exécution avec Telegram configuré : un message de bienvenue, pas de rafale
     msgs = []
     hote = socket.gethostname()
+
+    r = redemarrage(st)
+    if r:
+        msgs.append(r)
 
     # Pools : état, remplissage, date de remplissage prévue
     sp = st.setdefault("pools", {})

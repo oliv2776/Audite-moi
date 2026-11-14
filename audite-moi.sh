@@ -17,7 +17,7 @@
 #  https://github.com/oliv2776/Audite-moi
 # =============================================================================
 
-VERSION="1.6.0"
+VERSION="1.7.0"
 PROG=${0##*/}
 NL=$'\n'
 TAB=$'\t'
@@ -493,6 +493,68 @@ zfs_prep() {   # pools, disques membres et type de support (SSD/HDD)
 
 # ============================================================== SECTIONS ====
 
+check_redemarrages() {   # redémarrages des 7 derniers jours : propres ou brutaux (plantage, coupure de courant, gel)
+  have journalctl || return 0
+  local lb maintenant limite; maintenant=$(date +%s); limite=$((maintenant - 7 * 86400))
+  # index ␟ id ␟ premier message ␟ dernier message (secondes)
+  lb=$(tmo 30 journalctl --list-boots -o json --no-pager 2>/dev/null \
+    | jq -r '.[] | [.index, .boot_id, ((.first_entry // 0) / 1e6 | floor), ((.last_entry // 0) / 1e6 | floor)] | map(tostring) | join("\u001f")' 2>/dev/null)
+  if [[ -z $lb ]]; then   # ancien journalctl sans sortie JSON
+    lb=$(tmo 30 journalctl --list-boots --no-pager -q 2>/dev/null | awk '$1 ~ /^-?[0-9]+$/ && NF >= 10 {print $1 "\037" $2 "\037" $4 " " $5 " " $6 "\037" $8 " " $9 " " $10}' \
+      | while IFS=$US read -r i b d1 d2; do printf '%s\037%s\037%s\037%s\n' "$i" "$b" "$(date -d "$d1" +%s 2>/dev/null)" "$(date -d "$d2" +%s 2>/dev/null)"; done)
+  fi
+  [[ -n $lb ]] || return 0
+  local -a idx=() ids=() deb=() fin=()
+  local i b d1 d2
+  while IFS=$US read -r i b d1 d2; do
+    isint "${i#-}" && isint "$d1" && isint "$d2" || continue
+    idx+=("$i"); ids+=("$b"); deb+=("$d1"); fin+=("$d2")
+  done <<< "$lb"
+  local n=${#ids[@]} k propre qui fins brutaux=0 propres=0
+  local -a lignes=() lp=()
+  local auto; auto=$(apt-config dump 2>/dev/null | awk -F'"' '/Unattended-Upgrade::Automatic-Reboot "/ {print $2}')
+  for ((k = 0; k < n - 1; k++)); do
+    ((fin[k] >= limite)) || continue
+    [[ ${idx[k]} == 0 ]] && continue
+    fins=$(tmo 20 journalctl -b "${ids[k]}" -n 60 -o cat --no-pager -q 2>/dev/null)
+    propre=0 qui=""
+    grep -qE 'Journal stopped|systemd-shutdown|Reached target .*(Power-Off|Reboot|Halt|Shutdown)|Shutting down\.|reboot: (Restarting system|Power down)' <<< "$fins" && propre=1
+    if ((propre)); then
+      propres=$((propres + 1))
+      [[ -z $(tmo 20 journalctl -b "${ids[k]}" -n 300 -o cat --no-pager -q 2>/dev/null | grep -iE 'unattended-upgrade.*reboot|Automatic-Reboot') ]] || qui=" (mises à jour automatiques)"
+      lp+=("$(date -d "@${deb[k + 1]}" '+%d/%m à %H:%M')$qui")
+    else
+      brutaux=$((brutaux + 1))
+      lignes+=("Redémarrage du $(date -d "@${deb[k + 1]}" '+%d/%m à %H:%M') : arrêt brutal, le démarrage précédent n'a pas été éteint proprement (dernier message le $(date -d "@${fin[k]}" '+%d/%m à %H:%M:%S'), $(( (deb[k + 1] - fin[k]) / 60 )) min avant le redémarrage).")
+      raw "Derniers messages avant l'arrêt brutal du $(date -d "@${fin[k]}" '+%d/%m à %H:%M')" "$(tail -n 15 <<< "$fins")"
+    fi
+  done
+  # Signes de gel dans le journal du noyau (7 jours)
+  local kj gel=""
+  kj=$(tmo 30 journalctl _TRANSPORT=kernel --since "7 days ago" --no-pager -q 2>/dev/null)
+  if [[ -n $kj ]]; then
+    local c
+    c=$(grep -cE 'blocked for more than [0-9]+ seconds' <<< "$kj"); ((c)) && gel+="$c tâche(s) bloquée(s) plus de 2 minutes en attente du disque ou du noyau ($(grep -oE 'task [^ ]+:[0-9]+ blocked' <<< "$kj" | awk '{sub(/:[0-9]+$/, "", $2); print $2}' | sort | uniq -c | sort -rn | head -n 4 | awk '{printf "%s%s ×%d", (NR > 1 ? ", " : ""), $2, $1}'))$NL"
+    c=$(grep -cE 'soft lockup|hard LOCKUP|watchdog: BUG' <<< "$kj"); ((c)) && gel+="$c blocage(s) d'un cœur du processeur (lockup)$NL"
+    c=$(grep -cE 'rcu.*detected stall|rcu_(sched|preempt) self-detected stall' <<< "$kj"); ((c)) && gel+="$c gel(s) du noyau (RCU stall)$NL"
+    c=$(grep -cE 'Machine check|mce: \[Hardware Error\]|\[Hardware Error\]' <<< "$kj"); ((c)) && gel+="$c erreur(s) matérielle(s) remontée(s) par le processeur (MCE)$NL"
+    c=$(grep -cE 'Kernel panic|BUG: unable to handle|general protection fault|Oops:' <<< "$kj"); ((c)) && gel+="$c erreur(s) grave(s) du noyau (panic, oops)$NL"
+    [[ -n $gel ]] && raw "Signes de gel dans le journal du noyau (7 jours)" "$(grep -E 'blocked for more than|soft lockup|hard LOCKUP|watchdog: BUG|detected stall|Machine check|Hardware Error|Kernel panic|BUG: unable|general protection|Oops:' <<< "$kj" | tail -n 40)"
+  fi
+  if ((brutaux)); then
+    add "$( ((brutaux >= 2)) && echo CRIT || echo WARN)" "Le serveur s'est arrêté brutalement $brutaux fois en 7 jours" \
+      "$(printf '%s\n' "${lignes[@]}")${gel:+${NL}Dans le journal du noyau :$NL${gel%"$NL"}}$NL""Un arrêt sans extinction propre vient d'une coupure de courant, d'un plantage du noyau ou d'un gel suivi d'un redémarrage forcé (bouton, chien de garde). Pendant le gel, tous les services sont injoignables." \
+      "Regardez comment s'est terminé le démarrage concerné : \`journalctl --list-boots\`, puis \`journalctl -b -1 -n 80\` (−2 pour l'avant-dernier…). Rien d'utile à la fin (le journal s'arrête net) : coupure de courant ou gel matériel, vérifiez l'alimentation, un onduleur, les températures et la mémoire (memtest86+ depuis le menu GRUB), et mettez le BIOS à jour. Pour garder une trace d'un prochain plantage : \`sudo apt install linux-crashdump\`"
+  elif [[ -n $gel ]]; then
+    warn "Signes de gel dans le journal du noyau (7 jours)" "${gel%"$NL"}$NL""Pendant ces blocages, les services qui en dépendent ne répondent plus." \
+      "Détail : \`journalctl -k --since '7 days ago' | grep -E 'blocked for more|lockup|stall|Hardware Error'\`. Des tâches txg_sync ou z_wr bloquées pointent vers un disque lent du pool (SMR, disque fatigué, câble) ; des MCE vers le processeur ou la mémoire"
+  fi
+  if ((propres >= 2)) || [[ $auto == true ]] && ((propres)); then
+    info "$propres redémarrage(s) propre(s) en 7 jours" "$(join_list ', ' "${lp[@]}")${auto:+${NL}Redémarrage automatique après mise à jour (Unattended-Upgrade::Automatic-Reboot) : $auto.}" \
+      "S'ils ne viennent pas de vous : \`last -x reboot shutdown | head\` montre qui les a demandés ; pour les mises à jour automatiques, réglez l'heure avec Unattended-Upgrade::Automatic-Reboot-Time dans /etc/apt/apt.conf.d/50unattended-upgrades"
+  fi
+}
+
 check_systeme() {
   section systeme
   local up; up=$(cut -d. -f1 /proc/uptime 2>/dev/null); isint "$up" || up=0
@@ -506,6 +568,8 @@ check_systeme() {
   else
     ok "Aucun redémarrage en attente"
   fi
+
+  check_redemarrages
 
   if have systemctl; then
     local failed failed_raw failed_rc
@@ -788,7 +852,7 @@ check_disques() {
   if ((${#devs[@]} == 0)); then info "Aucun disque détecté par smartctl"; return; fi
   note "Lecture SMART de ${#devs[@]} disque(s)…"
 
-  local -a rows=() okd=() notest=() oldtest=()
+  local -a rows=() okd=() notest=() oldtest=() smr=()
   # Historique CRC du relevé horaire (audite-moi-mesures) : le compteur ne redescend jamais,
   # seule une hausse récente est inquiétante
   local -A crc_avant=() crc_hausse=()
@@ -931,12 +995,18 @@ check_disques() {
       fi
       add "$lvl" "Disque $dev ($model) : $(join_list ', ' "${iss[@]}")" "$kind, $(hbytes "$cap"), pool : $pool, n° de série $serial${crcnote:+$NL$crcnote}" "$fix"
     fi
+    [[ $pool != "—" && $pool != *cache* && $pool != *log* && $model =~ ^(ST(8000DM004|6000DM003|4000DM004|3000DM007|2000DM008|2000DM005)|WDC?[[:space:]]?WD(20|30|40|60)EFAX|WDC?[[:space:]]?WD(20|40|60)EZAZ|TOSHIBA[[:space:]]DT02ABA|TOSHIBA[[:space:]]HDWD2(40|60)) ]] \
+      && smr+=("$dev ($model, $pool)")
     local cell
     case $lvl in OK) cell="@OK OK" ;; WARN) cell="@WARN à surveiller" ;; *) cell="@CRIT DÉFAILLANT" ;; esac
     rows+=("$dev$TAB$model$TAB$serial$TAB$kind$TAB$(hbytes "$cap")$TAB$pool$TAB$cell$TAB${temp:+$temp °C}$TAB$poh$TAB${realloc:--} / ${pend:--} / ${offu:--}$TAB${crc:--}$TAB${wear_disp:--}$TAB$st_disp")
   done
 
   ((${#okd[@]})) && ok "${#okd[@]} disque(s) en bonne santé SMART" "$(join_list ', ' "${okd[@]}")"
+  if ((${#smr[@]})); then
+    info "Disques SMR (enregistrement en bardeaux) dans un pool ZFS" "$(printf '%s\n' "${smr[@]}")$NL""Ces disques écrivent par bandes qui se chevauchent : lors d'écritures longues (copie massive, transcodage qui réécrit des fichiers, scrub, reconstruction), leur cache se remplit et ils peuvent cesser de répondre plusieurs dizaines de secondes. ZFS attend alors, et les applications qui lisent ou écrivent sur le pool se figent. Une reconstruction (resilver) peut durer plusieurs jours, avec le risque qu'un disque soit écarté du pool en cours de route." \
+      "Rien à faire en urgence. Évitez de lancer de grosses écritures pendant l'utilisation (programmez Tdarr ou les copies la nuit) et gardez le pool sous 80 %. Au prochain remplacement, prenez des disques CMR (Seagate IronWolf, WD Red Plus, Toshiba N300)."
+  fi
   local sched=0
   grep -qsE '^[[:space:]]*[^#[:space:]].*[[:space:]]-s[[:space:]]' /etc/smartd.conf && sched=1
   if ((${#notest[@]} || ${#oldtest[@]})) || ((!sched)); then

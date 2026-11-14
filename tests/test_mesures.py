@@ -186,5 +186,34 @@ class TestAdressesInternes(unittest.TestCase):
         self.assertEqual(e["publiques"], 1)
 
 
+class TestRedemarrage(unittest.TestCase):
+    def lancer(self, boot_avant, fin_precedent, rc=0):
+        with tempfile.TemporaryDirectory() as tmp:
+            bid = os.path.join(tmp, "boot_id")
+            with open(bid, "w") as f:
+                f.write("nouveau\n")
+            st = {"boot_id": boot_avant} if boot_avant else {}
+            with patch.object(mesures, "BOOT_ID", bid), patch.object(mesures, "cmd", return_value=(rc, fin_precedent)):
+                return mesures.redemarrage(st), st
+
+    def test_premier_releve_silencieux(self):
+        msg, st = self.lancer(None, "")
+        self.assertIsNone(msg)
+        self.assertEqual(st["boot_id"], "nouveau")
+
+    def test_arret_brutal(self):
+        msg, _ = self.lancer("ancien", "2026-11-14T10:05:01+0100 prima kernel: INFO: task txg_sync:1834 blocked for more than 122 seconds.\n")
+        self.assertIn("arrêt brutal", msg)
+        self.assertIn("txg_sync", msg)
+
+    def test_redemarrage_propre(self):
+        msg, _ = self.lancer("ancien", "2026-11-14T10:05:01+0100 prima systemd[1]: Reached target System Reboot.\n2026-11-14T10:05:02+0100 prima systemd-journald[400]: Journal stopped\n")
+        self.assertIn("extinction propre", msg)
+
+    def test_meme_demarrage(self):
+        msg, _ = self.lancer("nouveau", "")
+        self.assertIsNone(msg)
+
+
 if __name__ == "__main__":
     unittest.main()

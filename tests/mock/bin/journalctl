@@ -26,8 +26,18 @@ EOT
   *"_TRANSPORT=kernel --since 7 days ago"*) cat <<EOT
 Oct 27 02:01:11 nas kernel: ffmpeg invoked oom-killer: gfp_mask=0x140cca(GFP_HIGHUSER_MOVABLE|__GFP_COMP), order=0
 Oct 27 02:01:11 nas kernel: Out of memory: Killed process 81234 (ffmpeg) total-vm:6123456kB, anon-rss:3912345kB
+Oct 28 14:02:11 nas kernel: INFO: task txg_sync:1834 blocked for more than 122 seconds.
+Oct 28 14:04:13 nas kernel: INFO: task txg_sync:1834 blocked for more than 245 seconds.
+Oct 28 14:04:13 nas kernel: INFO: task jellyfin:9921 blocked for more than 122 seconds.
 EOT
   ;;
+  *"--list-boots -o json"*)
+    n=$(date +%s)
+    printf '[{"index":-2,"boot_id":"boot-propre","first_entry":%d000000,"last_entry":%d000000},' $((n - 5 * 86400)) $((n - 3 * 86400))
+    printf '{"index":-1,"boot_id":"boot-brutal","first_entry":%d000000,"last_entry":%d000000},' $((n - 3 * 86400 + 60)) $((n - 86400))
+    printf '{"index":0,"boot_id":"boot-actuel","first_entry":%d000000,"last_entry":%d000000}]\n' $((n - 86400 + 600)) "$n" ;;
+  *"-b boot-propre"*) printf 'Stopping docker.service...\nReached target System Reboot.\nJournal stopped\n' ;;
+  *"-b boot-brutal"*) printf 'zfs: txg_sync waiting\nkernel: INFO: task txg_sync:1834 blocked for more than 122 seconds.\n' ;;
   *"-k -b"*) cat <<EOT
 Oct 29 07:00:01 nas kernel: i915 0000:00:02.0: [drm] GT0: GuC firmware i915/tgl_guc_70.bin version 70.20.0
 Oct 29 07:00:01 nas kernel: i915 0000:00:02.0: [drm] GT0: HuC firmware i915/tgl_huc.bin version 7.9.3
