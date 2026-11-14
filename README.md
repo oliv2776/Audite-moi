@@ -11,9 +11,9 @@ Chaque audit produit un rapport classé par priorité (**critique**, **attention
 ## Ce qui est vérifié
 
 **Santé**
-- **Système** : redémarrage en attente, services en échec, horloge, espace disque et inodes, erreurs du noyau (E/S, ATA, NVMe…) ; chaque port SATA en erreur (`ataN`) est relié à son disque, et une **coupure de lien** sur un port en économie d'énergie (ALPM) est signalée avec le réglage qui l'évite.
+- **Système** : redémarrage en attente, **arrêts brutaux des 7 derniers jours** (démarrage précédent qui ne s'est pas éteint proprement : plantage, coupure de courant, gel) et **signes de gel** dans le journal du noyau (tâches bloquées en attente du disque, blocages du processeur, erreurs matérielles MCE), services en échec, horloge, espace disque et inodes, erreurs du noyau (E/S, ATA, NVMe…) ; chaque port SATA en erreur (`ataN`) est relié à son disque, et une **coupure de lien** sur un port en économie d'énergie (ALPM) est signalée avec le réglage qui l'évite.
 - **Matériel** : charge, attente disque, mémoire (en tenant compte du cache ARC de ZFS), OOM killer, températures, ECC, onduleur (NUT / apcupsd).
-- **Disques (SMART)** : état global, secteurs réalloués / en attente / irrécupérables, erreurs CRC (câble), température, usure des SSD et NVMe, auto-tests, démon smartd. Le compteur CRC ne redescend jamais : grâce aux relevés horaires, des erreurs **anciennes et figées** depuis 7 jours deviennent une simple note, une **hausse** reste un avertissement. Les disques sont suivis par leur **numéro de série** (les noms `sdX` peuvent changer d'un démarrage à l'autre).
+- **Disques (SMART)** : état global, secteurs réalloués / en attente / irrécupérables, erreurs CRC (câble), température, usure des SSD et NVMe, auto-tests, démon smartd. Disques **SMR** (enregistrement en bardeaux) repérés dans les pools : ils peuvent figer le pool pendant les écritures longues. Le compteur CRC ne redescend jamais : grâce aux relevés horaires, des erreurs **anciennes et figées** depuis 7 jours deviennent une simple note, une **hausse** reste un avertissement. Les disques sont suivis par leur **numéro de série** (les noms `sdX` peuvent changer d'un démarrage à l'autre).
 - **ZFS** : état des pools (pour un pool **dégradé** : numéro de série du disque manquant, s'il est de nouveau visible ou non, commandes `zpool online` / `zpool replace` adaptées), remplissage, erreurs, dernier scrub et sa planification, TRIM des pools SSD, ZED et ses notifications, ARC, chiffrement, modules prêts pour le prochain noyau.
 - **Docker** : conteneurs arrêtés en erreur, en boucle de redémarrage, *unhealthy*, tués par manque de mémoire, consommation, espace récupérable, rotation des journaux.
 - **GPU et transcodage** : correspondance `/dev/dri/renderD*` ↔ GPU, pilotes (i915/xe, amdgpu, nvidia), encodage VA-API, firmware GuC/HuC, température / charge / mémoire vidéo de la carte AMD, accès réel de chaque conteneur à chaque GPU.
@@ -200,6 +200,7 @@ Dans l'interface, **Réglages › Telegram** : créez un bot avec **@BotFather**
 Vous êtes ensuite prévenu, en quelques minutes :
 - **pool** dégradé ou de nouveau en ligne, rempli à 80 / 90 / 95 %, ou plein dans moins de 30 jours au rythme actuel ;
 - **disque** qui passe « à surveiller » ou « critique », erreurs CRC en hausse, disque disparu (avec son modèle, son numéro de série et son pool) puis de nouveau visible, **coupures de liens SATA** dans le journal du noyau (souvent le premier signe d'un câble ou d'une alimentation défaillants, avant qu'un disque ne quitte son pool) ; relevé SMART impossible depuis 30 minutes (les disques ne sont alors plus surveillés) ;
+- **redémarrage** du serveur, en précisant s'il fait suite à un **arrêt brutal** (avec le dernier message enregistré) ;
 - **sauvegarde** planifiée en échec ;
 - **nouveau port en écoute** sur le serveur ;
 - **après chaque audit** : notes, nouveaux problèmes, problèmes résolus, nouveaux appareils sur le réseau ;
