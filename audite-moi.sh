@@ -17,7 +17,7 @@
 #  https://github.com/oliv2776/Audite-moi
 # =============================================================================
 
-VERSION="1.5.0"
+VERSION="1.6.0"
 PROG=${0##*/}
 NL=$'\n'
 TAB=$'\t'
@@ -559,7 +559,8 @@ check_systeme() {
     local ju; ju=$(journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[KMGT]?B?' | head -n 1)
     [[ -n $ju ]] && info "Taille des journaux systemd : $ju"
     local kerr
-    if kerr=$(tmo 30 journalctl -k -p err --since "24 hours ago" --no-pager -q 2>/dev/null); then
+    # « journalctl -k » se limite au démarrage en cours : un redémarrage cacherait les erreurs qui l'ont précédé
+    if kerr=$(tmo 30 journalctl _TRANSPORT=kernel -p err --since "24 hours ago" --no-pager -q 2>/dev/null); then
       local pat='I/O error|blk_update_request|Buffer I/O error|critical medium error|ata[0-9.]+: (exception|failed command|SError)|nvme[0-9]+.*(timeout|Abort|reset|controller is down)|EXT4-fs error|XFS .*(error|corrupt)|Hardware Error|Machine check|mce: |soft lockup|hung_task|blocked for more than|BUG:|Oops'
       local hits; hits=$(grep -E "$pat" <<< "$kerr" | tail -n 12)
       local fst; fst=$(grep -oE "Duplicate entry in '/etc/fstab'|Failed to create unit file '[^']+'" <<< "$kerr" | grep -oE "/run/systemd/generator/[^']+" | sort -u | sed 's|.*/||' | tr '\n' ' ')
@@ -576,7 +577,7 @@ check_systeme() {
           [[ -n $coupe && -n $lp && $lp != max_performance && $lp != keep_firmware_settings ]] && lpmerr+=("$a ($lp)")
         done
         warn "Erreurs matérielles ou système dans le journal du noyau (24 h)" "${qui:+${qui}$NL}$hits" \
-          "Croisez avec la section « Disques (SMART) » ; détail : \`journalctl -k -p err --since '24 hours ago'\`"
+          "Croisez avec la section « Disques (SMART) » ; détail : \`journalctl _TRANSPORT=kernel -p err --since '24 hours ago'\`"
         if ((${#lpmerr[@]})); then
           warn "Coupures de liaison SATA sur des ports en économie d'énergie" "Ports concernés : ${lpmerr[*]}.$NL« PHYRdyChg », « hard resetting link » ou « failed command … FPDMA » : le lien SATA s'est coupé puis rétabli. La mise en veille du lien (ALPM) provoque exactement ces coupures avec certains SSD (dont des Crucial) et contrôleurs ; les commandes en cours échouent et ZFS peut écarter le disque du pool." \
             "Pour tester sans redémarrer : \`echo max_performance | sudo tee /sys/class/scsi_host/host*/link_power_management_policy\`. Pour que ça dure, ajoutez \`ahci.mobile_lpm_policy=1\` à GRUB_CMDLINE_LINUX_DEFAULT dans /etc/default/grub, puis \`sudo update-grub\` et redémarrez. Si les coupures continuent ensuite, c'est le câble, l'alimentation (répartiteur SATA) ou le port"
@@ -646,7 +647,7 @@ check_materiel() {
   fi
   if have journalctl; then
     local oom
-    if oom=$(tmo 30 journalctl -k --since "7 days ago" --no-pager -q 2>/dev/null); then
+    if oom=$(tmo 30 journalctl _TRANSPORT=kernel --since "7 days ago" --no-pager -q 2>/dev/null); then
       oom=$(grep -E 'Out of memory|oom-kill|invoked oom-killer' <<< "$oom")
       if [[ -n $oom ]]; then
         local victims; victims=$(grep -oE 'Killed process [0-9]+ \([^)]+\)' <<< "$oom" | sed -E 's/.*\((.*)\)/\1/' | sort | uniq -c | sort -rn | awk '{printf "%s (%d×) ", $2, $1}')
@@ -793,8 +794,11 @@ check_disques() {
   local -A crc_avant=() crc_hausse=()
   local e n v h
   if [[ -r $MESURES_FILE ]]; then
-    while IFS=$US read -r n v h; do [[ -n $n ]] && { crc_avant[$n]=$v; crc_hausse[$n]=$h; }; done \
-      < <(jq -r '.disques[]? | select(.nom != null) | [.nom, (.crc // "" | tostring), (.crc_hausse // "" | tostring)] | join("\u001f")' "$MESURES_FILE" 2>/dev/null)
+    local sr
+    while IFS=$US read -r n sr v h; do
+      [[ -n $n ]] && { crc_avant[$n]=$v; crc_hausse[$n]=$h; }
+      [[ -n $sr ]] && { crc_avant[s:$sr]=$v; crc_hausse[s:$sr]=$h; }   # les noms sdX peuvent changer : le n° de série prime
+    done < <(jq -r '.disques[]? | select(.nom != null) | [.nom, (.serie // ""), (.crc // "" | tostring), (.crc_hausse // "" | tostring)] | join("\u001f")' "$MESURES_FILE" 2>/dev/null)
   fi
   local fenetre=${SEUIL[disque_crc_fenetre_jours]:-7} maintenant; maintenant=$(date +%s)
   for e in "${devs[@]}"; do
@@ -858,6 +862,7 @@ check_disques() {
     local crcnote=""
     if isint "$crc" && ((crc > 0)); then
       local cn=${dev##*/} ch
+      [[ -n $serial && -n ${crc_avant[s:$serial]+x} ]] && cn=s:$serial
       ch=${crc_hausse[$cn]:-}; ch=${ch%.*}
       if [[ ${crc_avant[$cn]:-} == "$crc" ]] && isint "$ch" && ((maintenant - ch >= fenetre * 86400)); then
         # compteur figé depuis plus de la fenêtre : erreurs anciennes, câble réglé
@@ -1426,7 +1431,7 @@ check_gpu() {
         done <<< "$q"
         rawcmd "nvidia-smi" nvidia-smi
       fi
-      local xid; xid=$(tmo 30 journalctl -k --since "7 days ago" --no-pager -q 2>/dev/null | grep -E 'NVRM: Xid' | tail -n 5)
+      local xid; xid=$(tmo 30 journalctl _TRANSPORT=kernel --since "7 days ago" --no-pager -q 2>/dev/null | grep -E 'NVRM: Xid' | tail -n 5)
       [[ -n $xid ]] && warn "Erreurs GPU NVIDIA (Xid) sur 7 jours" "$xid" "Xid 79 = GPU « tombé du bus » (alimentation, PCIe) ; Xid 13/31/43 = erreurs applicatives"
       if ((DOCKER_OK)) && ! have nvidia-ctk && ! have nvidia-container-cli; then
         warn "NVIDIA Container Toolkit absent" "Les conteneurs ne peuvent pas utiliser le GPU NVIDIA." \
@@ -2591,7 +2596,7 @@ prechauffer() {   # analyses longues et indépendantes : lancées tout de suite,
   fond f_ww fichiers_ww; fond f_dpkg fichiers_dpkg; liste+="intégrité des fichiers système, "
   fond klog tmo 120 journalctl -k -b --no-pager -q   # journal du noyau depuis le démarrage (lent sur un gros journal ; lu par la section GPU)
   ((QUICK)) && { note "Lancé en arrière-plan : ${liste%, }"; return 0; }
-  fond f_wd fichiers_wd; fond f_suid fichiers_suid
+  fond f_racine fichiers_racine
   if have lynis; then
     fond lynis tmo 900 lynis audit system --quick --no-colors --quiet --logfile "$WORK/lynis.log" --report-file "$WORK/lynis-report.dat"; liste+="Lynis, "
   fi
@@ -3974,8 +3979,8 @@ check_fichiers() {
   [[ -n $ww ]] && warn "Fichiers système modifiables par tous" "$ww" "\`sudo chmod o-w <fichier>\`, et cherchez qui les a modifiés"
   if ((!QUICK)); then
     local wd
-    if attendre f_wd; then wd=$(head -n 30 "$WORK/fond/f_wd.out")
-    else note "Recherche des dossiers ouverts à tous et des fichiers SUID…"; wd=$(fichiers_wd | head -n 30); fi
+    if ! attendre f_racine; then note "Recherche des dossiers ouverts à tous et des fichiers SUID…"; mkdir -p "$WORK/fond"; fichiers_racine > "$WORK/fond/f_racine.out"; fi
+    wd=$(sed -n 's/^D //p' "$WORK/fond/f_racine.out" | head -n 30)
     [[ -n $wd ]] && warn "Dossiers modifiables par tous sans « sticky bit »" "$wd" "\`sudo chmod o-w <dossier>\` (ou \`sudo chmod +t <dossier>\` s'il doit rester partagé)"
     check_suid
   fi
@@ -4003,13 +4008,12 @@ check_fichiers() {
 
 # Parcours du disque système : lancés en tâche de fond par prechauffer (ou ici si besoin)
 fichiers_ww()   { tmo 120 find /etc /usr /boot /opt /var/spool/cron -xdev -type f -perm -0002 2>/dev/null; }
-fichiers_wd()   {
-  tmo 180 find / -xdev \( -path /proc -o -path /sys -o -path /dev -o -path /run -o -path /tmp -o -path /var/tmp -o -path /snap -o -path /var/snap -o -path /var/lib/docker -o -path /var/lib/containerd \) -prune \
-    -o -type d -perm -0002 ! -perm -1000 -print 2>/dev/null
-}
-fichiers_suid() {
-  tmo 180 find / -xdev \( -path /proc -o -path /sys -o -path /dev -o -path /run -o -path /snap -o -path /var/snap -o -path /var/lib/docker -o -path /var/lib/containerd -o -path /var/lib/lxd \) -prune \
-    -o -type f \( -perm -4000 -o -perm -2000 \) -print 2>/dev/null
+fichiers_racine() {   # un seul parcours de la racine : dossiers ouverts à tous sans sticky bit (D) et fichiers SUID/SGID (S)
+  # /tmp et /var/tmp sont parcourus pour les SUID (un SUID dans /tmp est suspect), pas pour les dossiers ouverts à tous
+  tmo 240 find / -xdev \( -path /proc -o -path /sys -o -path /dev -o -path /run -o -path /snap -o -path /var/snap \
+      -o -path /var/lib/docker -o -path /var/lib/containerd -o -path /var/lib/lxd \) -prune \
+    -o -type d -perm -0002 ! -perm -1000 ! -path '/tmp/*' ! -path '/var/tmp/*' -printf 'D %p\n' \
+    -o -type f \( -perm -4000 -o -perm -2000 \) -printf 'S %p\n' 2>/dev/null
 }
 fichiers_dpkg() {   # intégrité des paquets critiques : fichiers modifiés hors du gestionnaire de paquets
   local p
@@ -4021,7 +4025,8 @@ fichiers_dpkg() {   # intégrité des paquets critiques : fichiers modifiés hor
 
 check_suid() {
   local -a suid=() unowned=() retry=()
-  if attendre f_suid; then mapfile -t suid < "$WORK/fond/f_suid.out"; else mapfile -t suid < <(fichiers_suid); fi
+  if ! attendre f_racine && [[ ! -e $WORK/fond/f_racine.out ]]; then mkdir -p "$WORK/fond"; fichiers_racine > "$WORK/fond/f_racine.out"; fi
+  mapfile -t suid < <(sed -n 's/^S //p' "$WORK/fond/f_racine.out")
   ((${#suid[@]})) || return 0
   local owned f alt
   owned=$(dpkg -S "${suid[@]}" 2>/dev/null | grep -oE ': /.*$' | cut -c3-)

@@ -5,7 +5,7 @@ if [[ ${AUDITE_MOI_JOURNAL_SSH_ECHEC:-} == 1 && "$args" == *"-t sshd"* ]]; then
   echo "ssh journal inaccessible" >&2
   exit 1
 fi
-if [[ ${AUDITE_MOI_JOURNAL_NOYAU_ECHEC:-} == 1 && ( "$args" == *"-k -p err"* || "$args" == *"-k --since 7 days ago"* ) ]]; then
+if [[ ${AUDITE_MOI_JOURNAL_NOYAU_ECHEC:-} == 1 && ( "$args" == *"_TRANSPORT=kernel -p err"* || "$args" == *"_TRANSPORT=kernel --since 7 days ago"* ) ]]; then
   echo "kernel journal inaccessible" >&2
   exit 1
 fi
@@ -15,7 +15,7 @@ if [[ ${AUDITE_MOI_JOURNALCTL_ECHEC:-} == 1 && ( "$args" == *"-t sudo"* || "$arg
 fi
 case "$args" in
   *--disk-usage*) echo "Archived and active journals take up 1.2G in the file system." ;;
-  *"-k -p err"*) cat <<EOT
+  *"_TRANSPORT=kernel -p err"*) cat <<EOT
 Oct 29 03:12:44 nas kernel: ata4.00: exception Emask 0x0 SAct 0x10000 SErr 0x0 action 0x0
 Oct 29 03:12:44 nas kernel: ata4.00: failed command: READ FPDMA QUEUED
 Oct 29 03:12:44 nas kernel: ata4: SError: { PHYRdyChg CommWake }
@@ -23,7 +23,7 @@ Oct 29 03:12:44 nas kernel: blk_update_request: I/O error, dev sdd, sector 12345
 Oct 29 21:56:00 nas systemd-fstab-generator[770945]: Failed to create unit file '/run/systemd/generator/mnt-data.mount', as it already exists. Duplicate entry in '/etc/fstab'?
 EOT
   ;;
-  *"-k --since 7 days ago"*) cat <<EOT
+  *"_TRANSPORT=kernel --since 7 days ago"*) cat <<EOT
 Oct 27 02:01:11 nas kernel: ffmpeg invoked oom-killer: gfp_mask=0x140cca(GFP_HIGHUSER_MOVABLE|__GFP_COMP), order=0
 Oct 27 02:01:11 nas kernel: Out of memory: Killed process 81234 (ffmpeg) total-vm:6123456kB, anon-rss:3912345kB
 EOT

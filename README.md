@@ -11,10 +11,10 @@ Chaque audit produit un rapport classé par priorité (**critique**, **attention
 ## Ce qui est vérifié
 
 **Santé**
-- **Système** : redémarrage en attente, services en échec, horloge, espace disque et inodes, erreurs du noyau (E/S, ATA, NVMe…).
+- **Système** : redémarrage en attente, services en échec, horloge, espace disque et inodes, erreurs du noyau (E/S, ATA, NVMe…) ; chaque port SATA en erreur (`ataN`) est relié à son disque, et une **coupure de lien** sur un port en économie d'énergie (ALPM) est signalée avec le réglage qui l'évite.
 - **Matériel** : charge, attente disque, mémoire (en tenant compte du cache ARC de ZFS), OOM killer, températures, ECC, onduleur (NUT / apcupsd).
-- **Disques (SMART)** : état global, secteurs réalloués / en attente / irrécupérables, erreurs CRC (câble), température, usure des SSD et NVMe, auto-tests, démon smartd.
-- **ZFS** : état des pools, remplissage, erreurs, dernier scrub et sa planification, TRIM des pools SSD, ZED et ses notifications, ARC, chiffrement, modules prêts pour le prochain noyau.
+- **Disques (SMART)** : état global, secteurs réalloués / en attente / irrécupérables, erreurs CRC (câble), température, usure des SSD et NVMe, auto-tests, démon smartd. Le compteur CRC ne redescend jamais : grâce aux relevés horaires, des erreurs **anciennes et figées** depuis 7 jours deviennent une simple note, une **hausse** reste un avertissement. Les disques sont suivis par leur **numéro de série** (les noms `sdX` peuvent changer d'un démarrage à l'autre).
+- **ZFS** : état des pools (pour un pool **dégradé** : numéro de série du disque manquant, s'il est de nouveau visible ou non, commandes `zpool online` / `zpool replace` adaptées), remplissage, erreurs, dernier scrub et sa planification, TRIM des pools SSD, ZED et ses notifications, ARC, chiffrement, modules prêts pour le prochain noyau.
 - **Docker** : conteneurs arrêtés en erreur, en boucle de redémarrage, *unhealthy*, tués par manque de mémoire, consommation, espace récupérable, rotation des journaux.
 - **GPU et transcodage** : correspondance `/dev/dri/renderD*` ↔ GPU, pilotes (i915/xe, amdgpu, nvidia), encodage VA-API, firmware GuC/HuC, température / charge / mémoire vidéo de la carte AMD, accès réel de chaque conteneur à chaque GPU.
 - **Consommation électrique** : puissance mesurée (processeur via RAPL, carte graphique, onduleur NUT), réglages qui empêchent le NAS de consommer peu au repos : gouverneur et préférence énergie/performance du processeur, options de démarrage (`intel_idle.max_cstate`, `pcie_aspm=off`…), états de veille profonds (C-states), veille des liens PCIe (ASPM) et SATA (ALPM), carte AMD bloquée en haute fréquence, disques mécaniques hors pool sans mise en veille, carte graphique dédiée alors que l'iGPU suffirait au transcodage. Rien n'est modifié : chaque constat indique le réglage à appliquer et ses précautions.
@@ -23,7 +23,7 @@ Chaque audit produit un rapport classé par priorité (**critique**, **attention
 - **Tendances** : rythme de remplissage de chaque pool et date prévue des 90 % (à partir des relevés horaires).
 
 **Sécurité**
-- **Tunnels Cloudflare** : connexion du tunnel (point de contrôle `/ready`), version de cloudflared, services d'origine injoignables, noms d'hôte publiés et conteneurs ciblés, Cloudflare Access, services aussi joignables sans passer par le tunnel.
+- **Tunnels Cloudflare** : connexion du tunnel (point de contrôle `/ready`), version de cloudflared, services d'origine injoignables (un constat par nom d'hôte, jugé selon ce qu'il vise : conteneur arrêté ou relancé depuis, port où rien n'écoute, ou vraie panne), noms d'hôte publiés et conteneurs ciblés, Cloudflare Access, services aussi joignables sans passer par le tunnel.
 - **Vu d'Internet** : chaque nom d'hôte publié est testé comme le ferait un visiteur, en passant par Cloudflare : IP de la maison qui fuit dans le DNS (nom non proxifié, DNS dynamique), Cloudflare Access actif ou non, application qui répond **sans authentification**, version obsolète, fichiers sensibles téléchargeables (`.git`, `.env`, dossiers de données), HSTS, HTTPS forcé, TLS obsolète.
 - **Applications auto-hébergées, de l'intérieur** : les applications courantes sont reconnues parmi les conteneurs Docker et prises en compte : comptes administrateurs sans double authentification, liens de partage publics sans mot de passe ni expiration, avertissements de sécurité, mode debug, protection anti-brute-force qui ne voit pas les vraies adresses IP derrière le tunnel, accès sans identifiant, mises à jour en attente.
 - **Vulnérabilités connues**, classées par risque réel : failles corrigées par les mises à jour en attente (base [OSV.dev](https://osv.dev)), failles des images Docker (Trivy) et des services de chaque appareil du réseau, d'après la version détectée par nmap (base [NVD](https://nvd.nist.gov)). Chaque faille est croisée avec le catalogue [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) des failles **réellement exploitées**, sa probabilité d'exploitation ([EPSS](https://www.first.org/epss/)) et l'exposition (Internet, réseau local).
@@ -199,7 +199,7 @@ Dans l'interface, **Réglages › Telegram** : créez un bot avec **@BotFather**
 
 Vous êtes ensuite prévenu, en quelques minutes :
 - **pool** dégradé ou de nouveau en ligne, rempli à 80 / 90 / 95 %, ou plein dans moins de 30 jours au rythme actuel ;
-- **disque** qui passe « à surveiller » ou « critique », erreurs CRC en hausse, disque disparu ; relevé SMART impossible depuis 30 minutes (les disques ne sont alors plus surveillés) ;
+- **disque** qui passe « à surveiller » ou « critique », erreurs CRC en hausse, disque disparu (avec son modèle, son numéro de série et son pool) puis de nouveau visible, **coupures de liens SATA** dans le journal du noyau (souvent le premier signe d'un câble ou d'une alimentation défaillants, avant qu'un disque ne quitte son pool) ; relevé SMART impossible depuis 30 minutes (les disques ne sont alors plus surveillés) ;
 - **sauvegarde** planifiée en échec ;
 - **nouveau port en écoute** sur le serveur ;
 - **après chaque audit** : notes, nouveaux problèmes, problèmes résolus, nouveaux appareils sur le réseau ;

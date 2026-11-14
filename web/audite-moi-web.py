@@ -37,7 +37,7 @@ import time
 import urllib.parse
 from datetime import datetime
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 COOKIE = "audite_moi_session"
 ITERATIONS = 600_000
 NOM_RAPPORT = re.compile(r"^rapport-[A-Za-z0-9._-]+-\d{8}-\d{4}\.(html|txt|json)$")

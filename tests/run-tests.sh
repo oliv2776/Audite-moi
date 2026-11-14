@@ -358,7 +358,7 @@ grep -q "Alertes Audite-moi activées" "$TMP/telegram.txt" && ok "message d'acti
 [[ $(grep -c '^----$' "$TMP/telegram.txt") == 1 ]] && ok "un seul message lors des relevés suivants sans changement" || ko "messages en trop : $(grep -c '^----$' "$TMP/telegram.txt")"
 cp "$J" "$TMP/rap/rapport-nas-demo-20261023-0700.json"; releve
 jq '.constats += [{"section": "ssh", "niveau": "CRIT", "titre": "Nouveau problème <b>", "detail": ""}]' "$J" > "$TMP/rap/rapport-nas-demo-20261030-0700.json"
-jq '.disques.sdd.crc = 1 | .disques.zzz = {"etat": "ok", "vu": 1} | .ecoutes |= del(.["tcp/9443"]) | .pools.rapide.seuil = 0' "$E/alertes.json" > "$E/a.json" && mv "$E/a.json" "$E/alertes.json"
+jq '.disques["serie:WD-CA1AAAA2"].crc = 1 | .disques.zzz = {"etat": "ok", "vu": 1} | .ecoutes |= del(.["tcp/9443"]) | .pools.rapide.seuil = 0' "$E/alertes.json" > "$E/a.json" && mv "$E/a.json" "$E/alertes.json"
 : > "$TMP/telegram.txt"; releve
 for m in "Pool rapide rempli à 86 %" "Erreurs CRC en hausse sur sdd" "Disque zzz introuvable" "tcp/9443" "de nas-demo terminé" "Nouveau problème &lt;b&gt;"; do
   grep -qF "$m" "$TMP/telegram.txt" && ok "alerte : $m" || ko "alerte absente : $m"
