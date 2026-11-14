@@ -262,6 +262,12 @@ jq -e '[.constats[] | select(.niveau == "WARN" and (.accepte | not))] | length =
 jq -e '[.constats[].actions[]?.type] | (index("zfs-scrub") and index("zfs-autotrim") and index("nc-debug-off") and index("nc-2fa-imposer"))' "$J" >/dev/null \
   && ok "corrections en un clic proposées (scrub, TRIM, Nextcloud)" || ko "corrections proposées"
 jq -e '[.constats[] | select(.cle | test("[0-9]"))] | length == 0' "$J" >/dev/null && ok "identifiants de constats sans chiffres" || ko "identifiants de constats"
+# Redémarrages et gels
+expect WARN "Le serveur s'est arrêté brutalement 1 fois en 7 jours"
+jq -e '.constats[] | select(.titre | startswith("Le serveur s")) | .detail | contains("arrêt brutal") and contains("txg_sync ×2")' "$J" >/dev/null \
+  && ok "arrêt brutal daté, gel du noyau résumé" || ko "arrêt brutal non détaillé"
+jq -e '.constats[] | select(.titre | test("redémarrage\\(s\\) propre"))' "$J" >/dev/null && ko "un seul redémarrage propre ne doit pas être signalé" || ok "redémarrage propre isolé non signalé"
+expect INFO "Disques SMR (enregistrement en bardeaux) dans un pool ZFS"
 # Consommation électrique
 expect WARN "Processeur réglé en mode « performance »"
 expect WARN "Options de démarrage qui limitent les économies d'énergie"
