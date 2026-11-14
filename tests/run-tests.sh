@@ -262,6 +262,9 @@ jq -e '[.constats[] | select(.niveau == "WARN" and (.accepte | not))] | length =
 jq -e '[.constats[].actions[]?.type] | (index("zfs-scrub") and index("zfs-autotrim") and index("nc-debug-off") and index("nc-2fa-imposer"))' "$J" >/dev/null \
   && ok "corrections en un clic proposées (scrub, TRIM, Nextcloud)" || ko "corrections proposées"
 jq -e '[.constats[] | select(.cle | test("[0-9]"))] | length == 0' "$J" >/dev/null && ok "identifiants de constats sans chiffres" || ko "identifiants de constats"
+expect WARN "Réseau Docker sur des adresses publiques"
+jq -e '.constats[] | select(.titre == "Réseau Docker sur des adresses publiques") | .detail | contains("yams_network : 172.60.0.0/24") and (contains("172.17") | not)' "$J" >/dev/null \
+  && ok "seule la plage publique est signalée" || ko "plage Docker publique mal repérée"
 # Consommation électrique
 expect WARN "Processeur réglé en mode « performance »"
 expect WARN "Options de démarrage qui limitent les économies d'énergie"
