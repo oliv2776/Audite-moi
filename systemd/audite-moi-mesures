@@ -171,7 +171,7 @@ def brut(d, *ids):
     return v if isinstance(v, int) else None
 
 
-def lire_disque(nom, info, membre, avant, maintenant):
+def lire_disque(nom, info, membre, avant, maintenant, avant_serie=None):
     chemin = info.get("name") or "/dev/" + nom
     rc, out = cmd("smartctl", "-j", "-a", "-n", "standby,3", chemin, timeout=90)
     try:
@@ -210,6 +210,11 @@ def lire_disque(nom, info, membre, avant, maintenant):
     r.update(type=typ, modele=d.get("model_name") or d.get("model_family") or "", serie=d.get("serial_number", ""), taille=taille,
              temperature=(d.get("temperature") or {}).get("current"), heures=(d.get("power_on_time") or {}).get("hours"),
              smart_ok=(d.get("smart_status") or {}).get("passed"))
+    # Les noms sdX peuvent changer d'un démarrage à l'autre (un disque absent décale les suivants) :
+    # l'historique du disque se retrouve par son numéro de série
+    serie = r.get("serie")
+    if serie and avant_serie is not None and (not avant or (avant.get("serie") and avant.get("serie") != serie)):
+        avant = avant_serie.get(serie)
     nv = d.get("nvme_smart_health_information_log") or {}
     if nvme:
         r.update(usure=nv.get("percentage_used"), erreurs_media=nv.get("media_errors"), reserve=nv.get("available_spare"))
@@ -278,6 +283,7 @@ def lire_disque(nom, info, membre, avant, maintenant):
 def disques(membres, precedent, maintenant):
     """Inventorie les disques ; ne jamais interpréter un échec SMART comme une disparition."""
     avant = {d["nom"]: d for d in precedent.get("disques", []) if isinstance(d, dict) and d.get("nom")}
+    avant_serie = {d["serie"]: d for d in avant.values() if d.get("serie")}
     rc, out = cmd("smartctl", "--scan-open", "-j")
     try:
         donnees = json.loads(out) if out.strip() else None
@@ -304,7 +310,7 @@ def disques(membres, precedent, maintenant):
         if not nom or nom in vus:
             continue
         vus.add(nom)
-        res.append(lire_disque(nom, info, membres.get(nom, {}), avant.get(nom), maintenant))
+        res.append(lire_disque(nom, info, membres.get(nom, {}), avant.get(nom), maintenant, avant_serie))
     res.sort(key=lambda d: (d.get("pool") is None, d.get("pool") or "", d.get("role") != "donnees", d["nom"]))
     return res, True
 
@@ -589,6 +595,37 @@ def envoyer_telegram(conf, texte):
         return False
 
 
+COUPURE_SATA = re.compile(r"\b(ata\d+)(?:\.\d+)?: .*(hard resetting link|PHYRdyChg|SATA link down|COMRESET failed|limiting SATA link speed)", re.I)
+
+
+def port_vers_disque(port):
+    """ata5 → (nom, chemin) du disque branché sur ce port, d'après /sys/block/*/device."""
+    try:
+        noms = sorted(os.listdir(SYS_BLOCK))
+    except OSError:
+        return None
+    for nom in noms:
+        if not nom.startswith("sd"):
+            continue
+        if "/{}/".format(port) in os.path.realpath(os.path.join(SYS_BLOCK, nom, "device")):
+            return nom
+    return None
+
+
+def coupures_sata(depuis):
+    """Coupures de liens SATA dans le journal du noyau depuis l'horodatage donné : {port: nombre}.
+    _TRANSPORT=kernel plutôt que -k, qui se limiterait au démarrage en cours."""
+    rc, out = cmd("journalctl", "_TRANSPORT=kernel", "-q", "--no-pager", "-o", "cat", "--since", "@{}".format(int(depuis)), timeout=60)
+    if rc != 0:
+        return None
+    vus = {}
+    for ligne in out.splitlines():
+        m = COUPURE_SATA.search(ligne)
+        if m:
+            vus[m.group(1)] = vus.get(m.group(1), 0) + 1
+    return vus
+
+
 def alertes(conf, mes, ecoute, chemin_etat, rapports, maintenant, groupe):
     st = lire_json(chemin_etat, {})
     actif = bool(conf.get("TELEGRAM_TOKEN") and conf.get("TELEGRAM_CHAT_ID")) or bool(os.environ.get("AUDITE_MOI_TELEGRAM_FICHIER"))
@@ -639,17 +676,27 @@ def alertes(conf, mes, ecoute, chemin_etat, rapports, maintenant, groupe):
     # Disques : changement d'état, erreurs CRC en hausse, disque disparu.
     # Un inventaire SMART en échec ne permet ni de confirmer une disparition,
     # ni de modifier l'état mémorisé des disques.
+    # Chaque disque est suivi par son numéro de série : un nom sdX peut passer à un autre disque
     sd = st.setdefault("disques", {})
     vus = set()
     scan_disques_ok = mes.get("smart_scan_ok", True)
     for d in mes["disques"]:
-        vus.add(d["nom"])
+        k = "serie:" + d["serie"] if d.get("serie") else d["nom"]
+        vus.add(k)
         if not scan_disques_ok:
             continue
-        a = sd.get(d["nom"])
+        a = sd.get(k)
+        if a is None and k != d["nom"] and d["nom"] in sd and sd[d["nom"]].get("serie") in (None, d.get("serie")):
+            a = sd.pop(d["nom"])   # état mémorisé sous l'ancien nom (versions précédentes)
         etat = d.get("etat")
         nom = "{} ({})".format(d["nom"], d.get("modele") or d.get("type") or "?")
+        if a and a.get("absent"):
+            msgs.append("✅ Disque {}{} de nouveau visible".format(e(nom), " n° " + e(d["serie"]) if d.get("serie") else ""))
+            a.pop("absent", None)
         if d.get("veille"):
+            if a is not None:
+                a["vu"], a["nom"] = maintenant, d["nom"]
+                sd[k] = a
             continue
         rang = {"ok": 0, "inconnu": 0, "attention": 1, "critique": 2}
         if a and rang.get(etat, 0) > rang.get(a.get("etat"), 0):
@@ -659,14 +706,36 @@ def alertes(conf, mes, ecoute, chemin_etat, rapports, maintenant, groupe):
             msgs.append("✅ Disque {} de nouveau sain".format(e(nom)))
         elif a and d.get("crc") and a.get("crc") is not None and d["crc"] > a["crc"] and etat == a.get("etat"):
             msgs.append("🟠 <b>Erreurs CRC en hausse sur {}</b> : {} → {}\nCâble SATA ou connecteur à vérifier.".format(e(nom), a["crc"], d["crc"]))
-        sd[d["nom"]] = {"etat": etat, "crc": d.get("crc"), "vu": maintenant}
-    for nom, a in list(sd.items()):
-        if scan_disques_ok and nom not in vus:
+        sd[k] = {"etat": etat, "crc": d.get("crc"), "vu": maintenant, "nom": d["nom"], "modele": d.get("modele") or "", "serie": d.get("serie") or "",
+                 "pool": d.get("pool") or ""}
+    for k, a in list(sd.items()):
+        if scan_disques_ok and k not in vus:
             if not a.get("absent"):
-                msgs.append("🔴 <b>Disque {} introuvable</b>\nIl n'apparaît plus : débranché, câble ou disque mort ?".format(e(nom)))
+                lib = a.get("nom") or k
+                details = ", ".join(x for x in (a.get("modele"), "n° " + a["serie"] if a.get("serie") else "", "pool " + a["pool"] if a.get("pool") else "") if x)
+                msgs.append("🔴 <b>Disque {}{} introuvable</b>\nIl n'apparaît plus : débranché, câble, alimentation ou disque mort ?".format(
+                    e(lib), " (" + e(details) + ")" if details else ""))
                 a["absent"] = True
             if maintenant - a.get("vu", maintenant) > 30 * 86400:
-                del sd[nom]
+                del sd[k]
+
+    # Coupures de liens SATA depuis le dernier relevé : souvent le premier signe d'un câble, d'une alimentation
+    # ou d'une veille SATA (ALPM) défaillants, avant qu'un disque ne quitte son pool
+    depuis = st.get("noyau_vu") or (maintenant - 3600)
+    coupures = coupures_sata(max(depuis, maintenant - 2 * 86400))
+    if coupures is not None:
+        st["noyau_vu"] = maintenant
+        if coupures:
+            par_nom = {d["nom"]: d for d in mes["disques"]}
+            lignes = []
+            for port in sorted(coupures, key=lambda p: int(re.sub(r"\D", "", p) or 0)):
+                nom = port_vers_disque(port)
+                d = par_nom.get(nom or "", {})
+                qui = "{}{}".format(nom or "port vide", " (" + ", ".join(x for x in (d.get("modele"), "n° " + d["serie"] if d.get("serie") else "",
+                                                                                    "pool " + d["pool"] if d.get("pool") else "") if x) + ")" if d else "")
+                lignes.append("• {} → {} : {} message(s)".format(port, qui, coupures[port]))
+            msgs.append("🟠 <b>Coupures de liaison SATA sur {}</b>\n{}\nCâble de données, alimentation du disque ou veille SATA (ALPM) : "
+                        "voir la section Système du prochain audit. Détail : journalctl -k | grep -i ata".format(e(hote), e("\n".join(lignes))))
 
     # Nouveau port en écoute (non vu depuis 30 jours)
     se = st.setdefault("ecoutes", {})
