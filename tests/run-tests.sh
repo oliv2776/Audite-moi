@@ -54,6 +54,8 @@ P4=$S/devices/pci0000:00/0000:00:17.0/ata4
 mkdir -p "$P4/host3/target3:0:0/3:0:0:0" "$P4/host3/scsi_host/host3" "$Y/class/ata_port/ata4"
 echo 'ST4000DM004-2CV1 ' > "$P4/host3/target3:0:0/3:0:0:0/model"; echo med_power_with_dipm > "$P4/host3/scsi_host/host3/link_power_management_policy"
 ln -s "$P4" "$Y/class/ata_port/ata4/device"
+mkdir -p "$TMP/pstore/1700000000" && echo "Kernel panic - not syncing" > "$TMP/pstore/1700000000/dmesg.txt"
+export AUDITE_MOI_PSTORE=$TMP/pstore
 export AUDITE_MOI_SYS=$Y AUDITE_MOI_CMDLINE=$TMP/cmdline AUDITE_MOI_RAPL_DELAI=0.1
 for d in sda:0 sdb:0 sdc:1 sdd:1 sde:1 nvme0n1:0; do mkdir -p "$S/block/${d%%:*}/queue"; echo "${d#*:}" > "$S/block/${d%%:*}/queue/rotational"; done
 ln -s "$P4/host3/target3:0:0/3:0:0:0" "$S/block/sdd/device"
@@ -272,6 +274,8 @@ jq -e '.constats[] | select(.titre == "Réseau Docker sur des adresses publiques
 expect WARN "Le serveur s'est arrêté brutalement 1 fois en 7 jours"
 jq -e '.constats[] | select(.titre | startswith("Le serveur s")) | .detail | contains("arrêt brutal") and contains("txg_sync ×2")' "$J" >/dev/null \
   && ok "arrêt brutal daté, gel du noyau résumé" || ko "arrêt brutal non détaillé"
+jq -e '.constats[] | select(.titre | startswith("Le serveur s")) | .detail | contains("panique du noyau sauvegardée")' "$J" >/dev/null \
+  && ok "trace pstore d'un plantage signalée" || ko "trace pstore ignorée"
 jq -e '.constats[] | select(.titre | test("redémarrage\\(s\\) propre"))' "$J" >/dev/null && ko "un seul redémarrage propre ne doit pas être signalé" || ok "redémarrage propre isolé non signalé"
 expect INFO "Disques SMR (enregistrement en bardeaux) dans un pool ZFS"
 # Consommation électrique
