@@ -374,6 +374,7 @@ START=$NOW
 
 # Variables partagées entre sections
 declare -A DISK_POOL=() POOL_MEDIA=() POOL_NVME=() SNAP_COUNT=() SNAP_LAST=()
+PROC_D=""                   # processus figés en état D (relevés par check_proc_figes)
 SATA_LIEN_ERR=0             # coupures de liens SATA dans le journal du noyau (section Énergie : ne pas conseiller la veille SATA)
 declare -a CRC_DISQUES=()   # disques avec erreurs de liaison (section Énergie : prudence avec la veille SATA)
 IGPU_MASQUE=0               # iGPU Intel présent mais désactivé (section Énergie)
@@ -493,6 +494,33 @@ zfs_prep() {   # pools, disques membres et type de support (SSD/HDD)
 
 # ============================================================== SECTIONS ====
 
+check_proc_figes() {   # processus en état D (attente du noyau, non interruptible) lors de deux relevés à 3 s d'intervalle
+  local f a b pid nom wc
+  local -A d1=()
+  local -a figes=()
+  for f in /proc/[0-9]*/stat; do
+    { IFS= read -r a < "$f"; } 2>/dev/null || continue
+    b=${a##*) }; [[ ${b%% *} == D ]] && d1[${f//[!0-9]/}]=1
+  done
+  ((${#d1[@]})) || return 0
+  sleep "${AUDITE_MOI_D_DELAI:-3}"
+  for pid in "${!d1[@]}"; do
+    { IFS= read -r a < "/proc/$pid/stat"; } 2>/dev/null || continue
+    b=${a##*) }; [[ ${b%% *} == D ]] || continue
+    nom=$(lire1 "/proc/$pid/comm"); wc=$(lire1 "/proc/$pid/wchan")
+    figes+=("$nom (PID $pid${wc:+, attend dans $wc})")
+  done
+  ((${#figes[@]})) || return 0
+  PROC_D=$(join_list ', ' "${figes[@]:0:10}")
+  local det="${#figes[@]} processus attendaient le noyau lors de deux relevés successifs : $PROC_D."
+  if ((${#figes[@]} >= 3)) || grep -qE 'txg_sync|z_wr|zvol|txg_quiesce' <<< "$PROC_D"; then
+    warn "Processus figés en attente du disque ou du noyau" "$det$NL""Tant qu'ils attendent, les applications qui utilisent les mêmes fichiers ne répondent plus. Des tâches ZFS (txg_sync, z_wr…) figées pointent vers un disque du pool qui répond très lentement (SMR, disque fatigué, câble)." \
+      "Pile d'appels : \`sudo cat /proc/<PID>/stack\` ; disque lent : \`iostat -x 5 3\` (paquet sysstat), colonne %util et w_await ; messages du noyau : \`sudo dmesg -T | grep -i 'blocked for more'\`"
+  else
+    info "Processus brièvement en attente du disque" "$det$NL""Normal pendant de grosses lectures ou écritures, s'il ne dure pas."
+  fi
+}
+
 check_redemarrages() {   # redémarrages des 7 derniers jours : propres ou brutaux (plantage, coupure de courant, gel)
   have journalctl || return 0
   local lb maintenant limite; maintenant=$(date +%s); limite=$((maintenant - 7 * 86400))
@@ -570,6 +598,7 @@ check_systeme() {
   fi
 
   check_redemarrages
+  check_proc_figes
 
   if have systemctl; then
     local failed failed_raw failed_rc
@@ -4301,13 +4330,22 @@ check_journaux() {
     info "Processus utilisant des programmes remplacés par une mise à jour" "$(sort -u <<< "$dele" | grep . | head -n 15 | tr '\n' ' ')" \
       "Redémarrez les services concernés (\`sudo needrestart\`) ou le serveur"
   fi
-  local mine; mine=$(ps -eo pid,user,comm,args 2>/dev/null | grep -Ei 'xmrig|kinsing|kdevtmpfsi|minerd|cpuminer|nicehash|c3pool|moneroocean|stratum\+tcp' | grep -v grep)
+  # « ps … args » lit /proc/<pid>/cmdline, qui reste bloqué indéfiniment si un processus est figé en attente du noyau (état D) :
+  # d'où le délai, et un constat plutôt qu'un audit qui ne finit jamais
+  local mine pss rc=0
+  pss=$(tmo "${AUDITE_MOI_PS_DELAI:-30}" ps -eo pid,user,comm,args 2>/dev/null) || rc=$?
+  if ((rc == 124 || rc == 137)); then
+    warn "La liste des processus ne répond plus (ps bloqué)" "Un processus est figé en attente du noyau, en général sur un disque qui ne répond pas : toute commande qui le consulte (ps, top, htop) reste bloquée.${PROC_D:+${NL}Processus figés relevés : $PROC_D}" \
+      "Repérez-les sans ps : \`grep -l 'State:.*D' /proc/[0-9]*/status\`, puis \`sudo cat /proc/<PID>/stack\` et \`sudo dmesg -T | grep -i 'blocked for more'\`"
+    pss=$(tmo 30 ps -eo pid,user,comm 2>/dev/null)
+  fi
+  mine=$(grep -Ei 'xmrig|kinsing|kdevtmpfsi|minerd|cpuminer|nicehash|c3pool|moneroocean|stratum\+tcp' <<< "$pss")
   if [[ -n $mine ]]; then
     crit "Processus de minage de cryptomonnaie détecté" "$mine" "Machine probablement compromise (souvent via une API Docker ou un service exposé) : isolez-la du réseau et enquêtez"
   else
     ok "Aucun processus suspect connu (mineurs, exécution depuis /tmp)"
   fi
-  raw "Processus les plus gourmands en CPU" "$(ps -eo pid,user,pcpu,pmem,etime,comm --sort=-pcpu 2>/dev/null | head -n 15)"
+  raw "Processus les plus gourmands en CPU" "$(tmo 30 ps -eo pid,user,pcpu,pmem,etime,comm --sort=-pcpu 2>/dev/null | head -n 15)"
   have last && rawcmd "Dernières connexions" last -n 20 -i -w
   have lastb && rawcmd "Dernières connexions échouées" lastb -n 20 -i -w
 }

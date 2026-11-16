@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# ps simulé : bloqué sur la lecture des lignes de commande (processus figé en état D) si AUDITE_MOI_PS_BLOQUE=1
+if [[ ${AUDITE_MOI_PS_BLOQUE:-0} == 1 && $* == *args* ]]; then sleep 600; fi
+exec /usr/bin/ps "$@"
