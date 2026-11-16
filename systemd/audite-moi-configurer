@@ -596,7 +596,27 @@ def act_interface(v, cx):
     return True, "Interface redémarrée : reconnectez-vous" + (" avec le nouveau mot de passe." if "mot de passe de l'interface" in changes else "."), changes
 
 
+def act_audit_arreter(v, cx):
+    """Interrompt l'audit en cours (bloqué sur un disque figé, lancé par erreur…)."""
+    rc, actif = systemctl("is-active", "audite-moi.service")
+    if actif.strip() not in ("active", "activating", "deactivating"):
+        try:
+            os.remove(os.path.join(cx.etat, "en-cours"))   # trace d'un audit déjà terminé
+        except OSError:
+            pass
+        return True, "Aucun audit en cours.", []
+    rc, out = systemctl("stop", "audite-moi.service")   # SIGTERM, puis SIGKILL après TimeoutStopSec (20 s)
+    try:
+        os.remove(os.path.join(cx.etat, "en-cours"))
+    except OSError:
+        pass
+    if rc:
+        raise Refus("l'audit n'a pas pu être arrêté : " + out[-200:])
+    return True, "Audit interrompu. Aucun rapport n'a été produit pour cette exécution.", ["arrêt de l'audit en cours"]
+
+
 ACTIONS = {
+    "audit-arreter": ("Arrêt de l'audit en cours", act_audit_arreter),
     "controles": ("Contrôles réseau", act_controles),
     "sauvegardes": ("Sauvegardes à vérifier", act_sauvegardes),
     "opnsense": ("Routeur OPNsense", act_opnsense),

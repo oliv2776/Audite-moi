@@ -12,3 +12,5 @@ SuccessExitStatus=1 2
 Nice=10
 IOSchedulingClass=idle
 TimeoutStartSec=60min
+# arrêt demandé depuis l'interface : SIGTERM, puis SIGKILL après 20 s
+TimeoutStopSec=20s

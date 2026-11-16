@@ -161,6 +161,27 @@ class TestService(unittest.TestCase):
         self.assertIn("jeton effacé", open(self.msgs).read())
         self.assertEqual([n for n in os.listdir(self.etat) if n.startswith(".configuration-avant")], [])
 
+    def test_arreter_audit(self):
+        encours = os.path.join(self.etat, "en-cours")
+        appels = []
+
+        def faux(*args):
+            appels.append(args)
+            return (0, "active") if args[0] == "is-active" else (0, "")
+        open(encours, "w").write('{"debut": 1, "mode": "complet"}')
+        with patch.object(cfg, "systemctl", side_effect=faux):
+            r = self.lancer("audit-arreter")
+        self.assertTrue(r["ok"], r)
+        self.assertIn("Audit interrompu", r["message"])
+        self.assertIn(("stop", "audite-moi.service"), appels)
+        self.assertFalse(os.path.exists(encours))
+        # plus rien en cours : rien à arrêter, la trace restante est effacée
+        open(encours, "w").write("{}")
+        with patch.object(cfg, "systemctl", return_value=(3, "inactive")):
+            r = self.lancer("audit-arreter", ident="demande-0002")
+        self.assertEqual(r["message"], "Aucun audit en cours.")
+        self.assertFalse(os.path.exists(encours))
+
     def test_telegram_sans_conversation(self):
         with patch.object(cfg, "trouver_chat", return_value=(None, "")):
             r = self.lancer("telegram", {"jeton": JETON, "alertes": "oui"})
