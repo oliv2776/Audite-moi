@@ -175,7 +175,7 @@ expect WARN "mise(s) à jour de sécurité en attente"
 # Un échec de apt list ne doit pas être assimilé à une liste vide.
 OUT_APT=$TMP/rapports-apt-indisponible
 jq --argjson n "$maintenant" '.disques = [{nom: "sdd", crc: 2, crc_hausse: ($n - 3600)}]' "$TMP/mesures-audit.json" > "$TMP/mesures-crc-hausse.json"
-AUDITE_MOI_MESURES=$TMP/mesures-crc-hausse.json AUDITE_MOI_ZPOOL_DEGRADE=1 AUDITE_MOI_APT_LIST_ECHEC=1 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_APT" --config "$TMP/audit.conf" --no-color --quick >/dev/null 2>&1
+AUDITE_MOI_MESURES=$TMP/mesures-crc-hausse.json AUDITE_MOI_PS_BLOQUE=1 AUDITE_MOI_PS_DELAI=2 AUDITE_MOI_ZPOOL_DEGRADE=1 AUDITE_MOI_APT_LIST_ECHEC=1 PATH="$ROOT/tests/mock/bin:$PATH" bash "$SCRIPT" -o "$OUT_APT" --config "$TMP/audit.conf" --no-color --quick >/dev/null 2>&1
 JA=$(ls "$OUT_APT"/rapport-*.json 2>/dev/null | head -n 1)
 jq -e '.constats[] | select(.niveau == "INFO" and .titre == "Inventaire des mises à jour APT indisponible")' "$JA" >/dev/null \
   && ok "apt list en erreur : inventaire signalé indisponible" || ko "apt list en erreur : état indéterminé attendu"
@@ -183,6 +183,9 @@ jq -e '.constats[] | select(.titre == "Tous les paquets sont à jour")' "$JA" >/
   && ko "apt list en erreur ne doit pas annoncer que tout est à jour" || ok "pas de fausse conclusion sur les mises à jour APT"
 jq -e '.constats[] | select(.titre | startswith("Disque /dev/sdd")) | .detail | contains("a augmenté")' "$JA" >/dev/null \
   && ok "erreurs CRC en hausse depuis le dernier relevé : signalées" || ko "hausse des erreurs CRC non signalée"
+# ps bloqué (même passage) : l'audit continue et le signale
+jq -e '.constats[] | select(.titre == "La liste des processus ne répond plus (ps bloqué)")' "$JA" >/dev/null \
+  && ok "ps bloqué : signalé sans bloquer l'audit" || ko "ps bloqué non signalé"
 # Pool dégradé (même passage) : le disque absent est identifié par son numéro de série
 jq -e '.constats[] | select(.niveau == "CRIT" and .titre == "Pool rapide DÉGRADÉ") | (.detail | contains("disque n° S6PTNM0R100002") and contains("ne voit plus ce disque")) and (.correctif | contains("zpool online rapide 14395652433688540140") and contains("mettez à l'"'"'abri"))' "$JA" >/dev/null \
   && ok "pool dégradé : disque absent identifié" || ko "pool dégradé : disque absent non identifié"
