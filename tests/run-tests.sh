@@ -276,6 +276,8 @@ jq -e '.constats[] | select(.titre | startswith("Le serveur s")) | .detail | con
   && ok "arrêt brutal daté, gel du noyau résumé" || ko "arrêt brutal non détaillé"
 jq -e '.constats[] | select(.titre | startswith("Le serveur s")) | .detail | contains("panique du noyau sauvegardée")' "$J" >/dev/null \
   && ok "trace pstore d'un plantage signalée" || ko "trace pstore ignorée"
+jq -e '.constats[] | select(.titre | startswith("Le serveur s")) | .detail | contains("CommWake) sur 2 port(s)") and contains("alimentation") and contains("carte graphique")' "$J" >/dev/null \
+  && ok "disques réinitialisés et carte graphique : alimentation suspectée" || ko "piste alimentation absente"
 jq -e '.constats[] | select(.titre | test("redémarrage\\(s\\) propre"))' "$J" >/dev/null && ko "un seul redémarrage propre ne doit pas être signalé" || ok "redémarrage propre isolé non signalé"
 expect INFO "Disques SMR (enregistrement en bardeaux) dans un pool ZFS"
 # Consommation électrique

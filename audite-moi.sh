@@ -374,6 +374,7 @@ START=$NOW
 
 # Variables partagées entre sections
 declare -A DISK_POOL=() POOL_MEDIA=() POOL_NVME=() SNAP_COUNT=() SNAP_LAST=()
+ALIM_SUSPECTE=0             # arrêts brutaux + disques SATA réinitialisés sur plusieurs ports
 PROC_D=""                   # processus figés en état D (relevés par check_proc_figes)
 SATA_LIEN_ERR=0             # coupures de liens SATA dans le journal du noyau (section Énergie : ne pas conseiller la veille SATA)
 declare -a CRC_DISQUES=()   # disques avec erreurs de liaison (section Énergie : prudence avec la veille SATA)
@@ -544,7 +545,7 @@ check_redemarrages() {   # redémarrages des 7 derniers jours : propres ou bruta
   for ((k = 0; k < n - 1; k++)); do
     ((fin[k] >= limite)) || continue
     [[ ${idx[k]} == 0 ]] && continue
-    fins=$(tmo 20 journalctl -b "${ids[k]}" -n 60 -o cat --no-pager -q 2>/dev/null)
+    fins=$(tmo 20 journalctl -b "${ids[k]}" -n 60 -o short-iso --no-pager -q 2>/dev/null)
     propre=0 qui=""
     grep -qE 'Journal stopped|systemd-shutdown|Reached target .*(Power-Off|Reboot|Halt|Shutdown)|Shutting down\.|reboot: (Restarting system|Power down)' <<< "$fins" && propre=1
     if ((propre)); then
@@ -567,7 +568,16 @@ check_redemarrages() {   # redémarrages des 7 derniers jours : propres ou bruta
     c=$(grep -cE 'rcu.*detected stall|rcu_(sched|preempt) self-detected stall' <<< "$kj"); ((c)) && gel+="$c gel(s) du noyau (RCU stall)$NL"
     c=$(grep -cE 'Machine check|mce: \[Hardware Error\]|\[Hardware Error\]' <<< "$kj"); ((c)) && gel+="$c erreur(s) matérielle(s) remontée(s) par le processeur (MCE)$NL"
     c=$(grep -cE 'Kernel panic|BUG: unable to handle|general protection fault|Oops:' <<< "$kj"); ((c)) && gel+="$c erreur(s) grave(s) du noyau (panic, oops)$NL"
-    [[ -n $gel ]] && raw "Signes de gel dans le journal du noyau (7 jours)" "$(grep -E 'blocked for more than|soft lockup|hard LOCKUP|watchdog: BUG|detected stall|Machine check|Hardware Error|Kernel panic|BUG: unable|general protection|Oops:' <<< "$kj" | tail -n 40)"
+    c=$(grep -ciE 'amdgpu.*(ring [^ ]+ timeout|GPU reset|GPU recovery|job_timedout)|nouveau.*(timeout|fault)|NVRM: Xid|i915.*(GPU HANG|Resetting chip)' <<< "$kj")
+    ((c)) && gel+="$c blocage(s) ou réinitialisation(s) de la carte graphique (transcodage ou calcul trop lourd, pilote, ou alimentation de la carte)$NL"
+    # Disques SATA réinitialisés d'eux-mêmes (COMWAKE) sur plusieurs ports : leur alimentation a fléchi
+    local pw; pw=$(grep -E 'SError: \{[^}]*CommWake' <<< "$kj" | grep -oE 'ata[0-9]+' | sort -u | tr '\n' ' ')
+    if [[ -n $pw ]]; then
+      local npw; npw=$(wc -w <<< "$pw")
+      gel+="Des disques SATA se sont réinitialisés d'eux-mêmes (CommWake) sur $npw port(s) : ${pw% }$NL"
+      ((brutaux && npw >= 2)) && ALIM_SUSPECTE=1
+    fi
+    [[ -n $gel ]] && raw "Signes de gel dans le journal du noyau (7 jours)" "$(grep -iE 'blocked for more than|soft lockup|hard LOCKUP|watchdog: BUG|detected stall|Machine check|Hardware Error|Kernel panic|BUG: unable|general protection|Oops:|ring [^ ]+ timeout|GPU reset|GPU recovery|job_timedout|Xid|GPU HANG|CommWake' <<< "$kj" | tail -n 40)"
   fi
   # Traces laissées par un plantage : panique du noyau sauvegardée par le firmware (pstore),
   # erreurs matérielles d'avant le redémarrage relevées par le processeur au démarrage (MCE)
@@ -577,6 +587,7 @@ check_redemarrages() {   # redémarrages des 7 derniers jours : propres ou bruta
   mce=$(tmo 20 journalctl _TRANSPORT=kernel -b 0 --no-pager -q -o cat 2>/dev/null | grep -iE 'Machine check events logged|\[Hardware Error\]' | head -n 3)
   [[ -n $mce ]] && gel+="Au démarrage, le processeur a signalé des erreurs matérielles survenues avant le redémarrage (MCE) :$NL$mce$NL"
   local hint=""
+  ((ALIM_SUSPECTE)) && hint="${NL}Arrêts nets et disques SATA qui se réinitialisent sur plusieurs ports différents : la cause commune la plus probable est l'alimentation (bloc d'alimentation fatigué ou trop juste, répartiteurs ou adaptateurs Molex vers SATA, carte graphique qui tire fort)."
   ((brutaux)) && [[ -z $gel ]] && hint="${NL}Aucun message d'erreur avant les arrêts : le serveur s'est coupé net, en pleine activité. C'est la signature d'un problème matériel (alimentation, câbles ou répartiteurs d'alimentation, surchauffe, mémoire ou processeur instables) plutôt que logiciel : un plantage logiciel laisse presque toujours une trace."
   if ((brutaux)); then
     add "$( ((brutaux >= 2)) && echo CRIT || echo WARN)" "Le serveur s'est arrêté brutalement $brutaux fois en 7 jours" \
