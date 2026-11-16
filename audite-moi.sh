@@ -569,10 +569,19 @@ check_redemarrages() {   # redémarrages des 7 derniers jours : propres ou bruta
     c=$(grep -cE 'Kernel panic|BUG: unable to handle|general protection fault|Oops:' <<< "$kj"); ((c)) && gel+="$c erreur(s) grave(s) du noyau (panic, oops)$NL"
     [[ -n $gel ]] && raw "Signes de gel dans le journal du noyau (7 jours)" "$(grep -E 'blocked for more than|soft lockup|hard LOCKUP|watchdog: BUG|detected stall|Machine check|Hardware Error|Kernel panic|BUG: unable|general protection|Oops:' <<< "$kj" | tail -n 40)"
   fi
+  # Traces laissées par un plantage : panique du noyau sauvegardée par le firmware (pstore),
+  # erreurs matérielles d'avant le redémarrage relevées par le processeur au démarrage (MCE)
+  local pdir=${AUDITE_MOI_PSTORE:-/var/lib/systemd/pstore} np mce
+  np=$(find "$pdir" -type f -newermt "@$limite" 2>/dev/null | wc -l)
+  ((np)) && gel+="$np trace(s) de panique du noyau sauvegardée(s) dans $pdir : le noyau a planté (voir ces fichiers)$NL"
+  mce=$(tmo 20 journalctl _TRANSPORT=kernel -b 0 --no-pager -q -o cat 2>/dev/null | grep -iE 'Machine check events logged|\[Hardware Error\]' | head -n 3)
+  [[ -n $mce ]] && gel+="Au démarrage, le processeur a signalé des erreurs matérielles survenues avant le redémarrage (MCE) :$NL$mce$NL"
+  local hint=""
+  ((brutaux)) && [[ -z $gel ]] && hint="${NL}Aucun message d'erreur avant les arrêts : le serveur s'est coupé net, en pleine activité. C'est la signature d'un problème matériel (alimentation, câbles ou répartiteurs d'alimentation, surchauffe, mémoire ou processeur instables) plutôt que logiciel : un plantage logiciel laisse presque toujours une trace."
   if ((brutaux)); then
     add "$( ((brutaux >= 2)) && echo CRIT || echo WARN)" "Le serveur s'est arrêté brutalement $brutaux fois en 7 jours" \
-      "$(printf '%s\n' "${lignes[@]}")${gel:+${NL}Dans le journal du noyau :$NL${gel%"$NL"}}$NL""Un arrêt sans extinction propre vient d'une coupure de courant, d'un plantage du noyau ou d'un gel suivi d'un redémarrage forcé (bouton, chien de garde). Pendant le gel, tous les services sont injoignables." \
-      "Regardez comment s'est terminé le démarrage concerné : \`journalctl --list-boots\`, puis \`journalctl -b -1 -n 80\` (−2 pour l'avant-dernier…). Rien d'utile à la fin (le journal s'arrête net) : coupure de courant ou gel matériel, vérifiez l'alimentation, un onduleur, les températures et la mémoire (memtest86+ depuis le menu GRUB), et mettez le BIOS à jour. Pour garder une trace d'un prochain plantage : \`sudo apt install linux-crashdump\`"
+      "$(printf '%s\n' "${lignes[@]}")${gel:+${NL}Dans le journal du noyau :$NL${gel%"$NL"}}$NL""Un arrêt sans extinction propre vient d'une coupure de courant, d'un plantage du noyau ou d'un gel suivi d'un redémarrage forcé (bouton, chien de garde). Pendant le gel, tous les services sont injoignables.$hint" \
+      "Regardez comment s'est terminé le démarrage concerné : \`journalctl --list-boots\`, puis \`journalctl -b -1 -n 80\` (−2 pour l'avant-dernier…). Rien d'utile à la fin (le journal s'arrête net) : coupure de courant ou gel matériel, vérifiez l'alimentation, un onduleur, les températures et la mémoire (memtest86+ depuis le menu GRUB), et mettez le BIOS à jour. Pour savoir si la charge le déclenche : \`stress-ng --cpu 0 --timeout 600s\` en surveillant \`watch sensors\` ; s'il se coupe, c'est l'alimentation, la température ou le processeur. Pour garder une trace d'un prochain plantage : \`sudo apt install linux-crashdump\`"
   elif [[ -n $gel ]]; then
     warn "Signes de gel dans le journal du noyau (7 jours)" "${gel%"$NL"}$NL""Pendant ces blocages, les services qui en dépendent ne répondent plus." \
       "Détail : \`journalctl -k --since '7 days ago' | grep -E 'blocked for more|lockup|stall|Hardware Error'\`. Des tâches txg_sync ou z_wr bloquées pointent vers un disque lent du pool (SMR, disque fatigué, câble) ; des MCE vers le processeur ou la mémoire"
