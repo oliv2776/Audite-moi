@@ -551,6 +551,18 @@ class TestInterface(unittest.TestCase):
         self.assertEqual(r.status, 303)
         self.assertEqual(json.load(open(dem))["action"], "telegram-tester")
         os.remove(dem)
+        # audit en cours depuis longtemps : bouton d'arrêt et explication
+        with open(os.path.join(etat, "en-cours"), "w") as f:
+            json.dump({"debut": int(time.time()) - 45 * 60, "mode": "complet"}, f)
+        r, t = self.req("GET", "/", cookie=cookie)
+        self.assertIn('action="/reglages/audit-arreter"', t)
+        self.assertIn("plus long que d’habitude", t)
+        os.remove(os.path.join(etat, "en-cours"))
+        # arrêt d'un audit en cours : sans mot de passe, demande transmise au service root
+        r, _ = self.req("POST", "/reglages/audit-arreter", {"csrf": csrf}, cookie=cookie)
+        self.assertEqual(r.status, 303)
+        self.assertEqual(json.load(open(dem))["action"], "audit-arreter")
+        os.remove(dem)
         # mot de passe de l'interface
         mdp = {"csrf": csrf, "actuel": MDP, "nouveau": "nouveau-mot-de-passe", "confirmation": "nouveau-mot-de-passe"}
         r, t = self.req("POST", "/reglages/mot-de-passe", dict(mdp, nouveau="court", confirmation="court"), cookie=cookie)

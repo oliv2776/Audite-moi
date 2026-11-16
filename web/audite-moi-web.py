@@ -1087,7 +1087,10 @@ if(aj){aj.addEventListener('click',function(){var tb=document.querySelector('#sa
 def barre_laterale(csrf, actif, ctx):
     etat = ctx["etat"]
     if etat["en_cours"]:
-        audit = '<div class="encours"><span class="spin"></span>Audit {} en cours…</div>'.format(esc(etat.get("mode") or ""))
+        audit = ('<div class="encours"><span class="spin"></span>Audit {} en cours…</div>'
+                 '<form method="post" action="/reglages/audit-arreter"><input type="hidden" name="csrf" value="{}">'
+                 '<button class="btn-rapide" title="Interrompt l’audit (par exemple s’il est bloqué) ; aucun rapport ne sera produit">Arrêter l’audit</button></form>').format(
+                     esc(etat.get("mode") or ""), esc(csrf))
     else:
         dis = " disabled" if etat["demande"] else ""
         audit = ('<form method="post" action="/lancer"><input type="hidden" name="csrf" value="{c}"><input type="hidden" name="mode" value="complet">'
@@ -1172,8 +1175,12 @@ def bannieres_etat(ctx, message, csrf=""):
     etat, out = ctx["etat"], []
     if etat["en_cours"]:
         depuis = int((time.time() - (etat["depuis"] or time.time())) // 60)
-        out.append('<div class="banner run" id="etat"><span class="spin"></span><b>Audit {m} en cours</b> depuis {d} min — la page se mettra à jour à la fin.<pre id="journal">{j}</pre></div>'
-                   .format(m=esc(etat["mode"] or ""), d=depuis, j=esc(etat["journal"])))
+        bloque = ""
+        if depuis >= 30:
+            bloque = (' <b>C’est plus long que d’habitude</b> : si le journal ci-dessous ne bouge plus, l’audit attend sans doute un disque ou un processus figé. '
+                      'Vous pouvez l’interrompre avec « Arrêter l’audit » dans le menu.')
+        out.append('<div class="banner run" id="etat"><span class="spin"></span><b>Audit {m} en cours</b> depuis {d} min — la page se mettra à jour à la fin.{b}<pre id="journal">{j}</pre></div>'
+                   .format(m=esc(etat["mode"] or ""), d=depuis, b=bloque, j=esc(etat["journal"])))
     elif etat["bloque"]:
         out.append('<div class="banner warnb"><b>La demande d’audit n’a pas été prise en charge.</b> Vérifiez sur le serveur : <code>systemctl status audite-moi.path audite-moi.service</code></div>')
     elif etat["demande"]:
@@ -2048,6 +2055,7 @@ ACTIONS_CONFIG = {   # chemin POST → (action du service root, onglet, mot de p
     "telegram-tester": ("telegram-tester", "telegram", False), "telegram-effacer": ("telegram-effacer", "telegram", True),
     "planification": ("planification", "planification", True), "interface": ("interface", "interface", True),
     "mot-de-passe": ("interface", "interface", False),
+    "audit-arreter": ("audit-arreter", "journal", False),
 }
 JOURS_FR = [("lun", "lundi"), ("mar", "mardi"), ("mer", "mercredi"), ("jeu", "jeudi"), ("ven", "vendredi"), ("sam", "samedi"), ("dim", "dimanche")]
 SECRETS_FORM = {"jeton", "cle", "secret", "mot_de_passe", "actuel", "nouveau", "confirmation", "nvd_cle"}
